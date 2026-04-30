@@ -1,0 +1,44 @@
+# Crypto Quant Platform Dependencies
+# Python >= 3.10 recommended
+
+# HTTP/WebSocket clients
+httpx>=0.27.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+polars>=0.20.0
+
+# Exchange APIs
+ccxt>=4.2.0
+
+# Configuration
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Logging & Monitoring
+structlog>=24.1.0
+prometheus-client>=0.19.0
+
+# Database (optional - SQLite default, PostgreSQL optional)
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Development
+black>=24.0.0
+ruff>=0.1.0
+mypy>=1.7.0
+pre-commit>=3.6.0
+
+# Async utilities
+asyncio-mqtt>=0.16.0
+tenacity>=8.2.0

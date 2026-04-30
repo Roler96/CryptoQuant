@@ -1,0 +1,20 @@
+// 在 oh-my-openagent.jsonc 文件中
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json",
+  "agents": {
+    // 主协调Agent，建议用 Claude Opus 系列或 Kimi K2.5
+    "sisyphus": {
+      "model": "alibaba-coding-plan-cn/kimi-k2.5"
+    },
+    // 战略规划师
+    "prometheus": {
+      "model": "alibaba-coding-plan-cn/GLM-5" 
+    },
+    // 架构顾问，建议用 GPT 系列
+    "oracle": {
+      "model": "alibaba-coding-plan-cn/qwen3.6-plus",
+      "variant": "high"
+    }
+    // ... 可以继续配置其他 agent
+  }
+}

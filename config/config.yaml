@@ -1,0 +1,83 @@
+# Crypto Quant Platform Configuration
+# OKX Exchange Settings
+
+# Exchange configuration
+exchange:
+  name: okx
+  sandbox: true  # Set to false for live trading
+  rate_limit: true
+  enable_rate_limit: true
+
+# Trading configuration
+trading:
+  # Default trading pairs to monitor
+  symbols:
+    - BTC/USDT
+    - ETH/USDT
+
+  # Default timeframe for analysis
+  timeframe: 1h
+
+  # Position sizing
+  position_size:
+    default_btc: 0.001
+    max_position_pct: 0.1  # Max 10% of portfolio per position
+
+# Data collection
+data:
+  # Historical data storage
+  historical_path: data/historical
+
+  # Update interval in seconds
+  update_interval: 60
+
+  # Number of candles to fetch for backtests
+  lookback_periods: 1000
+
+# Risk management
+risk:
+  # Maximum daily loss before stopping (as decimal)
+  max_daily_loss: 0.05  # 5%
+
+  # Maximum drawdown before stopping (as decimal)
+  max_drawdown: 0.15  # 15%
+
+  # Stop loss percentage
+  stop_loss_pct: 0.02  # 2%
+
+  # Take profit percentage
+  take_profit_pct: 0.05  # 5%
+
+  # Maximum open positions
+  max_positions: 5
+
+# Backtest configuration
+backtest:
+  # Starting capital in USDT
+  initial_capital: 10000
+
+  # Commission rate
+  commission: 0.001  # 0.1%
+
+  # Slippage simulation
+  slippage: 0.0005  # 0.05%
+
+# Logging
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  log_to_file: true
+  log_path: logs
+  rotation: daily
+  retention_days: 30
+
+# Live trading (set to true to enable)
+live:
+  enabled: false
+  dry_run: true  # Execute signals without placing orders
+
+# Strategy defaults
+strategy:
+  default:
+    # Example strategy parameters
+    lookback: 20
+    threshold: 0.02
