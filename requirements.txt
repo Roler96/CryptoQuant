@@ -10,9 +10,17 @@ aiohttp>=3.9.0
 pandas>=2.0.0
 numpy>=1.24.0
 polars>=0.20.0
+pyarrow>=14.0.0
 
 # Exchange APIs
 ccxt>=4.2.0
+
+# Backtesting & visualization
+backtrader>=1.9.78
+matplotlib>=3.7.0
+
+# CLI output
+rich>=13.0.0
 
 # Configuration
 pydantic>=2.5.0
