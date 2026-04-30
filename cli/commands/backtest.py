@@ -5,7 +5,6 @@ display, validation against thresholds, and equity curve visualization.
 """
 
 import argparse
-import sys
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -55,7 +54,7 @@ def run_backtest(args: argparse.Namespace) -> int:
         initial_cash=args.initial_cash,
     )
 
-    console.print(f"[bold blue]Running Backtest[/bold blue]")
+    console.print("[bold blue]Running Backtest[/bold blue]")
     console.print(f"Strategy: {args.strategy}")
     console.print(f"Pair: {args.pair}")
     console.print(f"Timeframe: {args.timeframe}")
@@ -70,7 +69,7 @@ def run_backtest(args: argparse.Namespace) -> int:
             logger.info("historical_data_loaded", rows=len(df))
         except FileNotFoundError:
             console.print(f"[red]Error: No historical data found for {args.pair} {args.timeframe}[/red]")
-            console.print(f"[yellow]Please fetch data first using the data collection module.[/yellow]")
+            console.print("[yellow]Please fetch data first using the data collection module.[/yellow]")
             return 1
 
         # Configure backtest

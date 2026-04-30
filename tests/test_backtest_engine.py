@@ -1,9 +1,7 @@
 """Tests for backtest engine module."""
 
 import unittest
-from decimal import Decimal
 
-import pandas as pd
 
 from backtest.engine import BacktestConfig, BacktestEngine, BacktestResult
 

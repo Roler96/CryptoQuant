@@ -8,14 +8,13 @@ Provides data integrity checks for OHLCV time-series data:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 import pandas as pd
 import structlog
 
-from data.storage import load_historical_data, _get_parquet_path
+from data.storage import load_historical_data
 
 logger = structlog.get_logger(__name__)
 

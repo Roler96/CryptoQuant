@@ -7,10 +7,9 @@ execution on OKX exchange.
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from decimal import Decimal
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import structlog
 
@@ -319,8 +318,6 @@ class OrderManager:
         self.pending_orders.add(order_id)
 
         try:
-            ccxt_side = 'buy' if side == OrderSide.BUY else 'sell'
-
             self.logger.info(
                 "Placing limit order",
                 order_id=order_id,

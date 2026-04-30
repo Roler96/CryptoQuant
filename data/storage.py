@@ -8,11 +8,10 @@ Provides Parquet-based storage for OHLCV data with:
 """
 
 import json
-import os
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 import pandas as pd
 import pyarrow as pa

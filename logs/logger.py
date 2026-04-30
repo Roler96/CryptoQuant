@@ -6,7 +6,6 @@ rotating file handlers, and console output.
 
 import logging
 import logging.handlers
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional

@@ -7,7 +7,6 @@ breakouts. Used by CTA-style trading strategies.
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-import numpy as np
 import structlog
 
 from data.models import OHLCVCandle

@@ -5,8 +5,7 @@ kill switch, stop loss, and position sizing controls.
 """
 
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -15,11 +14,11 @@ import structlog
 from data.manager import OKXClient
 from data.models import OHLCVCandle
 from live.kill_switch import KillSwitch, KillSwitchReason
-from live.order_manager import OrderManager, OrderResult, OrderSide, OrderStatus
-from logs.audit import audit_risk_event, audit_trade
-from risk.position_sizing import PositionLimits, PositionSizer
+from live.order_manager import OrderManager, OrderSide
+from logs.audit import audit_risk_event
+from risk.position_sizing import PositionSizer
 from risk.stop_loss import StopLossManager, StopLossResult
-from strategy.base import Position, Signal, StrategyBase, StrategyContext
+from strategy.base import Signal, StrategyBase, StrategyContext
 from strategy.cta.trend_following import TrendFollowingStrategy
 
 

@@ -6,7 +6,7 @@ and Kelly criterion calculations for optimal position sizing.
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import structlog
 

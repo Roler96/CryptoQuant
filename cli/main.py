@@ -16,12 +16,14 @@ Usage:
 
 import argparse
 import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Optional, Sequence
 
 import structlog
 
 from cli.commands.backtest import run_backtest
 from cli.commands.config import run_config
+from cli.commands.paper import run_paper
+from cli.commands.live import run_live
 from cli.commands.status import run_status
 
 logger = structlog.get_logger(__name__)
@@ -267,74 +269,6 @@ def dispatch_command(args: argparse.Namespace) -> int:
         logger.error("command_execution_failed", command=command, error=str(e))
         print(f"Error executing '{command}': {e}")
         return 1
-
-
-def run_paper(args: argparse.Namespace) -> int:
-    """Handle paper trading command.
-
-    Args:
-        args: Parsed command-line arguments
-
-    Returns:
-        Exit code
-    """
-    logger.info(
-        "starting_paper_trading",
-        strategy=args.strategy,
-        pair=args.pair,
-        timeframe=args.timeframe,
-        duration_hours=args.duration,
-    )
-
-    print(f"Starting paper trading...")
-    print(f"  Strategy: {args.strategy}")
-    print(f"  Pair: {args.pair}")
-    print(f"  Timeframe: {args.timeframe}")
-    print(f"  Duration: {args.duration} hours")
-    print()
-    print("Paper trading mode is not yet fully implemented.")
-    print("Use 'backtest' command for historical testing.")
-
-    return 0
-
-
-def run_live(args: argparse.Namespace) -> int:
-    """Handle live trading command.
-
-    Args:
-        args: Parsed command-line arguments
-
-    Returns:
-        Exit code
-    """
-    logger.info(
-        "starting_live_trading",
-        strategy=args.strategy,
-        pair=args.pair,
-        timeframe=args.timeframe,
-        dry_run=args.dry_run,
-    )
-
-    if not args.dry_run:
-        print("⚠️  WARNING: You are about to start LIVE trading with real funds!")
-        print(f"  Strategy: {args.strategy}")
-        print(f"  Pair: {args.pair}")
-        print(f"  Timeframe: {args.timeframe}")
-        print()
-        confirmation = input("Type 'LIVE' to confirm: ")
-        if confirmation != "LIVE":
-            print("Live trading cancelled.")
-            return 1
-
-    print(f"Starting {'dry-run ' if args.dry_run else ''}live trading...")
-    print(f"  Strategy: {args.strategy}")
-    print(f"  Pair: {args.pair}")
-    print(f"  Timeframe: {args.timeframe}")
-    print()
-    print("Live trading mode is not yet fully implemented.")
-    print("Use 'backtest' command for historical testing.")
-
-    return 0
 
 
 def run_kill(args: argparse.Namespace) -> int:

@@ -13,9 +13,8 @@ All metrics follow industry standard calculations with crypto-appropriate
 defaults and thresholds.
 """
 
-from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd

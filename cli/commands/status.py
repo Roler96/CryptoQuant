@@ -5,11 +5,8 @@ balance summary, and system health information.
 """
 
 import argparse
-import json
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 import structlog
 import yaml
@@ -17,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from data.storage import list_available_data, get_metadata
+from data.storage import list_available_data
 
 logger = structlog.get_logger(__name__)
 console = Console()

@@ -5,10 +5,9 @@ Provides functionality to view and modify platform configuration settings.
 
 import argparse
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import structlog
 import yaml

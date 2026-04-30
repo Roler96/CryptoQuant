@@ -9,11 +9,10 @@ Provides a comprehensive backtesting solution with:
 - Performance visualization with matplotlib
 """
 
-import os
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Type
 
 import backtrader as bt
 import matplotlib

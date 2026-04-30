@@ -7,8 +7,7 @@ before deploying to live markets.
 
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -17,7 +16,7 @@ import structlog
 from data.manager import OKXClient
 from data.models import OHLCVCandle
 from logs.audit import audit_trade
-from risk.position_sizing import PositionLimits, PositionSizer
+from risk.position_sizing import PositionSizer
 from strategy.base import Signal, StrategyBase, StrategyContext
 from strategy.cta.trend_following import TrendFollowingStrategy
 
@@ -244,9 +243,8 @@ class PaperTradingRunner:
             )
 
         if "/" in self.pair:
-            base, quote = self.pair.split("/")
+            _, quote = self.pair.split("/")
         else:
-            base = self.pair
             quote = "USDT"
 
         return StrategyContext(
