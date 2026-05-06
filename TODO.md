@@ -1,84 +1,86 @@
 # CryptoQuant 项目改进 TODO
 
-> 最后更新: 2026-04-30  
-> 项目状态: Phase 1 完成，核心功能已可用
+> 最后更新: 2026-05-06  
+> 项目状态: Phase 2 进行中，数据库和下载功能已完成
 
 ---
 
 ## 项目现状
 
-| 指标 | 改进前 | 改进后 |
-|------|--------|--------|
-| 源文件 | 33 个 | 41 个 (+8) |
-| 测试文件 | 3 个 | 6 个 (+3) |
-| 测试用例 | 34 个 | 105 个 (+71) |
-| LSP 警告 | 49 个 | 0 个 |
-| 测试覆盖率 | ~9% | 31% |
-| CLI 命令 | 仅 backtest | paper/live 完整实现 |
+| 指标 | 数量 | 备注 |
+|------|------|------|
+| 源文件 | 43 个 | Python 模块 |
+| CLI 命令 | 7 个 | backtest/paper/live/status/config/fetch/kill |
+| 数据存储 | 双模式 | File (Parquet) / Database (SQLite/PostgreSQL) |
+| 支持交易对 | 10+ | BTC, ETH, BNB, SOL, XRP, DOGE, TON, ADA, AVAX, SHIB 等 |
+| 支持时间周期 | 14 个 | 1m-1M 全周期 |
+| 回测引擎 | Backtrader | 集成完整指标和可视化 |
 
 ---
 
-## 🔴 P0 - 高优先级 (必须完成)
+## 已完成 ✅
 
-### 1. CLI 命令完整实现
-**状态:** ✅ 完成  
-**完成日期:** 2026-04-30
+### Phase 1: 基础架构 (2026-04-30)
+- [x] CLI 命令完整实现 (backtest/paper/live/status/config/kill)
+- [x] 测试覆盖率提升 (31%)
+- [x] 代码警告清理 (49 → 0)
+- [x] 策略框架基础 (StrategyBase, Signal, Position)
+- [x] 风控模块 (PositionSizer, StopLossManager)
 
-**已完成:**
-- [x] 实现 `run_paper()` 连接 `live/paper_trading.py`
-- [x] 实现 `run_live()` 连接 `live/trading.py`
-- [x] 添加策略初始化逻辑
-- [x] 添加循环执行机制
-- [x] 信号处理（SIGINT/SIGTERM）
-- [x] 状态显示和结果汇总
-
-**新增文件:**
-- `cli/commands/paper.py` - Paper trading 命令处理器
-- `cli/commands/live.py` - Live trading 命令处理器
-
----
-
-### 2. 测试覆盖率提升
-**状态:** ✅ 完成（31%覆盖率）  
-**完成日期:** 2026-04-30
-
-**已完成:**
-- [x] 添加 `tests/test_data_manager.py`
-  - RateLimiter 测试
-  - OHLCVCandle/Ticker/OrderBook 测试
-  - 异常类测试
-- [x] 添加 `tests/test_strategy_base.py`
-  - SignalType/Signal 测试
-  - Position 测试
-  - StrategyContext 测试
-- [x] 添加 `tests/test_risk_controls.py`
-  - PositionSizer 测试（fixed_pct, volatility_based, kelly）
-  - PositionLimits 测试
-  - StopLossManager 测试
-
-**未完成（P1范围）:**
-- [ ] `tests/test_live_paper.py`
-- [ ] `tests/test_cli_commands.py`
+### Phase 2: 数据层 (2026-05-06)
+- [x] 数据库支持 (SQLite/PostgreSQL)
+- [x] 统一存储接口 (File/Database 双模式)
+- [x] 增量下载功能
+- [x] 批量下载脚本 (download_all_data.py)
+- [x] 数据迁移工具
+- [x] **移除虚假数据生成** (仅真实 API 数据)
 
 ---
 
-### 3. 清理代码警告
-**状态:** ✅ 完成  
-**完成日期:** 2026-04-30
+## 🔴 P0 - 高优先级
 
-**已完成:**
-- [x] 运行 `ruff check . --fix` 清理 46 个未使用导入
-- [x] 手动修复 3 个未使用变量（ccxt_side, base, numpy）
-- [x] 修复 f-string 无占位符问题
-- [x] 验证修复后测试通过
+### 1. 回测引擎修复
+**状态:** 🔄 进行中  
+**影响:** backtest 命令无法运行
+
+**任务:**
+- [ ] 修复 Backtrader PandasData 参数兼容性问题
+- [ ] 更新数据加载器使用 `data.loader` 模块
+- [ ] 测试多周期回测
+- [ ] 验证回测结果准确性
 
 ---
 
-## 🟡 P1 - 中优先级 (功能增强)
-
-### 4. 异步架构实现
+### 2. 实盘交易连接
 **状态:** ⏳ 待开始  
-**影响:** 高频策略无法支持  
+**影响:** 无法执行真实交易
+
+**任务:**
+- [ ] 完善 OrderManager 订单执行逻辑
+- [ ] 添加订单状态轮询机制
+- [ ] 实现持仓同步功能
+- [ ] 添加交易确认和日志记录
+
+---
+
+## 🟡 P1 - 中优先级
+
+### 3. 更多策略实现
+**状态:** ⏳ 待开始
+
+**任务:**
+- [ ] RSI 策略
+- [ ] MACD 策略
+- [ ] 布林带策略
+- [ ] 网格交易策略
+- [ ] 套利策略增强
+
+**位置:** `strategy/`
+
+---
+
+### 4. 异步架构改造
+**状态:** ⏳ 待开始  
 **难度:** 高
 
 **任务:**
@@ -91,7 +93,6 @@
 
 ### 5. WebSocket 实时数据
 **状态:** ⏳ 待开始  
-**影响:** 无法实现高频策略  
 **难度:** 高
 
 **任务:**
@@ -104,34 +105,21 @@
 
 ---
 
-### 6. 数据下载功能
+### 6. Status 命令完善
 **状态:** ⏳ 待开始  
-**影响:** backtest 无数据可用  
-**位置:** `data/historical/` 空目录
-
-**任务:**
-- [ ] 添加 CLI `fetch` 命令
-- [ ] 实现批量历史数据下载
-- [ ] 添加数据验证和清洗
-- [ ] 保存为 Parquet 格式
-- [ ] 添加示例数据集
-
----
-
-### 7. Status 命令完善
-**状态:** ⏳ 待开始  
-**位置:** `cli/commands/status.py:48`
+**位置:** `cli/commands/status.py`
 
 **任务:**
 - [ ] 实现实时状态查询
 - [ ] 添加 WebSocket 状态
 - [ ] 添加性能统计显示
+- [ ] 显示当前持仓和盈亏
 
 ---
 
-## 🟢 P2 - 低优先级 (优化完善)
+## 🟢 P2 - 低优先级
 
-### 8. 类型检查强制化
+### 7. 类型检查强制化
 **状态:** ⏳ 待开始
 
 **任务:**
@@ -141,7 +129,7 @@
 
 ---
 
-### 9. 文档完善
+### 8. 文档完善
 **状态:** ⏳ 待开始
 
 **任务:**
@@ -151,7 +139,7 @@
 
 ---
 
-### 10. CI/CD 流程
+### 9. CI/CD 流程
 **状态:** ⏳ 待开始
 
 **任务:**
@@ -161,7 +149,7 @@
 
 ---
 
-### 11. 监控告警
+### 10. 监控告警
 **状态:** ⏳ 待开始
 
 **任务:**
@@ -171,7 +159,7 @@
 
 ---
 
-### 12. 多交易所支持
+### 11. 多交易所支持
 **状态:** ⏳ 待开始
 
 **任务:**
@@ -190,27 +178,40 @@
 任务:
   ✅ 清理代码警告 (49 → 0)
   ✅ 完成 CLI paper/live 实现
-  ✅ 添加核心模块测试 (34 → 105)
+  ✅ 添加核心模块测试
 ```
 
-### Phase 2: 功能增强 ⏳ 待开始
+### Phase 2: 数据层 ✅ 完成
 ```
-目标: 功能完整
-预计时间: 2-4 周
+目标: 完整数据支持
+完成日期: 2026-05-06
 任务:
-  ⏳ 异步架构改造
-  ⏳ WebSocket 实时数据
-  ⏳ 数据下载功能
+  ✅ 数据库支持 (SQLite/PostgreSQL)
+  ✅ 统一存储接口
+  ✅ 增量下载
+  ✅ 批量下载脚本
+  ✅ 移除虚假数据生成
 ```
 
-### Phase 3: 生产准备 ⏳ 待开始
+### Phase 3: 核心功能修复 🔄 进行中
 ```
-目标: 可生产部署
+目标: 回测和交易可用
+预计时间: 1-2 周
+任务:
+  🔄 修复回测引擎
+  ⏳ 实盘交易连接
+```
+
+### Phase 4: 高级功能 ⏳ 待开始
+```
+目标: 生产就绪
 预计时间: 4-8 周
 任务:
+  ⏳ 异步架构
+  ⏳ WebSocket 实时数据
+  ⏳ 更多策略
   ⏳ 完整测试覆盖 (>80%)
   ⏳ CI/CD 流程
-  ⏳ 文档完善
   ⏳ 监控告警
 ```
 
@@ -219,20 +220,31 @@
 ## 快速命令
 
 ```bash
-# 运行测试
-pytest tests/ -v --cov=.    # 测试+覆盖率
+# 配置环境
+cp .env.example .env
+# 编辑 .env 添加 OKX API 密钥
+
+# 下载数据
+python scripts/download_all_data.py
+python -m cli.main fetch --pair BTC/USDT --timeframe 1h
+
+# 数据管理
+python scripts/migrate_all_data.py
+
+# 运行回测
+python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h --days 30
+
+# 模拟交易
+python -m cli.main paper --strategy cta --pair BTC/USDT --duration 24
+
+# 实盘交易 (需 API 密钥)
+python -m cli.main live --strategy cta --pair BTC/USDT --dry-run
 
 # 代码质量检查
-ruff check .                # Lint 检查
-mypy . --ignore-missing-imports  # 类型检查
-black .                     # 格式化
-
-# 使用 CLI
-python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h
-python -m cli.main paper --strategy cta --pair BTC/USDT --duration 24
-python -m cli.main live --strategy cta --pair BTC/USDT --dry-run
-python -m cli.main status
-python -m cli.main config --show
+ruff check . --fix
+black .
+mypy . --ignore-missing-imports
+pytest tests/ -v
 ```
 
 ---
@@ -241,32 +253,42 @@ python -m cli.main config --show
 
 | 任务 | 状态 | 开始日期 | 完成日期 |
 |------|------|----------|----------|
-| 清理代码警告 | ✅ 完成 | 2026-04-30 | 2026-04-30 |
-| CLI 实现 | ✅ 完成 | 2026-04-30 | 2026-04-30 |
-| 测试覆盖率 | ✅ 完成 | 2026-04-30 | 2026-04-30 |
-| 异步架构 | ⏳ 待开始 | - | - |
-| WebSocket | ⏳ 待开始 | - | - |
-| 数据下载 | ⏳ 待开始 | - | - |
+| 清理代码警告 | ✅ | 2026-04-30 | 2026-04-30 |
+| CLI 实现 | ✅ | 2026-04-30 | 2026-04-30 |
+| 测试覆盖率 | ✅ | 2026-04-30 | 2026-04-30 |
+| 数据库支持 | ✅ | 2026-05-06 | 2026-05-06 |
+| 数据下载 | ✅ | 2026-05-06 | 2026-05-06 |
+| 移除虚假数据 | ✅ | 2026-05-06 | 2026-05-06 |
+| 回测引擎修复 | 🔄 | - | - |
+| 实盘交易连接 | ⏳ | - | - |
+| 异步架构 | ⏳ | - | - |
+| WebSocket | ⏳ | - | - |
 
 ---
 
-## 本次改进详情
+## 文件结构
 
-### 新增文件
-| 文件 | 描述 |
-|------|------|
-| `cli/commands/paper.py` | Paper trading 命令处理器 |
-| `cli/commands/live.py` | Live trading 命令处理器 |
-| `tests/test_data_manager.py` | 数据模块测试（28个测试） |
-| `tests/test_strategy_base.py` | 策略基类测试（20个测试） |
-| `tests/test_risk_controls.py` | 风控模块测试（28个测试） |
-
-### 修改文件
-| 文件 | 改动 |
-|------|------|
-| `cli/main.py` | 导入新命令，删除旧 placeholder |
-| `cli/commands/__init__.py` | 导出新命令 |
-| 多个文件 | 清理未使用导入 |
+```
+cryptoquant/
+├── cli/                    # 命令行接口
+├── config/                 # 配置文件
+├── data/                   # 数据层
+│   ├── database.py         # 数据库管理 (新增)
+│   ├── loader.py           # 统一存储接口 (新增)
+│   ├── manager.py          # OKX API 客户端
+│   ├── models.py           # 数据模型
+│   └── storage.py          # Parquet 存储
+├── strategy/               # 策略框架
+├── backtest/               # 回测引擎
+├── live/                   # 实盘交易
+├── risk/                   # 风险管理
+├── logs/                   # 日志审计
+├── scripts/                # 工具脚本
+│   ├── download_all_data.py
+│   ├── migrate_data.py
+│   └── migrate_all_data.py
+└── tests/                  # 测试套件
+```
 
 ---
 
@@ -274,4 +296,5 @@ python -m cli.main config --show
 
 - 状态标记: ✅ 完成 | 🔄 进行中 | ⏳ 待开始 | ❌ 阻塞
 - 优先级: 🔴 P0 | 🟡 P1 | 🟢 P2
-- 更新此文件时同步更新进度追踪表
+- 虚假数据生成已移除，项目现在只支持真实 API 数据
+- 数据库配置: `config/config.yaml` 中 `storage_mode: database`
