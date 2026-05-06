@@ -243,8 +243,12 @@ Examples:
     fetch_parser.add_argument(
         "--timeframe",
         type=str,
-        default="1h",
-        help="Candle timeframe (default: 1h)",
+        help="Single timeframe to fetch (e.g., 1h, 4h, 1d). Use --timeframes for multiple.",
+    )
+    fetch_parser.add_argument(
+        "--timeframes",
+        type=str,
+        help="Comma-separated list of timeframes (e.g., 15m,1h,4h,1d). Default: 15m,1h,4h,1d",
     )
     fetch_parser.add_argument(
         "--days",

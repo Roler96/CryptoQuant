@@ -11,6 +11,7 @@ from typing import List, Optional
 
 import structlog
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
@@ -21,13 +22,17 @@ from data.storage import save_historical_data
 logger = structlog.get_logger(__name__)
 console = Console()
 
+VALID_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]
+DEFAULT_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+
 
 def run_fetch(args: argparse.Namespace) -> int:
     """Execute data fetch with given arguments."""
     logger.info(
         "starting_fetch_command",
         pair=args.pair,
-        timeframe=args.timeframe,
+        timeframe=getattr(args, 'timeframe', None),
+        timeframes=getattr(args, 'timeframes', None),
         days=getattr(args, 'days', None),
         since=getattr(args, 'since', None),
     )
@@ -46,6 +51,13 @@ def run_fetch(args: argparse.Namespace) -> int:
     console.print(f"Sandbox: {args.sandbox}")
     console.print()
 
+    # Determine timeframes to fetch
+    timeframes = _get_timeframes_to_fetch(args)
+    
+    if not timeframes:
+        console.print("[red]Error: No valid timeframes specified[/red]")
+        return 1
+
     try:
         with console.status("[bold green]Connecting to OKX..."):
             client = OKXClient(sandbox=args.sandbox)
@@ -59,31 +71,48 @@ def run_fetch(args: argparse.Namespace) -> int:
             console.print("[red]Error: Could not calculate start date[/red]")
             return 1
 
-        candles = _fetch_with_progress(client, args.pair, args.timeframe, since)
-
-        if not candles:
-            console.print("[yellow]No data returned from exchange[/yellow]")
-            return 1
-
-        valid_candles = _validate_candles(candles)
+        # Fetch data for all timeframes
+        results = []
+        all_success = True
         
-        console.print(f"[green]✓ Fetched {len(valid_candles)} candles[/green]")
-        console.print()
+        for timeframe in timeframes:
+            console.print(Panel(f"[bold blue]Fetching {timeframe} data[/bold blue]", expand=False))
+            
+            try:
+                candles = _fetch_with_progress(client, args.pair, timeframe, since)
 
-        _display_data_summary(valid_candles)
+                if not candles:
+                    console.print(f"[yellow]No data returned for {timeframe}[/yellow]")
+                    results.append((timeframe, 0, "no data"))
+                    continue
 
-        with console.status("[bold green]Saving to Parquet..."):
-            save_historical_data(
-                candles=valid_candles,
-                pair=args.pair,
-                timeframe=args.timeframe,
-                data_source="OKX",
-            )
+                valid_candles = _validate_candles(candles)
+                
+                console.print(f"[green]✓ Fetched {len(valid_candles)} candles[/green]")
+
+                with console.status("[bold green]Saving to Parquet..."):
+                    save_historical_data(
+                        candles=valid_candles,
+                        pair=args.pair,
+                        timeframe=timeframe,
+                        data_source="OKX",
+                    )
+                
+                console.print(f"[green]✓ Saved {timeframe} data[/green]")
+                results.append((timeframe, len(valid_candles), "success"))
+                
+            except Exception as e:
+                logger.error("fetch_timeframe_failed", timeframe=timeframe, error=str(e))
+                console.print(f"[red]✗ Failed to fetch {timeframe}: {e}[/red]")
+                results.append((timeframe, 0, f"error: {e}"))
+                all_success = False
+            
+            console.print()
         
-        console.print("[green]✓ Data saved successfully[/green]")
-        console.print()
+        # Display summary
+        _display_fetch_summary(results)
         
-        return 0
+        return 0 if all_success else 1
 
     except Exception as e:
         logger.error("fetch_command_failed", error=str(e))
@@ -95,6 +124,61 @@ def run_fetch(args: argparse.Namespace) -> int:
                 client.close()
         except:
             pass
+
+
+def _get_timeframes_to_fetch(args: argparse.Namespace) -> List[str]:
+    """Determine which timeframes to fetch based on args.
+    
+    Returns:
+        List of timeframe strings
+    """
+    # Check for explicit --timeframe (single)
+    if hasattr(args, 'timeframe') and args.timeframe:
+        if args.timeframe in VALID_TIMEFRAMES:
+            return [args.timeframe]
+        else:
+            console.print(f"[red]Error: Invalid timeframe '{args.timeframe}'[/red]")
+            console.print(f"Valid timeframes: {', '.join(VALID_TIMEFRAMES)}")
+            return []
+    
+    # Check for --timeframes (multiple)
+    if hasattr(args, 'timeframes') and args.timeframes:
+        requested = [tf.strip() for tf in args.timeframes.split(',')]
+        valid = [tf for tf in requested if tf in VALID_TIMEFRAMES]
+        invalid = [tf for tf in requested if tf not in VALID_TIMEFRAMES]
+        
+        if invalid:
+            console.print(f"[yellow]Warning: Ignoring invalid timeframes: {', '.join(invalid)}[/yellow]")
+        
+        return valid if valid else DEFAULT_TIMEFRAMES
+    
+    # Default: fetch all common timeframes
+    return DEFAULT_TIMEFRAMES
+
+
+def _display_fetch_summary(results: List[tuple]) -> None:
+    """Display summary of fetch results for all timeframes."""
+    console.print(Panel("[bold blue]Fetch Summary[/bold blue]", expand=False))
+    
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Timeframe", style="cyan")
+    table.add_column("Candles", justify="right", style="green")
+    table.add_column("Status", style="yellow")
+    
+    total_candles = 0
+    for timeframe, count, status in results:
+        status_icon = "✓" if status == "success" else "✗"
+        status_color = "green" if status == "success" else "red" if "error" in status else "yellow"
+        table.add_row(
+            timeframe,
+            str(count),
+            f"[{status_color}]{status_icon} {status}[/{status_color}]"
+        )
+        total_candles += count
+    
+    console.print(table)
+    console.print(f"\n[bold]Total candles fetched: {total_candles}[/bold]")
+    console.print()
 
 
 def _calculate_since_timestamp(args: argparse.Namespace) -> Optional[int]:
