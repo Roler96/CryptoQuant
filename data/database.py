@@ -54,7 +54,6 @@ class OHLCVCandleDB(Base):
     )
     
     def to_dict(self) -> dict:
-        """Convert to dictionary."""
         return {
             "timestamp": self.timestamp,
             "pair": self.pair,
@@ -65,6 +64,44 @@ class OHLCVCandleDB(Base):
             "close": self.close_price,
             "volume": self.volume,
         }
+
+
+class DataVersionDB(Base):
+    """Track data updates and versioning."""
+    
+    __tablename__ = "data_versions"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pair = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    min_timestamp = Column(Integer, nullable=True)
+    max_timestamp = Column(Integer, nullable=True)
+    count = Column(Integer, nullable=False, default=0)
+    last_update = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    data_source = Column(String(50), default="OKX")
+    
+    __table_args__ = (
+        Index("idx_version_pair_tf", "pair", "timeframe", unique=True),
+    )
+
+
+class DataQualityDB(Base):
+    """Store data quality check results."""
+    
+    __tablename__ = "data_quality"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pair = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)
+    check_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    total_records = Column(Integer, nullable=False)
+    null_values = Column(Integer, default=0)
+    invalid_prices = Column(Integer, default=0)
+    negative_volumes = Column(Integer, default=0)
+    gaps_detected = Column(Integer, default=0)
+    is_valid = Column(Integer, default=1)
+    notes = Column(String(500), nullable=True)
 
 
 class DatabaseManager:
@@ -327,8 +364,143 @@ class DatabaseManager:
             
             return count
     
+    def update_data_version(
+        self,
+        pair: str,
+        timeframe: str,
+        count: int,
+        data_source: str = "OKX",
+    ) -> None:
+        """Update data version info after data changes."""
+        with self.get_session() as session:
+            version = session.query(DataVersionDB).filter(
+                DataVersionDB.pair == pair.upper(),
+                DataVersionDB.timeframe == timeframe,
+            ).first()
+            
+            time_range = self.get_time_range(pair, timeframe)
+            
+            if version:
+                version.version += 1
+                version.count = count
+                version.min_timestamp = time_range[0]
+                version.max_timestamp = time_range[1]
+                version.last_update = datetime.now(timezone.utc)
+                version.data_source = data_source
+            else:
+                version = DataVersionDB(
+                    pair=pair.upper(),
+                    timeframe=timeframe,
+                    version=1,
+                    min_timestamp=time_range[0],
+                    max_timestamp=time_range[1],
+                    count=count,
+                    data_source=data_source,
+                )
+                session.add(version)
+    
+    def get_data_versions(self) -> list[dict]:
+        """Get all data version information."""
+        with self.get_session() as session:
+            versions = session.query(DataVersionDB).all()
+            return [
+                {
+                    "pair": v.pair,
+                    "timeframe": v.timeframe,
+                    "version": v.version,
+                    "count": v.count,
+                    "min_timestamp": v.min_timestamp,
+                    "max_timestamp": v.max_timestamp,
+                    "last_update": v.last_update,
+                    "data_source": v.data_source,
+                }
+                for v in versions
+            ]
+    
+    def validate_data_quality(self, pair: str, timeframe: str) -> dict:
+        """Check data quality for a pair and timeframe."""
+        with self.get_session() as session:
+            candles = session.query(OHLCVCandleDB).filter(
+                OHLCVCandleDB.pair == pair.upper(),
+                OHLCVCandleDB.timeframe == timeframe,
+            ).all()
+            
+            if not candles:
+                return {"is_valid": False, "error": "No data found"}
+            
+            total = len(candles)
+            null_values = sum(
+                1 for c in candles
+                if c.open_price is None or c.close_price is None
+            )
+            invalid_prices = sum(
+                1 for c in candles
+                if c.high_price < c.low_price or c.open_price <= 0
+            )
+            negative_volumes = sum(
+                1 for c in candles if c.volume < 0
+            )
+            
+            # Check for gaps
+            timestamps = sorted([c.timestamp for c in candles])
+            gaps = 0
+            for i in range(1, len(timestamps)):
+                gap = timestamps[i] - timestamps[i-1]
+                # Expected gap based on timeframe
+                expected = self._get_expected_interval(timeframe)
+                if gap > expected * 2:
+                    gaps += 1
+            
+            is_valid = (
+                null_values == 0 and
+                invalid_prices == 0 and
+                negative_volumes == 0
+            )
+            
+            quality = DataQualityDB(
+                pair=pair.upper(),
+                timeframe=timeframe,
+                total_records=total,
+                null_values=null_values,
+                invalid_prices=invalid_prices,
+                negative_volumes=negative_volumes,
+                gaps_detected=gaps,
+                is_valid=1 if is_valid else 0,
+            )
+            session.add(quality)
+            
+            return {
+                "pair": pair,
+                "timeframe": timeframe,
+                "total": total,
+                "null_values": null_values,
+                "invalid_prices": invalid_prices,
+                "negative_volumes": negative_volumes,
+                "gaps": gaps,
+                "is_valid": is_valid,
+            }
+    
+    def _get_expected_interval(self, timeframe: str) -> int:
+        """Get expected milliseconds interval for timeframe."""
+        intervals = {
+            "1m": 60 * 1000,
+            "5m": 5 * 60 * 1000,
+            "15m": 15 * 60 * 1000,
+            "30m": 30 * 60 * 1000,
+            "1h": 60 * 60 * 1000,
+            "2h": 2 * 60 * 60 * 1000,
+            "4h": 4 * 60 * 60 * 1000,
+            "6h": 6 * 60 * 60 * 1000,
+            "8h": 8 * 60 * 60 * 1000,
+            "12h": 12 * 60 * 60 * 1000,
+            "1d": 24 * 60 * 60 * 1000,
+            "3d": 3 * 24 * 60 * 60 * 1000,
+            "1w": 7 * 24 * 60 * 60 * 1000,
+            "1M": 30 * 24 * 60 * 60 * 1000,
+        }
+        return intervals.get(timeframe, 60 * 60 * 1000)
+    
     def close(self) -> None:
-        """Close database connection."""
         self.engine.dispose()
         logger.info("database_connection_closed")
 
