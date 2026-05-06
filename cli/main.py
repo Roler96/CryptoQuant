@@ -22,6 +22,7 @@ import structlog
 
 from cli.commands.backtest import run_backtest
 from cli.commands.config import run_config
+from cli.commands.fetch import run_fetch
 from cli.commands.paper import run_paper
 from cli.commands.live import run_live
 from cli.commands.status import run_status
@@ -227,6 +228,42 @@ Examples:
         help="Reason for kill switch activation (default: manual)",
     )
 
+    # Fetch command
+    fetch_parser = subparsers.add_parser(
+        "fetch",
+        help="Fetch historical data from exchange",
+        description="Download historical OHLCV data and save in Parquet format for backtesting.",
+    )
+    fetch_parser.add_argument(
+        "--pair",
+        type=str,
+        required=True,
+        help="Trading pair (e.g., BTC/USDT, ETH/USDT)",
+    )
+    fetch_parser.add_argument(
+        "--timeframe",
+        type=str,
+        default="1h",
+        help="Candle timeframe (default: 1h)",
+    )
+    fetch_parser.add_argument(
+        "--days",
+        type=int,
+        default=365,
+        help="Number of days to fetch (default: 365)",
+    )
+    fetch_parser.add_argument(
+        "--since",
+        type=str,
+        metavar="YYYY-MM-DD",
+        help="Start date (alternative to days)",
+    )
+    fetch_parser.add_argument(
+        "--sandbox",
+        action="store_true",
+        help="Use OKX sandbox environment",
+    )
+
     return parser
 
 
@@ -259,6 +296,8 @@ def dispatch_command(args: argparse.Namespace) -> int:
             return run_status(args)
         elif command == "config":
             return run_config(args)
+        elif command == "fetch":
+            return run_fetch(args)
         elif command == "kill":
             return run_kill(args)
         else:
