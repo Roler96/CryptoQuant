@@ -267,6 +267,17 @@ Examples:
         action="store_true",
         help="Use OKX sandbox environment",
     )
+    fetch_parser.add_argument(
+        "--incremental",
+        action="store_true",
+        default=True,
+        help="Incremental download (skip existing data, default: true)",
+    )
+    fetch_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Full download (replace existing data)",
+    )
 
     return parser
 

@@ -25,8 +25,23 @@ trading:
 
 # Data collection
 data:
-  # Historical data storage
+  # Data storage mode: "file" or "database"
+  storage_mode: database
+
+  # Historical data storage (file mode)
   historical_path: data/historical
+
+  # Database configuration
+  database:
+    # Database URL (SQLite or PostgreSQL)
+    # SQLite: sqlite:///data/cryptoquant.db
+    # PostgreSQL: postgresql://user:password@localhost:5432/cryptoquant
+    url: sqlite:///data/cryptoquant.db
+
+    # Connection pool settings
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout: 30
 
   # Update interval in seconds
   update_interval: 60

@@ -1,7 +1,7 @@
 """Fetch command handler for CLI.
 
 Provides functionality to download historical OHLCV data from OKX exchange
-and save it in Parquet format for backtesting.
+and save it in database or Parquet format for backtesting.
 """
 
 import argparse
@@ -15,9 +15,15 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from data.loader import (
+    IncrementalUpdater,
+    get_data_stats,
+    get_latest_timestamp,
+    save_candles,
+    use_database,
+)
 from data.manager import OKXClient
 from data.models import OHLCVCandle
-from data.storage import save_historical_data
 
 logger = structlog.get_logger(__name__)
 console = Console()
@@ -35,11 +41,17 @@ def run_fetch(args: argparse.Namespace) -> int:
         timeframes=getattr(args, 'timeframes', None),
         days=getattr(args, 'days', None),
         since=getattr(args, 'since', None),
+        incremental=getattr(args, 'incremental', True),
     )
 
     console.print("[bold blue]Fetching Historical Data[/bold blue]")
     console.print(f"Pair: {args.pair}")
-    console.print(f"Timeframe: {args.timeframe}")
+    
+    storage_mode = "database" if use_database() else "file"
+    console.print(f"Storage: {storage_mode}")
+    
+    if hasattr(args, 'incremental') and args.incremental:
+        console.print("Mode: incremental")
     
     if hasattr(args, 'days') and args.days:
         console.print(f"Days: {args.days}")
@@ -51,7 +63,6 @@ def run_fetch(args: argparse.Namespace) -> int:
     console.print(f"Sandbox: {args.sandbox}")
     console.print()
 
-    # Determine timeframes to fetch
     timeframes = _get_timeframes_to_fetch(args)
     
     if not timeframes:
@@ -65,41 +76,53 @@ def run_fetch(args: argparse.Namespace) -> int:
         console.print("[green]✓ Connected to OKX[/green]")
         console.print()
 
-        since = _calculate_since_timestamp(args)
+        updater = IncrementalUpdater()
         
-        if since is None:
-            console.print("[red]Error: Could not calculate start date[/red]")
-            return 1
-
-        # Fetch data for all timeframes
         results = []
         all_success = True
         
         for timeframe in timeframes:
             console.print(Panel(f"[bold blue]Fetching {timeframe} data[/bold blue]", expand=False))
             
+            # Check for incremental update
+            if getattr(args, 'incremental', True):
+                existing_stats = get_data_stats(args.pair, timeframe)
+                if existing_stats["count"] > 0:
+                    console.print(f"[dim]Existing data: {existing_stats['count']} candles[/dim]")
+                    console.print(f"[dim]Latest: {datetime.fromtimestamp(existing_stats['max_timestamp']/1000, tz=timezone.utc)}[/dim]")
+                    
+                    start_ts, _ = updater.get_fetch_range(args.pair, timeframe)
+                    console.print(f"[dim]Fetching from: {datetime.fromtimestamp(start_ts/1000, tz=timezone.utc)}[/dim]")
+                else:
+                    start_ts = _calculate_since_timestamp(args)
+                    if start_ts is None:
+                        return 1
+            else:
+                start_ts = _calculate_since_timestamp(args)
+                if start_ts is None:
+                    return 1
+            
             try:
-                candles = _fetch_with_progress(client, args.pair, timeframe, since)
+                candles = _fetch_with_progress(client, args.pair, timeframe, start_ts)
 
                 if not candles:
-                    console.print(f"[yellow]No data returned for {timeframe}[/yellow]")
-                    results.append((timeframe, 0, "no data"))
+                    console.print(f"[yellow]No new data for {timeframe}[/yellow]")
+                    results.append((timeframe, 0, "no new data"))
                     continue
 
                 valid_candles = _validate_candles(candles)
                 
                 console.print(f"[green]✓ Fetched {len(valid_candles)} candles[/green]")
 
-                with console.status("[bold green]Saving to Parquet..."):
-                    save_historical_data(
+                with console.status("[bold green]Saving..."):
+                    count = save_candles(
                         candles=valid_candles,
                         pair=args.pair,
                         timeframe=timeframe,
-                        data_source="OKX",
                     )
                 
-                console.print(f"[green]✓ Saved {timeframe} data[/green]")
-                results.append((timeframe, len(valid_candles), "success"))
+                console.print(f"[green]✓ Saved {count} candles[/green]")
+                results.append((timeframe, count, "success"))
                 
             except Exception as e:
                 logger.error("fetch_timeframe_failed", timeframe=timeframe, error=str(e))
