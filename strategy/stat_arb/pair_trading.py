@@ -72,7 +72,7 @@ def calculate_cointegration(
         beta_adf = np.linalg.lstsq(x_adf, y_adf, rcond=None)[0]
         test_stat = beta_adf[1]
 
-        critical_value = -0.05
+        critical_value = -2.86
         is_cointegrated = test_stat < critical_value
 
         return is_cointegrated, float(test_stat)

@@ -141,13 +141,13 @@ class BacktraderStrategyAdapter(bt.Strategy):
         self.strategy = self.params.strategy_instance
         self.pair = self.params.pair
         self.timeframe = self.params.timeframe
-        self.candles: List[Any] = []
+        self.candles: List[OHLCVCandle] = []
         self.trades: List[Dict[str, Any]] = []
         self.equity_curve: List[float] = []
         self.equity_timestamps: List[int] = []
         self.position_state = None
-        self.entry_price = None
-        self.entry_time = None
+        self.entry_price: Optional[Decimal] = None
+        self.entry_time: Optional[int] = None
 
         self.logger = structlog.get_logger(__name__).bind(
             strategy=self.strategy.name if self.strategy else "unknown",
@@ -215,16 +215,16 @@ class BacktraderStrategyAdapter(bt.Strategy):
         if signal.signal_type == SignalType.LONG:
             if not self.position:
                 self.buy(size=size)
-                self.entry_price = float(current_price)
+                self.entry_price = current_price
                 self.entry_time = current_time
-                self.logger.debug("long_position_opened", size=size, price=float(current_price))
+                self.logger.debug("long_position_opened", size=size, price=str(current_price))
 
         elif signal.signal_type == SignalType.SHORT:
             if not self.position:
                 self.sell(size=size)
-                self.entry_price = float(current_price)
+                self.entry_price = current_price
                 self.entry_time = current_time
-                self.logger.debug("short_position_opened", size=size, price=float(current_price))
+                self.logger.debug("short_position_opened", size=size, price=str(current_price))
 
         elif signal.signal_type == SignalType.CLOSE_LONG:
             if self.position and self.position.size > 0:
@@ -239,9 +239,9 @@ class BacktraderStrategyAdapter(bt.Strategy):
     def _calculate_position_size(self, signal: Signal, current_price: Decimal) -> float:
         """Calculate position size based on signal and available cash."""
         cash = self.broker.getcash()
-        max_position_value = cash * 0.95
-        size = max_position_value / float(current_price)
-        return max(size, 0.001)
+        max_position_value = cash * Decimal('0.95')
+        size = max_position_value / current_price
+        return float(max(size, Decimal('0.001')))
 
     def _record_trade(self, exit_price: Decimal, exit_time: int, side: str):
         """Record completed trade."""
@@ -249,29 +249,28 @@ class BacktraderStrategyAdapter(bt.Strategy):
             return
 
         entry_price = self.entry_price
-        exit_price_float = float(exit_price)
 
         if side == "long":
-            pnl = (exit_price_float - entry_price) / entry_price
+            pnl = (exit_price - entry_price) / entry_price
         else:
-            pnl = (entry_price - exit_price_float) / entry_price
+            pnl = (entry_price - exit_price) / entry_price
 
         trade = {
             "entry_time": self.entry_time,
             "exit_time": exit_time,
-            "entry_price": entry_price,
-            "exit_price": exit_price_float,
+            "entry_price": str(entry_price),
+            "exit_price": str(exit_price),
             "side": side,
-            "pnl": pnl,
+            "pnl": float(pnl),
         }
 
         self.trades.append(trade)
         self.logger.debug(
             "trade_recorded",
             side=side,
-            entry_price=entry_price,
-            exit_price=exit_price_float,
-            pnl=pnl,
+            entry_price=str(entry_price),
+            exit_price=str(exit_price),
+            pnl=float(pnl),
         )
 
         self.entry_price = None

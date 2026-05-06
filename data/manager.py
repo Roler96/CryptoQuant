@@ -51,6 +51,7 @@ class RateLimiter:
             )
             self.last_update = now
 
+            wait_time = 0.0
             if self.tokens < 1:
                 # Need to wait for token
                 wait_time = (1 - self.tokens) * (self.time_window / self.max_requests)
@@ -59,7 +60,7 @@ class RateLimiter:
                 self.last_update = time.monotonic()
 
             self.tokens -= 1
-            return wait_time if self.tokens < 1 else 0.0
+            return wait_time
 
 
 class OKXAPIError(Exception):

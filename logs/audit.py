@@ -9,7 +9,7 @@ import csv
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
@@ -73,7 +73,7 @@ class TradeRecord:
     size: Decimal
     entry_price: Decimal
     exit_price: Optional[Decimal] = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     pnl: Optional[Decimal] = None
     pnl_pct: Optional[Decimal] = None
     status: str = "open"
@@ -108,7 +108,7 @@ class RiskEventRecord:
     pair: Optional[str] = None
     severity: str = "info"
     message: str = ""
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_audit_record(self) -> AuditRecord:

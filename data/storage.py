@@ -8,7 +8,7 @@ Provides Parquet-based storage for OHLCV data with:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -199,7 +199,7 @@ def _update_metadata_entry(
     metadata["files"][key] = {
         "pair": pair,
         "timeframe": timeframe,
-        "last_update_timestamp": datetime.utcnow().isoformat(),
+        "last_update_timestamp": datetime.now(timezone.utc).isoformat(),
         "data_source": data_source,
         "rows_count": row_count,
         "file_path": str(parquet_path.relative_to(Path.cwd())),

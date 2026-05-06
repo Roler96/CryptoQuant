@@ -6,7 +6,7 @@ All kill switch events are logged to the audit trail for compliance.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum, auto
 from typing import Any, Dict, Optional, Protocol
@@ -150,7 +150,7 @@ class KillSwitch:
             event_type="kill_switch_reset",
             severity="info",
             message="Kill switch safe mode manually reset",
-            metadata={"reset_at": datetime.utcnow().isoformat()},
+            metadata={"reset_at": datetime.now(timezone.utc).isoformat()},
         )
 
         return True
@@ -339,7 +339,7 @@ class KillSwitch:
         """
         self._state.is_active = True
         self._state.reason = reason
-        self._state.activated_at = datetime.utcnow().isoformat()
+        self._state.activated_at = datetime.now(timezone.utc).isoformat()
         self._state.metadata = metadata or {}
 
         severity_map = {
