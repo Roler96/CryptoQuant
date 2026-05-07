@@ -71,15 +71,10 @@ def save_candles(candles: list, pair: str, timeframe: str) -> int:
                 (timestamp, datetime_utc8, open, high, low, close, volume, pair, timeframe)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                candle["timestamp"],
-                convert_to_utc8_str(candle["timestamp"]),
-                float(candle["open"]),
-                float(candle["high"]),
-                float(candle["low"]),
-                float(candle["close"]),
-                float(candle["volume"]),
-                candle["pair"],
-                candle["timeframe"],
+                candle["timestamp"], convert_to_utc8_str(candle["timestamp"]),
+                float(candle["open"]), float(candle["high"]),
+                float(candle["low"]), float(candle["close"]), float(candle["volume"]),
+                candle["pair"], candle["timeframe"],
             ))
             inserted += 1
         except Exception as e:
