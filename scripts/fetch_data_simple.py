@@ -117,6 +117,7 @@ def init_database():
         CREATE TABLE IF NOT EXISTS candles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp INTEGER NOT NULL,
+            datetime_utc8 TEXT,
             open REAL NOT NULL,
             high REAL NOT NULL,
             low REAL NOT NULL,
