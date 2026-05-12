@@ -1,20 +1,21 @@
 """Data validation module for CryptoQuant platform.
 
 Provides data integrity checks for OHLCV time-series data:
+- Per-candle sanity validation (prices, volume, OHLC logic)
 - Missing timestamp detection
 - Price anomaly detection (unrealistic jumps)
 - Volume validation (non-negative values)
-- Validation report generation with auto-repair for minor issues
+- Validation report generation
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 import pandas as pd
 import structlog
 
-from data.storage import load_historical_data
+from data.models import OHLCVCandle
+from data.repository import get_repository
 
 logger = structlog.get_logger(__name__)
 
@@ -26,6 +27,65 @@ VALIDATION_FAIL = "FAIL"
 # Default thresholds
 DEFAULT_PRICE_ANOMALY_THRESHOLD = 0.20  # 20% price change
 DEFAULT_GAP_THRESHOLD_MS = 1.1  # Allow 10% tolerance on expected interval
+
+
+def validate_candle(candle: OHLCVCandle) -> Tuple[bool, Optional[str]]:
+    """Validate a single OHLCV candle for basic sanity.
+
+    Checks:
+    - Positive prices (open, close > 0)
+    - High >= low
+    - High >= open and high >= close
+    - Low <= open and low <= close
+    - Non-negative volume
+
+    Args:
+        candle: OHLCVCandle to validate
+
+    Returns:
+        Tuple of (is_valid, reason). reason is None when valid.
+    """
+    if candle.open <= 0:
+        return False, "open price <= 0"
+    if candle.close <= 0:
+        return False, "close price <= 0"
+    if candle.high < candle.low:
+        return False, f"high ({candle.high}) < low ({candle.low})"
+    if candle.high < candle.open:
+        return False, f"high ({candle.high}) < open ({candle.open})"
+    if candle.high < candle.close:
+        return False, f"high ({candle.high}) < close ({candle.close})"
+    if candle.low > candle.open:
+        return False, f"low ({candle.low}) > open ({candle.open})"
+    if candle.low > candle.close:
+        return False, f"low ({candle.low}) > close ({candle.close})"
+    if candle.volume < 0:
+        return False, "negative volume"
+    return True, None
+
+
+def validate_candles_batch(
+    candles: List[OHLCVCandle],
+) -> Tuple[List[OHLCVCandle], List[Tuple[OHLCVCandle, str]]]:
+    """Validate a batch of candles, returning valid ones and rejected ones.
+
+    Args:
+        candles: List of OHLCVCandle to validate
+
+    Returns:
+        Tuple of (valid_candles, rejected_candles_with_reasons)
+    """
+    valid: List[OHLCVCandle] = []
+    rejected: List[Tuple[OHLCVCandle, str]] = []
+
+    for candle in candles:
+        is_valid, reason = validate_candle(candle)
+        if is_valid:
+            valid.append(candle)
+        else:
+            rejected.append((candle, reason))
+
+    return valid, rejected
 
 
 @dataclass
@@ -201,10 +261,10 @@ def check_price_anomalies(
         List of anomaly dictionaries with:
         - timestamp: Affected timestamp
         - change_pct: Price change percentage
-        - open_price: Opening price
-        - close_price: Closing price
-        - high_price: Highest price
-        - low_price: Lowest price
+        - open: Opening price
+        - close: Closing price
+        - high: Highest price
+        - low: Lowest price
     """
     if df.empty or len(df) < 2:
         return []
@@ -244,10 +304,10 @@ def check_price_anomalies(
         if issues:
             anomalies.append({
                 "timestamp": int(row["timestamp"]),
-                "open_price": float(row["open"]),
-                "close_price": float(row["close"]),
-                "high_price": float(row["high"]),
-                "low_price": float(row["low"]),
+                "open": float(row["open"]),
+                "close": float(row["close"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
                 "issues": issues,
             })
 
@@ -504,35 +564,34 @@ def validate_ohlcv_data(
     return report
 
 
-def validate_data_file(
+def validate_stored_data(
     pair: str,
     timeframe: str,
-    data_dir: Optional[Path] = None,
     price_threshold: float = DEFAULT_PRICE_ANOMALY_THRESHOLD,
 ) -> Dict[str, Any]:
-    """Validate entire Parquet file and return report dictionary.
+    """Validate stored data for a pair/timeframe and return report dictionary.
+
+    Loads data from the SQLite repository and runs full validation.
 
     Args:
         pair: Trading pair (e.g., "BTC/USDT")
         timeframe: Candle timeframe (e.g., "1h", "1d")
-        data_dir: Optional custom data directory
         price_threshold: Maximum allowed price change percentage
 
     Returns:
         Validation report as dictionary
 
     Raises:
-        FileNotFoundError: If the Parquet file doesn't exist
+        ValueError: If no data exists for the pair/timeframe
     """
     logger.info(
-        "validating_data_file",
+        "validating_stored_data",
         pair=pair,
         timeframe=timeframe,
-        data_dir=str(data_dir) if data_dir else None,
     )
 
-    # Load the data
-    df = load_historical_data(pair, timeframe, data_dir)
+    # Load the data from repository
+    df = get_repository().load_as_dataframe(pair, timeframe)
 
     # Run validation
     report = validate_ohlcv_data(df, pair, timeframe, price_threshold)
