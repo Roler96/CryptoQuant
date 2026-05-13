@@ -648,23 +648,37 @@ def auto_repair_data(
         missing_timestamps, _ = check_missing_timestamps(df, timeframe)
 
         if missing_timestamps:
-            # Create rows for missing timestamps with NaN values
+            expected_interval_ms = _timeframe_to_ms(timeframe)
+
+            # Build rows for missing timestamps with placeholder values
             missing_data = {
                 "timestamp": missing_timestamps,
                 "open": [float("nan")] * len(missing_timestamps),
                 "high": [float("nan")] * len(missing_timestamps),
                 "low": [float("nan")] * len(missing_timestamps),
                 "close": [float("nan")] * len(missing_timestamps),
-                "volume": [float("nan")] * len(missing_timestamps),
+                "volume": [0.0] * len(missing_timestamps),
             }
             missing_df = pd.DataFrame(missing_data)
 
-            # Combine and sort
+            # Combine and sort by timestamp
             repaired_df = pd.concat([repaired_df, missing_df], ignore_index=True)
             repaired_df = repaired_df.sort_values("timestamp").reset_index(drop=True)
 
+            # Forward-fill OHLC prices (use last known close for all price
+            # columns) — Backtrader cannot handle NaN in price data.
+            price_cols = ["open", "high", "low", "close"]
+            repaired_df[price_cols] = repaired_df[price_cols].ffill()
+
+            # Any remaining NaN at the start (no prior value to ffill)
+            # backward-fill so the very first rows are also valid.
+            repaired_df[price_cols] = repaired_df[price_cols].bfill()
+
             repair_report["filled_timestamps"] = len(missing_timestamps)
-            repair_report["actions"].append(f"Filled {len(missing_timestamps)} missing timestamps with NaN")
+            repair_report["actions"].append(
+                f"Filled {len(missing_timestamps)} missing timestamps "
+                f"(prices: forward-fill, volume: 0)"
+            )
 
             logger.info(
                 "filled_missing_timestamps",

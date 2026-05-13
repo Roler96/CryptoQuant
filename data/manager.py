@@ -50,7 +50,17 @@ class OKXNetworkError(OKXAPIError):
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0):
-    """Decorator for retry logic with exponential backoff."""
+    """Decorator for retry logic with exponential backoff.
+
+    Catches both raw ccxt exceptions and custom OKXAPIError subclasses so
+    that retries work even when the wrapped function converts ccxt errors
+    to domain exceptions before re-raising.
+
+    Retry behaviour by exception type:
+    - Network / Timeout errors: retry with exponential backoff
+    - Rate limit errors: retry with longer backoff (2x the normal delay)
+    - Authentication / other exchange errors: fail immediately (no retry)
+    """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -59,7 +69,9 @@ def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay:
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+                except (ccxt.NetworkError, ccxt.RequestTimeout,
+                        OKXNetworkError, OKXTimeoutError) as e:
+                    # Network/timeout — retryable
                     last_exception = e
                     if attempt < max_retries:
                         delay = min(base_delay * (2 ** attempt), max_delay)
@@ -72,14 +84,32 @@ def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay:
                         )
                         time.sleep(delay)
                     else:
-                        raise OKXNetworkError(f"Network error after {max_retries} retries: {e}")
-                except ccxt.RateLimitExceeded as e:
-                    raise OKXRateLimitError(f"Rate limit exceeded: {e}")
+                        raise
+                except (ccxt.RateLimitExceeded, OKXRateLimitError) as e:
+                    # Rate limit — retryable with longer delay
+                    last_exception = e
+                    if attempt < max_retries:
+                        delay = min(base_delay * (2 ** (attempt + 2)), max_delay)
+                        logger.warning(
+                            "api_rate_limit_retry",
+                            function=func.__name__,
+                            attempt=attempt + 1,
+                            delay=delay,
+                            error=str(e),
+                        )
+                        time.sleep(delay)
+                    else:
+                        if isinstance(e, OKXRateLimitError):
+                            raise
+                        raise OKXRateLimitError(
+                            f"Rate limit exceeded after {max_retries} retries: {e}"
+                        )
                 except ccxt.AuthenticationError as e:
                     raise OKXAuthenticationError(f"Invalid API credentials: {e}")
                 except ccxt.ExchangeError as e:
                     raise OKXAPIError(f"Exchange error: {e}")
 
+            # Should not reach here, but safety net
             if last_exception:
                 raise OKXNetworkError(f"Failed after {max_retries} retries: {last_exception}")
 

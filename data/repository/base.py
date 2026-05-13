@@ -199,7 +199,7 @@ class DataRepository(ABC):
         Returns:
             List of stat dictionaries for each stored pair/timeframe
         """
-        pairs_tfs = self._list_pairs_timeframes()
+        pairs_tfs = self.list_pairs_timeframes()
         return [self.get_stats(pair, tf) for pair, tf in pairs_tfs]
 
     def close(self) -> None:

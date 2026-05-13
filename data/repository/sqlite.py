@@ -141,8 +141,8 @@ class SQLiteRepository(DataRepository):
     ) -> int:
         """Batch save candles with upsert semantics.
 
-        Uses INSERT OR REPLACE on the composite primary key to handle
-        duplicates without errors.
+        Uses SQLite INSERT OR REPLACE (ON CONFLICT DO UPDATE) on the composite
+        primary key (pair, timeframe, timestamp) to handle duplicates cleanly.
 
         Args:
             candles: List of OHLCV candle objects
@@ -156,14 +156,31 @@ class SQLiteRepository(DataRepository):
             return 0
 
         with self.Session() as session:
-            rows = [CandleModel.from_candle(c) for c in candles]
-
-            # Use SQLAlchemy bulk_save with replace for upsert
-            session.bulk_save_objects(
-                rows,
-                preserve_order=False,
-                update_changed_only=False,
-            )
+            for candle in candles:
+                values = {
+                    "pair": candle.pair,
+                    "timeframe": candle.timeframe,
+                    "timestamp": candle.timestamp,
+                    "iso_time": candle.iso_time,
+                    "open": candle.open,
+                    "high": candle.high,
+                    "low": candle.low,
+                    "close": candle.close,
+                    "volume": candle.volume,
+                }
+                stmt = sqlite_upsert(CandleModel).values(**values)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["pair", "timeframe", "timestamp"],
+                    set_={
+                        "iso_time": candle.iso_time,
+                        "open": candle.open,
+                        "high": candle.high,
+                        "low": candle.low,
+                        "close": candle.close,
+                        "volume": candle.volume,
+                    },
+                )
+                session.execute(stmt)
             session.commit()
 
         logger.info(
