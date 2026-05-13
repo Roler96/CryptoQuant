@@ -37,11 +37,11 @@ def calculate_ma(
     recent = candles[-period:]
 
     price_attr = {
-        "open": "open_price",
-        "high": "high_price",
-        "low": "low_price",
-        "close": "close_price",
-    }.get(price_source, "close_price")
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+    }.get(price_source, "close")
 
     prices = [getattr(c, price_attr) for c in recent]
 
@@ -76,7 +76,7 @@ def calculate_rsi(
     if len(candles) < period + 1:
         return None
 
-    closes = [c.close_price for c in candles[-(period + 1) :]]
+    closes = [c.close for c in candles[-(period + 1) :]]
 
     gains = []
     losses = []
@@ -124,8 +124,8 @@ def detect_breakout(
     recent = candles[-(lookback + 1) : -1]
     current = candles[-1]
 
-    highs = [c.high_price for c in recent]
-    lows = [c.low_price for c in recent]
+    highs = [c.high for c in recent]
+    lows = [c.low for c in recent]
 
     resistance = max(highs)
     support = min(lows)
@@ -135,16 +135,16 @@ def detect_breakout(
     strength = None
 
     if mode in ("resistance", "both"):
-        if current.close_price > resistance:
+        if current.close > resistance:
             breakout_detected = True
             level_price = resistance
-            strength = (current.close_price - resistance) / resistance
+            strength = (current.close - resistance) / resistance
 
     if mode in ("support", "both") and not breakout_detected:
-        if current.close_price < support:
+        if current.close < support:
             breakout_detected = True
             level_price = support
-            strength = (support - current.close_price) / support
+            strength = (support - current.close) / support
 
     return breakout_detected, level_price, strength
 
@@ -170,9 +170,9 @@ def calculate_atr(
         current = candles[i]
         previous = candles[i - 1]
 
-        tr1 = current.high_price - current.low_price
-        tr2 = abs(current.high_price - previous.close_price)
-        tr3 = abs(current.low_price - previous.close_price)
+        tr1 = current.high - current.low
+        tr2 = abs(current.high - previous.close)
+        tr3 = abs(current.low - previous.close)
 
         true_range = max(tr1, tr2, tr3)
         true_ranges.append(true_range)
@@ -205,7 +205,7 @@ def calculate_bollinger_bands(
         return None, None, None
 
     recent = candles[-period:]
-    closes = [c.close_price for c in recent]
+    closes = [c.close for c in recent]
 
     sma = sum(closes) / len(closes)
 
@@ -238,7 +238,7 @@ def calculate_macd(
     if len(candles) < slow + signal:
         return None, None, None
 
-    closes = [c.close_price for c in candles]
+    closes = [c.close for c in candles]
 
     def ema(prices: List[Decimal], period: int) -> List[Decimal]:
         multiplier = Decimal("2") / Decimal(period + 1)

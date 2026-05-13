@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from data.models import OHLCVCandle, OrderBook, Ticker
+from data.models import OHLCVCandle
 
 
 logger = structlog.get_logger(__name__)
@@ -133,8 +133,8 @@ class StrategyContext:
     positions: Dict[str, Position] = field(default_factory=dict)
     balances: Dict[str, Decimal] = field(default_factory=dict)
     candles: List[OHLCVCandle] = field(default_factory=list)
-    ticker: Optional[Ticker] = None
-    order_book: Optional[OrderBook] = None
+    ticker: Optional[Dict[str, Any]] = None
+    order_book: Optional[Dict[str, Any]] = None
     current_time: int = 0
     params: Dict[str, Any] = field(default_factory=dict)
 
@@ -257,12 +257,12 @@ class StrategyBase(ABC):
             "Processing bar",
             pair=candle.pair,
             timestamp=candle.timestamp,
-            close=candle.close_price,
+            close=candle.close,
         )
 
         return self.generate_signal(context)
 
-    def on_tick(self, ticker: Ticker, context: StrategyContext) -> Optional[Signal]:
+    def on_tick(self, ticker: Dict[str, Any], context: StrategyContext) -> Optional[Signal]:
         """Process tick data (optional).
 
         Called for each tick update if running in tick mode.

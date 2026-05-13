@@ -216,8 +216,8 @@ class StatArbStrategy(StrategyBase):
                 metadata={"reason": "insufficient_pair_data"},
             )
 
-        current_price1 = pair1_data.close_price
-        current_price2 = pair2_data.close_price
+        current_price1 = pair1_data.close
+        current_price2 = pair2_data.close
 
         if current_price1 <= 0 or current_price2 <= 0:
             return Signal(
