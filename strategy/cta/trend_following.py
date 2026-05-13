@@ -12,7 +12,14 @@ import structlog
 
 from data.models import OHLCVCandle
 from strategy.base import Signal, SignalType, StrategyBase, StrategyContext
-from strategy.cta import calculate_ma, calculate_rsi, detect_breakout
+from strategy.cta import (
+    calculate_adx,
+    calculate_atr,
+    calculate_ma,
+    calculate_rsi,
+    detect_breakout,
+)
+from strategy.regime import MarketRegime, RegimeDetector
 
 logger = structlog.get_logger(__name__)
 
@@ -32,6 +39,17 @@ class TrendFollowingConfig:
         use_breakout: Whether to require breakout confirmation
         breakout_lookback: Periods to look back for breakout levels
         breakout_mode: Breakout detection mode
+        ---
+        ATR stop / take profit (new):
+        use_atr_exit: Whether to use ATR-based stop loss / take profit
+        atr_period: ATR calculation period
+        atr_stop_multiplier: Stop loss distance in ATR multiples
+        atr_take_multiplier: Take profit distance in ATR multiples
+        ---
+        ADX trend filter (new):
+        use_adx_filter: Whether to filter entries with ADX
+        adx_period: ADX calculation period
+        adx_threshold: Minimum ADX for entry (below = ranging, no entry)
     """
     fast_ma_period: int = 10
     slow_ma_period: int = 30
@@ -43,6 +61,23 @@ class TrendFollowingConfig:
     use_breakout: bool = False
     breakout_lookback: int = 20
     breakout_mode: str = "both"
+
+    # ATR exit
+    use_atr_exit: bool = True
+    atr_period: int = 14
+    atr_stop_multiplier: Decimal = Decimal("2")
+    atr_take_multiplier: Decimal = Decimal("3")
+
+    # ADX filter
+    use_adx_filter: bool = True
+    adx_period: int = 14
+    adx_threshold: Decimal = Decimal("25")
+
+    # Regime detection
+    use_regime_filter: bool = True
+    regime_adx_period: int = 14
+    regime_chop_period: int = 14
+    regime_atr_period: int = 14
 
 
 class TrendFollowingStrategy(StrategyBase):
@@ -80,12 +115,40 @@ class TrendFollowingStrategy(StrategyBase):
             use_breakout=self.get_param("use_breakout", False),
             breakout_lookback=self.get_param("breakout_lookback", 20),
             breakout_mode=self.get_param("breakout_mode", "both"),
+            # ATR exit
+            use_atr_exit=self.get_param("use_atr_exit", True),
+            atr_period=self.get_param("atr_period", 14),
+            atr_stop_multiplier=Decimal(str(self.get_param("atr_stop_multiplier", 2))),
+            atr_take_multiplier=Decimal(str(self.get_param("atr_take_multiplier", 3))),
+            # ADX filter
+            use_adx_filter=self.get_param("use_adx_filter", True),
+            adx_period=self.get_param("adx_period", 14),
+            adx_threshold=Decimal(str(self.get_param("adx_threshold", 25))),
+            # Regime detection
+            use_regime_filter=self.get_param("use_regime_filter", True),
+            regime_adx_period=self.get_param("regime_adx_period", 14),
+            regime_chop_period=self.get_param("regime_chop_period", 14),
+            regime_atr_period=self.get_param("regime_atr_period", 14),
         )
 
         self._fast_ma_history: List[Decimal] = []
         self._slow_ma_history: List[Decimal] = []
         self._prev_fast_ma: Optional[Decimal] = None
         self._prev_slow_ma: Optional[Decimal] = None
+
+        # Trade state for ATR stop loss / take profit
+        self._trade_direction: Optional[str] = None  # "long" or "short"
+        self._trade_entry_price: Optional[Decimal] = None
+        self._trade_stop_price: Optional[Decimal] = None
+        self._trade_take_price: Optional[Decimal] = None
+
+        # Regime detector
+        self._regime_detector = RegimeDetector(
+            adx_period=self.config.regime_adx_period,
+            chop_period=self.config.regime_chop_period,
+            atr_period=self.config.regime_atr_period,
+        )
+        self._current_regime: MarketRegime = MarketRegime.UNKNOWN
 
         self.logger = structlog.get_logger(__name__).bind(
             strategy=name,
@@ -105,9 +168,21 @@ class TrendFollowingStrategy(StrategyBase):
         self._slow_ma_history.clear()
         self._prev_fast_ma = None
         self._prev_slow_ma = None
+        self._reset_trade_state()
+
+    def _reset_trade_state(self) -> None:
+        """Clear ATR exit tracking."""
+        self._trade_direction = None
+        self._trade_entry_price = None
+        self._trade_stop_price = None
+        self._trade_take_price = None
 
     def generate_signal(self, context: StrategyContext) -> Signal:
         """Generate trading signal based on MA crossover and filters.
+
+        Priority order:
+        1. ATR stop loss / take profit (highest priority, overrides all)
+        2. MA crossover signal (filtered by ADX, RSI, breakout)
 
         Args:
             context: Current market and account context
@@ -128,6 +203,19 @@ class TrendFollowingStrategy(StrategyBase):
                 metadata={"reason": "insufficient_data"},
             )
 
+        # --- Priority 1: Check ATR stop loss / take profit ---
+        atr_exit_signal = self._check_atr_exit(current_price, context.current_time)
+        if atr_exit_signal is not None:
+            return atr_exit_signal
+
+        # --- Priority 2: Detect market regime ---
+        if self.config.use_regime_filter:
+            self._current_regime, regime_scores = self._regime_detector.detect_with_scores(candles)
+        else:
+            self._current_regime = MarketRegime.STRONG_TREND
+            regime_scores = {}
+
+        # --- Priority 2: MA crossover with filters ---
         fast_ma = calculate_ma(
             candles,
             self.config.fast_ma_period,
@@ -170,6 +258,7 @@ class TrendFollowingStrategy(StrategyBase):
             "slow_ma": float(slow_ma),
             "ma_spread": float((fast_ma - slow_ma) / slow_ma * 100),
             "strategy": "trend_following",
+            "regime": self._current_regime.value,
         }
 
         if self.config.use_rsi_filter:
@@ -188,6 +277,11 @@ class TrendFollowingStrategy(StrategyBase):
                 metadata["breakout_level"] = float(level)
             if strength is not None:
                 metadata["breakout_strength"] = float(strength)
+
+        # Set ATR exit levels on new entry
+        if signal_type in (SignalType.LONG, SignalType.SHORT):
+            direction = "long" if signal_type == SignalType.LONG else "short"
+            self._set_atr_exit(candles, direction, current_price)
 
         self.logger.debug(
             "Signal generated",
@@ -226,6 +320,113 @@ class TrendFollowingStrategy(StrategyBase):
             self._fast_ma_history = self._fast_ma_history[-max_history:]
             self._slow_ma_history = self._slow_ma_history[-max_history:]
 
+    def _check_atr_exit(
+        self, current_price: Decimal, current_time: int,
+    ) -> Optional[Signal]:
+        """Check if ATR stop loss or take profit is triggered.
+
+        Called BEFORE crossover logic. Exit takes priority over all other signals.
+
+        Args:
+            current_price: Current market price
+            current_time: Current timestamp
+
+        Returns:
+            Signal if exit triggered, None otherwise
+        """
+        if self._trade_direction is None:
+            return None
+
+        if self._trade_stop_price is None or self._trade_take_price is None:
+            return None
+
+        direction = self._trade_direction
+
+        # Long: stop if price drops to/below stop, take if price rises to/above take
+        if direction == "long":
+            if current_price <= self._trade_stop_price:
+                self._reset_trade_state()
+                self.logger.info("atr_stop_loss_hit", price=float(current_price), stop=float(self._trade_stop_price))
+                return Signal(
+                    signal_type=SignalType.CLOSE_LONG,
+                    pair="", timestamp=current_time,
+                    price=current_price,
+                    confidence=Decimal("1.0"),
+                    metadata={"reason": "atr_stop_loss"},
+                )
+            if current_price >= self._trade_take_price:
+                self._reset_trade_state()
+                self.logger.info("atr_take_profit_hit", price=float(current_price), take=float(self._trade_take_price))
+                return Signal(
+                    signal_type=SignalType.CLOSE_LONG,
+                    pair="", timestamp=current_time,
+                    price=current_price,
+                    confidence=Decimal("1.0"),
+                    metadata={"reason": "atr_take_profit"},
+                )
+
+        # Short: stop if price rises to/above stop, take if price drops to/below take
+        elif direction == "short":
+            if current_price >= self._trade_stop_price:
+                self._reset_trade_state()
+                self.logger.info("atr_stop_loss_hit", price=float(current_price), stop=float(self._trade_stop_price))
+                return Signal(
+                    signal_type=SignalType.CLOSE_SHORT,
+                    pair="", timestamp=current_time,
+                    price=current_price,
+                    confidence=Decimal("1.0"),
+                    metadata={"reason": "atr_stop_loss"},
+                )
+            if current_price <= self._trade_take_price:
+                self._reset_trade_state()
+                self.logger.info("atr_take_profit_hit", price=float(current_price), take=float(self._trade_take_price))
+                return Signal(
+                    signal_type=SignalType.CLOSE_SHORT,
+                    pair="", timestamp=current_time,
+                    price=current_price,
+                    confidence=Decimal("1.0"),
+                    metadata={"reason": "atr_take_profit"},
+                )
+
+        return None
+
+    def _set_atr_exit(self, candles: List[OHLCVCandle], direction: str, entry_price: Decimal) -> None:
+        """Calculate and store ATR-based stop loss and take profit levels.
+
+        Args:
+            candles: Recent candle data
+            direction: "long" or "short"
+            entry_price: Entry price
+        """
+        if not self.config.use_atr_exit:
+            return
+
+        atr = calculate_atr(candles, self.config.atr_period)
+        if atr is None:
+            return
+
+        stop_distance = atr * self.config.atr_stop_multiplier
+        take_distance = atr * self.config.atr_take_multiplier
+
+        if direction == "long":
+            self._trade_stop_price = entry_price - stop_distance
+            self._trade_take_price = entry_price + take_distance
+        else:
+            self._trade_stop_price = entry_price + stop_distance
+            self._trade_take_price = entry_price - take_distance
+
+        self._trade_direction = direction
+        self._trade_entry_price = entry_price
+
+        self.logger.debug(
+            "atr_exit_set",
+            direction=direction,
+            entry=float(entry_price),
+            stop=float(self._trade_stop_price),
+            take=float(self._trade_take_price),
+            atr=float(atr),
+        )
+
     def _determine_signal(
         self,
         fast_ma: Decimal,
@@ -235,6 +436,9 @@ class TrendFollowingStrategy(StrategyBase):
     ) -> SignalType:
         """Determine signal type based on crossover and filters.
 
+        ADX filter: if ADX < threshold, block new LONG/SHORT entries
+        (but still allow CLOSE signals).
+
         Args:
             fast_ma: Current fast moving average
             slow_ma: Current slow moving average
@@ -242,7 +446,7 @@ class TrendFollowingStrategy(StrategyBase):
             context: Strategy context
 
         Returns:
-            Signal type (LONG, SHORT, or HOLD)
+            Signal type (LONG, SHORT, CLOSE_*, or HOLD)
         """
         position = context.get_position()
         current_side = None
@@ -258,9 +462,24 @@ class TrendFollowingStrategy(StrategyBase):
         if not bullish_cross and not bearish_cross:
             return SignalType.HOLD
 
+        # --- Regime filter: block new entries in ranging/unknown markets ---
+        if current_side is None and self._current_regime in (
+            MarketRegime.RANGING,
+            MarketRegime.UNKNOWN,
+        ):
+            return SignalType.HOLD
+
         rsi = None
         if self.config.use_rsi_filter:
             rsi = calculate_rsi(candles, self.config.rsi_period)
+
+        # --- ADX trend filter: block new entries when no trend ---
+        adx_passes = True
+        adx_value = None
+        if self.config.use_adx_filter and current_side is None:
+            adx_value = calculate_adx(candles, self.config.adx_period)
+            if adx_value is not None and adx_value < self.config.adx_threshold:
+                adx_passes = False
 
         if bullish_cross:
             if self.config.use_rsi_filter and rsi is not None:
@@ -281,6 +500,9 @@ class TrendFollowingStrategy(StrategyBase):
             elif current_side == "short":
                 return SignalType.CLOSE_SHORT
             else:
+                # New LONG entry — blocked by ADX?
+                if not adx_passes:
+                    return SignalType.HOLD
                 return SignalType.LONG
 
         if bearish_cross:
@@ -302,6 +524,9 @@ class TrendFollowingStrategy(StrategyBase):
             elif current_side == "long":
                 return SignalType.CLOSE_LONG
             else:
+                # New SHORT entry — blocked by ADX?
+                if not adx_passes:
+                    return SignalType.HOLD
                 return SignalType.SHORT
 
         return SignalType.HOLD
@@ -392,3 +617,5 @@ class TrendFollowingStrategy(StrategyBase):
         self._slow_ma_history.clear()
         self._prev_fast_ma = None
         self._prev_slow_ma = None
+        self._reset_trade_state()
+        self._current_regime = MarketRegime.UNKNOWN
