@@ -209,13 +209,22 @@ class BacktraderStrategyAdapter(bt.Strategy):
         )
 
     def _process_signal(self, signal: Signal, current_price: Decimal, current_time: int):
-        """Process trading signal and execute orders."""
+        """Process trading signal and execute orders.
+
+        Handles position reversal: if a LONG signal comes while in a short
+        position (or vice versa), closes the current position first before
+        opening the new one.
+        """
         if signal.signal_type == SignalType.HOLD:
             return
 
         size = self._calculate_position_size(signal, current_price)
 
         if signal.signal_type == SignalType.LONG:
+            if self.position and self.position.size < 0:
+                # Reverse short → long: close short first
+                self.close()
+                self._record_trade(current_price, current_time, "short")
             if not self.position:
                 self.buy(size=size)
                 self.entry_price = current_price
@@ -223,6 +232,10 @@ class BacktraderStrategyAdapter(bt.Strategy):
                 self.logger.debug("long_position_opened", size=size, price=str(current_price))
 
         elif signal.signal_type == SignalType.SHORT:
+            if self.position and self.position.size > 0:
+                # Reverse long → short: close long first
+                self.close()
+                self._record_trade(current_price, current_time, "long")
             if not self.position:
                 self.sell(size=size)
                 self.entry_price = current_price
@@ -374,13 +387,17 @@ class BacktestEngine:
         pair: str,
         timeframe: str,
         days: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> PandasDataFeed:
         """Create data feed from SQLite repository.
 
         Args:
             pair: Trading pair (e.g., "BTC/USDT")
             timeframe: Candle timeframe (e.g., "1h", "1d")
-            days: Optional limit on number of days to load
+            days: Optional limit on number of days to load (from now)
+            start_date: Optional start date (e.g., "2024-01-01")
+            end_date: Optional end date (e.g., "2024-12-31")
 
         Returns:
             PandasDataFeed ready for Backtrader
@@ -391,11 +408,18 @@ class BacktestEngine:
         repo = get_repository()
 
         since = None
-        if days is not None:
+        until = None
+
+        if start_date:
+            since = int(pd.Timestamp(start_date).timestamp() * 1000)
+        elif days is not None:
             cutoff_dt = pd.Timestamp.now() - pd.Timedelta(days=days)
             since = int(cutoff_dt.timestamp() * 1000)
 
-        df = repo.load_as_dataframe(pair, timeframe, since=since)
+        if end_date:
+            until = int(pd.Timestamp(end_date).timestamp() * 1000)
+
+        df = repo.load_as_dataframe(pair, timeframe, since=since, until=until)
 
         if df.empty:
             raise FileNotFoundError(
@@ -419,6 +443,8 @@ class BacktestEngine:
         pair: str,
         timeframe: str,
         days: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         config: Optional[BacktestConfig] = None,
     ) -> BacktestResult:
         """Execute backtest with given strategy and parameters.
@@ -427,7 +453,9 @@ class BacktestEngine:
             strategy: Strategy instance to backtest
             pair: Trading pair to backtest on
             timeframe: Candle timeframe
-            days: Optional limit on backtest period
+            days: Optional limit on backtest period (from now)
+            start_date: Optional start date (e.g., "2024-01-01")
+            end_date: Optional end date (e.g., "2024-12-31")
             config: Optional override for backtest config
 
         Returns:
@@ -449,7 +477,7 @@ class BacktestEngine:
             self.cerebro.broker.setcash(run_config.initial_cash)
             self.cerebro.broker.setcommission(commission=run_config.commission)
 
-            data_feed = self.create_data_feed(pair, timeframe, days)
+            data_feed = self.create_data_feed(pair, timeframe, days, start_date, end_date)
             self.cerebro.adddata(data_feed)
 
             self.cerebro.addstrategy(
