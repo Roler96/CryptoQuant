@@ -4,7 +4,7 @@ Provides backtesting capabilities through Backtrader integration:
 - BacktestEngine: Main engine for running strategy backtests
 - BacktestConfig: Configuration dataclass for backtest parameters
 - BacktestResult: Result container for backtest outputs
-- PandasDataFeed: Custom data feed for Parquet DataFrames
+- PandasDataFeed: Custom data feed for DataFrames from SQLite repository
 - Performance metrics for result analysis
 """
 

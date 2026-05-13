@@ -2,7 +2,7 @@
 
 Provides a comprehensive backtesting solution with:
 - Backtrader Cerebro integration
-- Custom PandasData feed from Parquet files
+- Custom PandasData feed from SQLite repository
 - Strategy loading by name
 - Configurable backtest parameters (cash, commission, slippage)
 - Trade tracking and equity curve generation
@@ -20,7 +20,8 @@ import pandas as pd
 import structlog
 from matplotlib import pyplot as plt
 
-from data.storage import load_historical_data
+from data.models import OHLCVCandle
+from data.repository import get_repository
 from strategy.base import Signal, SignalType, StrategyBase, StrategyContext
 from strategy.cta.trend_following import TrendFollowingStrategy
 
@@ -77,10 +78,10 @@ class BacktestResult:
 
 
 class PandasDataFeed(bt.feeds.PandasData):
-    """Custom Backtrader data feed for our Parquet DataFrame format.
+    """Custom Backtrader data feed for our DataFrame format.
 
     Maps our standard columns (timestamp, open, high, low, close, volume)
-    to Backtrader's expected format.
+    from SQLite repository's load_as_dataframe() output to Backtrader's format.
     """
 
     params = (
@@ -93,17 +94,21 @@ class PandasDataFeed(bt.feeds.PandasData):
         ("openinterest", -1),
     )
 
-    def __init__(self, dataframe: pd.DataFrame, **kwargs):
-        """Initialize with pandas DataFrame.
+    @classmethod
+    def from_dataframe(cls, dataframe: pd.DataFrame) -> "PandasDataFeed":
+        """Create PandasDataFeed from a DataFrame.
 
         Args:
             dataframe: DataFrame with columns: timestamp, open, high, low, close, volume
-            **kwargs: Additional Backtrader feed parameters
-        """
-        processed_df = self._prepare_dataframe(dataframe)
-        super().__init__(dataname=processed_df, **kwargs)
 
-    def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        Returns:
+            PandasDataFeed ready for Backtrader
+        """
+        processed_df = cls._prepare_dataframe(dataframe)
+        return bt.feeds.PandasData(dataname=processed_df)
+
+    @staticmethod
+    def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         """Prepare DataFrame for Backtrader.
 
         Converts timestamp to datetime and ensures proper column order.
@@ -180,16 +185,14 @@ class BacktraderStrategyAdapter(bt.Strategy):
         self.equity_curve.append(self.broker.getvalue())
         self.equity_timestamps.append(current_time)
 
-    def _create_candle(self, data) -> Any:
+    def _create_candle(self, data) -> OHLCVCandle:
         """Create OHLCVCandle from Backtrader data."""
-        from data.models import OHLCVCandle
-
         return OHLCVCandle(
             timestamp=int(data.datetime.datetime(0).timestamp() * 1000),
-            open_price=Decimal(str(data.open[0])),
-            high_price=Decimal(str(data.high[0])),
-            low_price=Decimal(str(data.low[0])),
-            close_price=Decimal(str(data.close[0])),
+            open=Decimal(str(data.open[0])),
+            high=Decimal(str(data.high[0])),
+            low=Decimal(str(data.low[0])),
+            close=Decimal(str(data.close[0])),
             volume=Decimal(str(data.volume[0])),
             pair=self.pair,
             timeframe=self.timeframe,
@@ -238,7 +241,7 @@ class BacktraderStrategyAdapter(bt.Strategy):
 
     def _calculate_position_size(self, signal: Signal, current_price: Decimal) -> float:
         """Calculate position size based on signal and available cash."""
-        cash = self.broker.getcash()
+        cash = Decimal(str(self.broker.getcash()))
         max_position_value = cash * Decimal('0.95')
         size = max_position_value / current_price
         return float(max(size, Decimal('0.001')))
@@ -315,7 +318,7 @@ class BacktestEngine:
 
     Provides a high-level interface for running backtests with:
     - Strategy loading by name
-    - Custom data feeds from Parquet files
+    - Custom data feeds from SQLite repository
     - Configurable simulation parameters
     - Result collection and visualization
     """
@@ -372,7 +375,7 @@ class BacktestEngine:
         timeframe: str,
         days: Optional[int] = None,
     ) -> PandasDataFeed:
-        """Create data feed from historical data.
+        """Create data feed from SQLite repository.
 
         Args:
             pair: Trading pair (e.g., "BTC/USDT")
@@ -383,13 +386,22 @@ class BacktestEngine:
             PandasDataFeed ready for Backtrader
 
         Raises:
-            FileNotFoundError: If historical data not found
+            FileNotFoundError: If no data found for pair/timeframe
         """
-        df = load_historical_data(pair, timeframe)
+        repo = get_repository()
 
+        since = None
         if days is not None:
-            cutoff_timestamp = (pd.Timestamp.now() - pd.Timedelta(days=days)).timestamp() * 1000
-            df = df[df["timestamp"] >= cutoff_timestamp]
+            cutoff_dt = pd.Timestamp.now() - pd.Timedelta(days=days)
+            since = int(cutoff_dt.timestamp() * 1000)
+
+        df = repo.load_as_dataframe(pair, timeframe, since=since)
+
+        if df.empty:
+            raise FileNotFoundError(
+                f"No historical data found for {pair} {timeframe}. "
+                f"Run: python -m data.downloader --pair {pair} --timeframe {timeframe}"
+            )
 
         self.logger.info(
             "data_feed_created",
@@ -399,7 +411,7 @@ class BacktestEngine:
             days=days,
         )
 
-        return PandasDataFeed(df)
+        return PandasDataFeed.from_dataframe(df)
 
     def run_backtest(
         self,

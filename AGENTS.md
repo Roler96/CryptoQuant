@@ -1,13 +1,13 @@
 # CryptoQuant Knowledge Base
 
 **Project:** Crypto Quant Trading Platform  
-**Stack:** Python 3.10+, ccxt, backtrader, SQLAlchemy, structlog, pydantic, pandas  
+**Stack:** Python 3.12+, ccxt, backtrader, structlog, pydantic, pandas  
 **Purpose:** Quantitative cryptocurrency trading with backtesting and live execution  
-**Status:** Data module complete; backtest engine needs repair (uses old `data.storage` import)
+**Status:** Data + Backtest + Strategy modules operational; live/risk modules not yet integrated
 
 ## OVERVIEW
 
-A modular Python platform for quantitative crypto trading on OKX exchange. The data layer is fully operational (OKX API → SQLite with validation). Backtest engine and live trading modules exist but have integration issues — the backtest engine still imports from the deprecated `data.storage` module instead of the new `data.repository`.
+A modular Python platform for quantitative crypto trading on OKX exchange. Data layer, backtest engine, and strategy framework are all operational and integrated via `data.repository`. The full pipeline (download → SQLite → backtest) works end-to-end.
 
 ## STRUCTURE
 
@@ -22,21 +22,21 @@ CryptoQuant/
 │   └── repository/      # SQLite data access layer (upsert, WAL mode)
 │       ├── base.py      # DataRepository abstract interface
 │       └── sqlite.py    # SQLite implementation
-├── backtest/            # ⚠️ Needs repair
-│   ├── engine.py        # Backtrader integration (BROKEN: imports data.storage)
-│   └── metrics.py       # Performance metrics (Sharpe, drawdown)
-├── strategy/            # Strategy framework
+├── backtest/            # ✅ Backtesting (operational)
+│   ├── engine.py        # Backtrader integration (BacktestEngine, PandasDataFeed)
+│   └── metrics.py       # Performance metrics (Sharpe, drawdown, win rate, etc.)
+├── strategy/            # ✅ Strategy framework (adapted to data module)
 │   ├── base.py          # StrategyBase ABC, Signal, StrategyContext
 │   ├── cta/
 │   │   └── trend_following.py  # SMA crossover
 │   └── stat_arb/
 │       └── pair_trading.py     # Pair trading
-├── live/                # Live trading
+├── live/                # ⚠️ Not yet integrated with data.repository
 │   ├── trading.py       # Live trading engine
 │   ├── paper_trading.py # Paper trading simulation
 │   ├── order_manager.py # Order lifecycle management
 │   └── kill_switch.py   # Emergency stop
-├── risk/                # Risk management
+├── risk/                # ⚠️ Not yet integrated with data.repository
 │   ├── position_sizing.py  # Position size calculations
 │   └── stop_loss.py        # Stop-loss + drawdown circuit breaker
 ├── config/              # Configuration
@@ -67,22 +67,22 @@ CryptoQuant/
 - `data/repository/sqlite.py` — SQLiteRepository (upsert, WAL mode)
 - `data/validation.py` — Data quality validation + auto-repair
 
-**Backtest (needs repair):**
-- `backtest/engine.py` — Backtrader integration (currently broken, uses old `data.storage`)
-- `backtest/metrics.py` — Performance metrics
+**Backtest (operational):**
+- `backtest/engine.py` — BacktestEngine + PandasDataFeed + BacktraderStrategyAdapter
+- `backtest/metrics.py` — Performance metrics (Sharpe, drawdown, win rate, Calmar, etc.)
 
-**Strategy:**
+**Strategy (operational):**
 - `strategy/base.py` — StrategyBase ABC, Signal, SignalType, StrategyContext
 - `strategy/cta/trend_following.py` — SMA crossover CTA strategy
 - `strategy/stat_arb/pair_trading.py` — Pair trading strategy
 
-**Live trading:**
+**Live trading (not yet integrated):**
 - `live/trading.py` — Live trading engine
 - `live/paper_trading.py` — Paper trading simulation
 - `live/order_manager.py` — Order lifecycle management
 - `live/kill_switch.py` — Emergency stop
 
-**Risk:**
+**Risk (not yet integrated):**
 - `risk/position_sizing.py` — Fixed fractional, Kelly, volatility-based
 - `risk/stop_loss.py` — Trailing stops, time stops, drawdown monitor
 
@@ -102,6 +102,13 @@ CryptoQuant/
 - `validate_ohlcv_data()` — `data/validation.py` — DataFrame quality checks
 - `validate_candle()` — `data/validation.py` — Single candle sanity check
 - `auto_repair_data()` — `data/validation.py` — Forward-fill gaps, flag anomalies
+
+**Backtest:**
+- `BacktestEngine` — `backtest/engine.py` — High-level backtest orchestration
+- `BacktestConfig` — `backtest/engine.py` — Cash, commission, slippage config
+- `BacktestResult` — `backtest/engine.py` — Result dataclass (trades, equity, metrics)
+- `PandasDataFeed` — `backtest/engine.py` — DataFrame → Backtrader feed (use `from_dataframe()`)
+- `BacktraderStrategyAdapter` — `backtest/engine.py` — Bridges StrategyBase → Backtrader
 
 **Strategy:**
 - `StrategyBase` — `strategy/base.py` — ABC for all strategies
@@ -137,9 +144,10 @@ from data.repository import get_repository
 from data.manager import OKXClient
 from data.validation import validate_candle, validate_ohlcv_data
 from strategy.base import StrategyBase, Signal, SignalType
+from backtest.engine import BacktestEngine, BacktestConfig
 ```
 
-**Data Access Pattern (new — use this):**
+**Data Access Pattern:**
 ```python
 from data.repository import get_repository
 
@@ -148,6 +156,15 @@ repo.save_candles(candles, "BTC/USDT", "1h")
 df = repo.load_as_dataframe("BTC/USDT", "1h")
 candles = repo.load_candles("BTC/USDT", "1h", limit=100)
 stats = repo.get_stats("BTC/USDT", "1h")
+```
+
+**Backtest Pattern:**
+```python
+from backtest.engine import BacktestEngine, BacktestConfig
+
+engine = BacktestEngine(BacktestConfig(initial_cash=10000, plot_results=False))
+strategy = engine.load_strategy("cta")
+result = engine.run_backtest(strategy, "BTC/USDT", "1h", days=90)
 ```
 
 **Error Handling:**
@@ -162,16 +179,18 @@ stats = repo.get_stats("BTC/USDT", "1h")
 - Using `float` for prices/quantities (precision loss)
 - Committing `.env` files (gitignored by default)
 - Skipping dry-run before live trading
-- Using old `data.storage` module (deprecated, use `data.repository`)
+- Using old `data.storage` module (deleted, use `data.repository`)
 - Calling `reset_repository()` in production code (tests only)
+- Using `xxx_price` field names (e.g. `close_price`) — use `open/high/low/close`
+- Using `OrderBook`/`Ticker` from `data.models` (not defined, use `Optional[Dict[str, Any]]`)
+- Constructing `PandasDataFeed(dataframe=...)` directly — use `PandasDataFeed.from_dataframe()`
 
 **WARNINGS:**
-- Backtest engine is currently broken — imports from `data.storage` which no longer exists
-- `strategy/base.py` imports `OrderBook, Ticker` from `data.models` — may not be defined yet
 - OKX `fetch_ohlcv` max 100 candles per call — use `fetch_ohlcv_history()` for bulk
 - OKX returns empty when `since` is before the pair's listing date — auto-probing handles this
 - Sandbox default (use `--no-sandbox` for production)
 - Live trading requires manual confirmation
+- Backtrader `PandasData` subclass `__init__` cannot accept `dataname` as kwarg — use `from_dataframe()` class method
 
 ## COMMANDS
 
@@ -194,8 +213,14 @@ python scripts/db_manager.py status
 python scripts/db_manager.py validate
 python scripts/db_manager.py reset
 
-# Run backtest (⚠️ broken — engine imports data.storage)
-# python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h
+# Run backtest (✅ working — via Python API)
+python -c "
+from backtest.engine import BacktestEngine, BacktestConfig
+engine = BacktestEngine(BacktestConfig(initial_cash=10000, plot_results=False))
+strategy = engine.load_strategy('cta')
+result = engine.run_backtest(strategy, 'BTC/USDT', '1h', days=90)
+print(f'Return: {result.total_return:.2%}, Trades: {len(result.trades)}')
+"
 
 # Run tests
 pytest tests/ -v
@@ -214,17 +239,19 @@ black . && ruff check . --fix && mypy . --ignore-missing-imports
 - **Since-probing:** `fetch_ohlcv_history()` auto-detects earliest valid `since` via binary search
 - **Kill Switch:** Emergency stop closes all positions via `live/kill_switch.py`
 - **Scripts vs Modules:** Utility scripts live in `scripts/`; core module tools (downloader, verify_apikey) live alongside their module in `data/`
+- **OHLCVCandle fields:** `pair, timeframe, timestamp, open, high, low, close, volume` (all Decimal except pair/timeframe)
+- **DataFrame columns:** `timestamp, open, high, low, close, volume` (from `load_as_dataframe()`)
 
 ## KNOWN ISSUES
 
-1. **Backtest engine broken** — `backtest/engine.py` imports from `data.storage` (deleted). Needs update to use `data.repository.get_repository()` + `load_as_dataframe()`
-2. **Strategy model imports** — `strategy/base.py` imports `OrderBook, Ticker` from `data.models` — these models may not exist yet
-3. **No CLI entry point** — The `cli/` directory referenced in earlier design does not exist. Commands run via `python -m data.downloader` etc.
+1. **No CLI entry point** — No `cli/` directory. Commands run via `python -m data.downloader` or inline Python. A unified CLI would improve UX.
+2. **Live/Risk modules not integrated** — `live/` and `risk/` modules still reference old patterns (not tested against current data module)
+3. **Backtest trade recording** — Only closed trades are recorded; open positions at backtest end are not captured
 
 ## MODULE GUIDES
 
 - See `data/AGENTS.md` for data management (detailed and up-to-date)
-- See `backtest/AGENTS.md` for backtesting (needs update after engine fix)
+- See `backtest/AGENTS.md` for backtesting
 - See `live/AGENTS.md` for trading execution
 - See `strategy/AGENTS.md` for strategy development
 - See `risk/AGENTS.md` for risk controls
