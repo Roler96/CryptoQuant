@@ -171,6 +171,18 @@ class OKXClient:
             config['sandbox'] = True
             config['options']['sandbox'] = True
 
+        # Proxy support: read from environment (covers WSL / corporate setups)
+        proxy = (
+            os.getenv("HTTPS_PROXY")
+            or os.getenv("HTTP_PROXY")
+            or os.getenv("https_proxy")
+            or os.getenv("http_proxy")
+        )
+        if proxy:
+            config['proxies'] = {'http': proxy, 'https': proxy}
+            config['aiohttp_proxy'] = proxy
+            logger.info("okx_proxy_configured", proxy=proxy)
+
         try:
             self.exchange = ccxt.okx(config)
             logger.info("okx_client_initialized", sandbox=sandbox)
@@ -255,6 +267,195 @@ class OKXClient:
         except Exception as e:
             logger.error("fetch_ohlcv_failed", symbol=symbol, error=str(e))
             raise
+
+    def _probe_valid_since(
+        self,
+        symbol: str,
+        timeframe: str,
+        since_ms: int,
+        until_ms: int,
+    ) -> Optional[int]:
+        """Binary-search for the earliest `since` that returns data from OKX.
+
+        OKX returns an empty list when `since` is before the pair's listing date.
+        This method finds a valid starting timestamp by bisecting between
+        `since_ms` (too early) and `until_ms` (known to have data).
+
+        Args:
+            symbol: Trading pair
+            timeframe: Candle timeframe
+            since_ms: The original too-early start timestamp
+            until_ms: The known-valid end boundary
+
+        Returns:
+            A valid `since` timestamp in ms, or None if no data exists at all
+        """
+        lo, hi = since_ms, until_ms
+        # Get timeframe duration in ms for minimum step
+        tf_ms = self._timeframe_to_ms(timeframe)
+        result_since: Optional[int] = None
+
+        logger.debug(
+            "probe_valid_since_start",
+            symbol=symbol,
+            timeframe=timeframe,
+            lo=lo,
+            hi=hi,
+        )
+
+        while hi - lo > tf_ms:
+            mid = lo + (hi - lo) // 2
+            batch = self.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                since=mid,
+                limit=1,
+            )
+            if batch:
+                # mid works, try earlier
+                result_since = mid
+                hi = mid
+            else:
+                # mid too early, try later
+                lo = mid
+            time.sleep(0.1)
+
+        # If we found a valid point, use it (align to candle boundary)
+        if result_since is not None:
+            # Fetch from just before to get the exact first candle
+            batch = self.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                since=result_since,
+                limit=1,
+            )
+            if batch:
+                return batch[0].timestamp
+
+        return result_since
+
+    @staticmethod
+    def _timeframe_to_ms(timeframe: str) -> int:
+        """Convert a timeframe string (e.g., '1h', '4h', '1d') to milliseconds."""
+        units = {'m': 60_000, 'h': 3_600_000, 'd': 86_400_000, 'w': 604_800_000}
+        for suffix, multiplier in units.items():
+            if timeframe.endswith(suffix):
+                try:
+                    return int(timeframe[:-1]) * multiplier
+                except ValueError:
+                    break
+        # Fallback: assume 1h
+        return 3_600_000
+
+    def fetch_ohlcv_history(
+        self,
+        symbol: str,
+        timeframe: str = '1h',
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        page_size: int = 100,
+        sleep_between_pages: float = 0.1,
+    ) -> List[OHLCVCandle]:
+        """Fetch historical OHLCV data with automatic pagination.
+
+        Loops through fetch_ohlcv() pages until all data in the requested
+        range has been collected. OKX returns at most 100 candles per call,
+        so this method handles the pagination transparently.
+
+        Args:
+            symbol: Trading pair (e.g., "BTC/USDT")
+            timeframe: Candle timeframe (e.g., "1h", "4h", "1d")
+            since: Start timestamp in ms (inclusive). Required.
+            until: End timestamp in ms (inclusive). None = up to latest.
+            page_size: Candles per request (max 100, default 100)
+            sleep_between_pages: Seconds to sleep between pages (default 0.1s)
+
+        Returns:
+            List of OHLCVCandle objects sorted by timestamp ascending
+
+        Raises:
+            ValueError: If since is not provided
+            OKXAPIError: On unrecoverable API errors
+        """
+        if since is None:
+            raise ValueError("since is required for fetch_ohlcv_history")
+
+        all_candles: List[OHLCVCandle] = []
+        cursor = since
+        seen_timestamps: set[int] = set()
+        probed_since = False  # Track if we adjusted cursor via probing
+
+        while True:
+            batch = self.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                since=cursor,
+                limit=page_size,
+            )
+
+            if not batch:
+                # If this is the very first request, the empty result likely
+                # means `since` is before the exchange listed this pair.
+                # Probe forward to find a valid starting point.
+                if not all_candles and not probed_since:
+                    # Use `until` if available, otherwise use current time as hi bound
+                    probe_until = until if until is not None else int(time.time() * 1000)
+                    if probe_until > cursor:
+                        cursor = self._probe_valid_since(symbol, timeframe, cursor, probe_until)
+                        probed_since = True
+                        if cursor is not None:
+                            logger.info(
+                                "fetch_ohlcv_history_probed_since",
+                                symbol=symbol,
+                                timeframe=timeframe,
+                                adjusted_since=cursor,
+                            )
+                            continue
+                break
+
+            # Deduplicate: ccxt may return the candle at `since` again
+            new_candles = [c for c in batch if c.timestamp not in seen_timestamps]
+            for c in new_candles:
+                seen_timestamps.add(c.timestamp)
+
+            # Filter by until boundary
+            if until is not None:
+                new_candles = [c for c in new_candles if c.timestamp <= until]
+
+            all_candles.extend(new_candles)
+
+            # Stop if we got fewer than page_size (last page)
+            if len(batch) < page_size:
+                break
+
+            # Stop if we've reached the until boundary
+            if until is not None and batch[-1].timestamp >= until:
+                break
+
+            # Advance cursor past the last received candle
+            cursor = batch[-1].timestamp + 1
+
+            logger.debug(
+                "fetch_ohlcv_history_page",
+                symbol=symbol,
+                timeframe=timeframe,
+                total_so_far=len(all_candles),
+                next_cursor=cursor,
+            )
+
+            time.sleep(sleep_between_pages)
+
+        # Sort by timestamp (should already be sorted, but ensure it)
+        all_candles.sort(key=lambda c: c.timestamp)
+
+        logger.info(
+            "fetch_ohlcv_history_complete",
+            symbol=symbol,
+            timeframe=timeframe,
+            total_candles=len(all_candles),
+        )
+
+        return all_candles
 
     def close(self):
         """Close exchange connection and cleanup resources."""
