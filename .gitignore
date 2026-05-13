@@ -86,3 +86,6 @@ orders.json
 tmp/
 temp/
 *.tmp
+
+.opencode/*
+.sisyphus*
