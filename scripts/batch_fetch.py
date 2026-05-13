@@ -74,11 +74,11 @@ def save_candles(session, candles: list, pair: str, timeframe: str):
             timestamp=candle_data["timestamp"],
             pair=pair,
             timeframe=timeframe,
-            open_price=float(candle_data["open"]),
-            high_price=float(candle_data["high"]),
-            low_price=float(candle_data["low"]),
-            close_price=float(candle_data["close"]),
-            volume=float(candle_data["volume"]),
+            open_price=Decimal(str(candle_data["open"])),
+            high_price=Decimal(str(candle_data["high"])),
+            low_price=Decimal(str(candle_data["low"])),
+            close_price=Decimal(str(candle_data["close"])),
+            volume=Decimal(str(candle_data["volume"])),
         )
         session.merge(candle)
     
