@@ -30,8 +30,11 @@ cryptoquant/
 |------|----------|-------|
 | Add new strategy | `strategy/base.py` + `strategy/cta/`, `strategy/stat_arb/` | Inherit from `StrategyBase` |
 | CLI commands | `cli/main.py`, `cli/commands/` | argparse subcommands |
-| Data models | `data/models.py` | OHLCV, OrderBook, Balance dataclasses |
-| OKX API client | `data/manager.py` | Rate-limited ccxt wrapper |
+|| Data models | `data/models.py` | OHLCVCandle dataclass (Decimal precision) |
+|| OKX API client | `data/manager.py` | ccxt wrapper + retry + proxy + pagination |
+|| Download data | `data/downloader.py` | CLI: incremental/full/backfill modes |
+|| Verify API key | `data/verify_apikey.py` | `python -m data.verify_apikey` |
+|| Data storage | `data/repository/` | SQLite with upsert, WAL mode |
 | Backtest entry | `backtest/engine.py` | Backtrader integration |
 | Live trading | `live/trading.py`, `live/paper_trading.py` | Paper vs live modes |
 | Risk controls | `risk/stop_loss.py`, `risk/position_sizing.py` | Drawdown limits |
@@ -45,11 +48,9 @@ cryptoquant/
 | `StrategyBase` | ABC | `strategy/base.py` | All strategies inherit |
 | `Signal` | dataclass | `strategy/base.py` | Trading signals |
 | `StrategyContext` | dataclass | `strategy/base.py` | Market data + positions |
-| `OHLCVCandle` | dataclass | `data/models.py` | Price data model |
-| `BacktestEngine` | class | `backtest/engine.py` | Backtesting runner |
-| `BacktestResult` | dataclass | `backtest/engine.py` | Results container |
-| `OKXDataManager` | class | `data/manager.py` | Exchange API client |
-| `RateLimiter` | class | `data/manager.py` | Token bucket rate limiter |
+| `OHLCVCandle` | dataclass | `data/models.py` | Price data model (frozen, Decimal) |
+| `OKXClient` | class | `data/manager.py` | Exchange API client + pagination |
+| `DownloadResult` | dataclass | `data/downloader.py` | Download operation result |
 | `main()` | function | `cli/main.py` | CLI entry point |
 | `run_backtest()` | function | `cli/commands/backtest.py` | Backtest command |
 
@@ -64,13 +65,14 @@ cryptoquant/
 **Import Pattern:**
 ```python
 from decimal import Decimal  # REQUIRED for money math
-from data.models import OHLCVCandle, Ticker
+from data.models import OHLCVCandle
 from strategy.base import StrategyBase, Signal, SignalType
 ```
 
 **Error Handling:**
-- Custom exceptions in `data/manager.py`: `OKXAPIError`, `OKXRateLimitError`
+- Custom exceptions in `data/manager.py`: `OKXAPIError`, `OKXRateLimitError`, `OKXTimeoutError`, `OKXNetworkError`
 - Retry with exponential backoff on API failures
+- Proxy auto-detected from `HTTPS_PROXY`/`HTTP_PROXY` env vars
 
 ## ANTI-PATTERNS
 
@@ -104,6 +106,13 @@ class MyStrategy(StrategyBase):
 # Install dependencies
 pip install -r requirements.txt
 
+# Download historical data (data module)
+python -m data.downloader --pair BTC/USDT --timeframe 1h --days 365
+python -m data.downloader --pair BTC/USDT --timeframe 1d --backfill --no-sandbox
+
+# Verify API key
+python -m data.verify_apikey --sandbox
+
 # Run backtest
 python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h
 
@@ -126,9 +135,10 @@ black . && ruff check . --fix && mypy .
 ## NOTES
 
 - **Security:** API keys in `.env` (never committed). See `.env.example` template
-- **Data Storage:** Historical OHLCV in `data/historical/` (Parquet format)
+- **Data Storage:** Historical OHLCV in `data/cryptoquant.db` (SQLite, WAL mode)
 - **Exchange:** OKX only (ccxt integration allows others)
-- **Mode:** Sandbox default (`exchange.sandbox: true` in config.yaml)
+- **Proxy:** WSL environment requires `HTTPS_PROXY=http://192.168.10.128:10808`
+- **Mode:** Sandbox default (use `--no-sandbox` for production)
 - **Kill Switch:** Emergency stop closes all positions via `cli/main.py run_kill()`
 
 ## MODULE GUIDES
