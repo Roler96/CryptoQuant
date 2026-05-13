@@ -1,58 +1,125 @@
 # CryptoQuant Knowledge Base
 
 **Project:** Crypto Quant Trading Platform  
-**Stack:** Python 3.10+, asyncio, Pydantic, structlog, ccxt, backtrader  
-**Purpose:** Quantitative cryptocurrency trading with backtesting and live execution
+**Stack:** Python 3.10+, ccxt, backtrader, SQLAlchemy, structlog, pydantic, pandas  
+**Purpose:** Quantitative cryptocurrency trading with backtesting and live execution  
+**Status:** Data module complete; backtest engine needs repair (uses old `data.storage` import)
 
 ## OVERVIEW
 
-A modular Python platform for quantitative crypto trading on OKX exchange. Supports multi-strategy backtesting, paper trading, and live execution with integrated risk management.
+A modular Python platform for quantitative crypto trading on OKX exchange. The data layer is fully operational (OKX API → SQLite with validation). Backtest engine and live trading modules exist but have integration issues — the backtest engine still imports from the deprecated `data.storage` module instead of the new `data.repository`.
 
 ## STRUCTURE
 
 ```
-cryptoquant/
-├── cli/              # CLI entry points (argparse-based)
-├── config/           # YAML configuration
-├── cryptoquant/      # Package entry (__main__.py)
-├── data/             # Data management, models, storage
-├── backtest/         # Backtesting engine (Backtrader-based)
-├── live/             # Live trading execution
-├── risk/             # Risk management (position sizing, stop-loss)
-├── strategy/         # Trading strategies framework
-├── logs/             # Logging and audit trail
-└── tests/            # Pytest test suite
+CryptoQuant/
+├── data/                # ✅ Data management (fully operational)
+│   ├── models.py        # OHLCVCandle dataclass (frozen, Decimal precision)
+│   ├── manager.py       # OKXClient: ccxt + retry + proxy + pagination + since-probing
+│   ├── downloader.py    # Historical download CLI (incremental/full/backfill)
+│   ├── validation.py    # Data quality checks + auto-repair
+│   ├── verify_apikey.py # 3-step API key verification
+│   └── repository/      # SQLite data access layer (upsert, WAL mode)
+│       ├── base.py      # DataRepository abstract interface
+│       └── sqlite.py    # SQLite implementation
+├── backtest/            # ⚠️ Needs repair
+│   ├── engine.py        # Backtrader integration (BROKEN: imports data.storage)
+│   └── metrics.py       # Performance metrics (Sharpe, drawdown)
+├── strategy/            # Strategy framework
+│   ├── base.py          # StrategyBase ABC, Signal, StrategyContext
+│   ├── cta/
+│   │   └── trend_following.py  # SMA crossover
+│   └── stat_arb/
+│       └── pair_trading.py     # Pair trading
+├── live/                # Live trading
+│   ├── trading.py       # Live trading engine
+│   ├── paper_trading.py # Paper trading simulation
+│   ├── order_manager.py # Order lifecycle management
+│   └── kill_switch.py   # Emergency stop
+├── risk/                # Risk management
+│   ├── position_sizing.py  # Position size calculations
+│   └── stop_loss.py        # Stop-loss + drawdown circuit breaker
+├── config/              # Configuration
+│   └── config.yaml      # Trading params, risk limits, DB settings
+├── logs/                # Logging and audit
+│   ├── audit.py         # Risk event audit trail
+│   └── logger.py        # structlog + file rotation
+├── scripts/             # Utility scripts (legacy, not part of core modules)
+│   ├── db_manager.py         # Database status/validate/reset
+│   ├── batch_fetch.py        # Batch download
+│   ├── download_all_data.py  # Full download script
+│   ├── enhance_data.py       # Data enhancement
+│   ├── migrate_*.py          # Migration scripts
+│   └── test_*.py             # Connection test scripts
+├── tests/               # Pytest test suite
+├── AGENTS.md            # This file
+├── TODO.md              # Project progress tracker
+└── requirements.txt     # Dependencies
 ```
 
 ## WHERE TO LOOK
 
-| Task | Location | Notes |
-|------|----------|-------|
-| Add new strategy | `strategy/base.py` + `strategy/cta/`, `strategy/stat_arb/` | Inherit from `StrategyBase` |
-| CLI commands | `cli/main.py`, `cli/commands/` | argparse subcommands |
-|| Data models | `data/models.py` | OHLCVCandle dataclass (Decimal precision) |
-|| OKX API client | `data/manager.py` | ccxt wrapper + retry + proxy + pagination |
-|| Download data | `data/downloader.py` | CLI: incremental/full/backfill modes |
-|| Verify API key | `data/verify_apikey.py` | `python -m data.verify_apikey` |
-|| Data storage | `data/repository/` | SQLite with upsert, WAL mode |
-| Backtest entry | `backtest/engine.py` | Backtrader integration |
-| Live trading | `live/trading.py`, `live/paper_trading.py` | Paper vs live modes |
-| Risk controls | `risk/stop_loss.py`, `risk/position_sizing.py` | Drawdown limits |
-| Configuration | `config/config.yaml` | Trading params, risk limits |
-| Logs/Audit | `logs/audit.py`, `logs/logger.py` | structlog + file rotation |
+**Data module (operational):**
+- `data/models.py` — OHLCVCandle dataclass (frozen, Decimal precision)
+- `data/manager.py` — OKXClient with retry, proxy, pagination, since-probing
+- `data/downloader.py` — CLI download orchestrator (incremental/full/backfill)
+- `data/verify_apikey.py` — `python -m data.verify_apikey`
+- `data/repository/sqlite.py` — SQLiteRepository (upsert, WAL mode)
+- `data/validation.py` — Data quality validation + auto-repair
+
+**Backtest (needs repair):**
+- `backtest/engine.py` — Backtrader integration (currently broken, uses old `data.storage`)
+- `backtest/metrics.py` — Performance metrics
+
+**Strategy:**
+- `strategy/base.py` — StrategyBase ABC, Signal, SignalType, StrategyContext
+- `strategy/cta/trend_following.py` — SMA crossover CTA strategy
+- `strategy/stat_arb/pair_trading.py` — Pair trading strategy
+
+**Live trading:**
+- `live/trading.py` — Live trading engine
+- `live/paper_trading.py` — Paper trading simulation
+- `live/order_manager.py` — Order lifecycle management
+- `live/kill_switch.py` — Emergency stop
+
+**Risk:**
+- `risk/position_sizing.py` — Fixed fractional, Kelly, volatility-based
+- `risk/stop_loss.py` — Trailing stops, time stops, drawdown monitor
+
+**Other:**
+- `config/config.yaml` — Trading params, risk limits, DB settings
+- `logs/audit.py` — Risk event audit trail
+- `scripts/` — Legacy utility scripts (db_manager, batch_fetch, etc.)
 
 ## CODE MAP
 
-| Symbol | Type | Location | Role |
-|--------|------|----------|------|
-| `StrategyBase` | ABC | `strategy/base.py` | All strategies inherit |
-| `Signal` | dataclass | `strategy/base.py` | Trading signals |
-| `StrategyContext` | dataclass | `strategy/base.py` | Market data + positions |
-| `OHLCVCandle` | dataclass | `data/models.py` | Price data model (frozen, Decimal) |
-| `OKXClient` | class | `data/manager.py` | Exchange API client + pagination |
-| `DownloadResult` | dataclass | `data/downloader.py` | Download operation result |
-| `main()` | function | `cli/main.py` | CLI entry point |
-| `run_backtest()` | function | `cli/commands/backtest.py` | Backtest command |
+**Data module:**
+- `OKXClient` — `data/manager.py` — Exchange API client + pagination + since-probing
+- `OHLCVCandle` — `data/models.py` — Frozen dataclass, Decimal precision
+- `SQLiteRepository` — `data/repository/sqlite.py` — Upsert by composite PK, WAL mode
+- `DataRepository` — `data/repository/base.py` — Abstract interface
+- `DownloadResult` — `data/downloader.py` — Download operation result
+- `validate_ohlcv_data()` — `data/validation.py` — DataFrame quality checks
+- `validate_candle()` — `data/validation.py` — Single candle sanity check
+- `auto_repair_data()` — `data/validation.py` — Forward-fill gaps, flag anomalies
+
+**Strategy:**
+- `StrategyBase` — `strategy/base.py` — ABC for all strategies
+- `Signal` — `strategy/base.py` — Trading signal dataclass
+- `SignalType` — `strategy/base.py` — LONG, SHORT, CLOSE_LONG, CLOSE_SHORT, HOLD
+- `StrategyContext` — `strategy/base.py` — Market data + positions
+- `TrendFollowingStrategy` — `strategy/cta/trend_following.py` — SMA crossover
+
+**Risk:**
+- `PositionSizer` — `risk/position_sizing.py` — Position size calculations
+- `StopLossManager` — `risk/stop_loss.py` — Stop-loss + trailing + circuit breaker
+
+**Exceptions:**
+- `OKXAPIError` — `data/manager.py` — Base exception
+- `OKXAuthenticationError` — Bad credentials (fail immediately)
+- `OKXRateLimitError` — Rate limit exceeded (retry with backoff)
+- `OKXTimeoutError` — API timeout (retry with backoff)
+- `OKXNetworkError` — Connection lost (retry with backoff)
 
 ## CONVENTIONS
 
@@ -66,11 +133,25 @@ cryptoquant/
 ```python
 from decimal import Decimal  # REQUIRED for money math
 from data.models import OHLCVCandle
+from data.repository import get_repository
+from data.manager import OKXClient
+from data.validation import validate_candle, validate_ohlcv_data
 from strategy.base import StrategyBase, Signal, SignalType
 ```
 
+**Data Access Pattern (new — use this):**
+```python
+from data.repository import get_repository
+
+repo = get_repository()
+repo.save_candles(candles, "BTC/USDT", "1h")
+df = repo.load_as_dataframe("BTC/USDT", "1h")
+candles = repo.load_candles("BTC/USDT", "1h", limit=100)
+stats = repo.get_stats("BTC/USDT", "1h")
+```
+
 **Error Handling:**
-- Custom exceptions in `data/manager.py`: `OKXAPIError`, `OKXRateLimitError`, `OKXTimeoutError`, `OKXNetworkError`
+- Custom exceptions in `data/manager.py`: `OKXAPIError` hierarchy
 - Retry with exponential backoff on API failures
 - Proxy auto-detected from `HTTPS_PROXY`/`HTTP_PROXY` env vars
 
@@ -81,71 +162,69 @@ from strategy.base import StrategyBase, Signal, SignalType
 - Using `float` for prices/quantities (precision loss)
 - Committing `.env` files (gitignored by default)
 - Skipping dry-run before live trading
+- Using old `data.storage` module (deprecated, use `data.repository`)
+- Calling `reset_repository()` in production code (tests only)
 
 **WARNINGS:**
-- Live trading requires manual confirmation (see `cli/main.py:319`)
-- Max 20 requests per 2 seconds to OKX (enforced by `RateLimiter`)
-
-## UNIQUE STYLES
-
-**Strategy Framework:**
-```python
-class MyStrategy(StrategyBase):
-    def generate_signal(self, context: StrategyContext) -> Signal:
-        # Access: context.current_price, context.candles, context.positions
-        return Signal(SignalType.LONG, pair, timestamp, price)
-```
-
-**Signal Types:** `LONG`, `SHORT`, `CLOSE_LONG`, `CLOSE_SHORT`, `HOLD`
-
-**Position Sizing:** Configured in `config.yaml` under `risk.max_position_pct`
+- Backtest engine is currently broken — imports from `data.storage` which no longer exists
+- `strategy/base.py` imports `OrderBook, Ticker` from `data.models` — may not be defined yet
+- OKX `fetch_ohlcv` max 100 candles per call — use `fetch_ohlcv_history()` for bulk
+- OKX returns empty when `since` is before the pair's listing date — auto-probing handles this
+- Sandbox default (use `--no-sandbox` for production)
+- Live trading requires manual confirmation
 
 ## COMMANDS
 
 ```bash
-# Install dependencies
+# Setup
 pip install -r requirements.txt
+cp .env.example .env  # Add OKX API keys
 
-# Download historical data (data module)
+# Download historical data (✅ working)
 python -m data.downloader --pair BTC/USDT --timeframe 1h --days 365
-python -m data.downloader --pair BTC/USDT --timeframe 1d --backfill --no-sandbox
+python -m data.downloader --pair ETH/USDT --timeframe 4h --since 2024-01-01
+python -m data.downloader --pair BTC/USDT --timeframe 1h --full --sandbox
+python -m data.downloader --pair BTC/USDT --timeframe 1d --backfill
 
-# Verify API key
+# Verify API key (✅ working)
 python -m data.verify_apikey --sandbox
 
-# Run backtest
-python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h
+# Database management (via scripts)
+python scripts/db_manager.py status
+python scripts/db_manager.py validate
+python scripts/db_manager.py reset
 
-# Paper trading (simulated funds)
-python -m cli.main paper --strategy cta --pair BTC/USDT
-
-# Live trading (DRY-RUN first!)
-python -m cli.main live --strategy cta --pair BTC/USDT --dry-run
-
-# Emergency stop
-python -m cli.main kill
+# Run backtest (⚠️ broken — engine imports data.storage)
+# python -m cli.main backtest --strategy cta --pair BTC/USDT --timeframe 1h
 
 # Run tests
 pytest tests/ -v
 
 # Format + lint
-black . && ruff check . --fix && mypy .
+black . && ruff check . --fix && mypy . --ignore-missing-imports
 ```
 
 ## NOTES
 
 - **Security:** API keys in `.env` (never committed). See `.env.example` template
-- **Data Storage:** Historical OHLCV in `data/cryptoquant.db` (SQLite, WAL mode)
+- **Data Storage:** Historical OHLCV in `data/cryptoquant.db` (SQLite, WAL mode, single `candles` table)
 - **Exchange:** OKX only (ccxt integration allows others)
 - **Proxy:** WSL environment requires `HTTPS_PROXY=http://192.168.10.128:10808`
 - **Mode:** Sandbox default (use `--no-sandbox` for production)
-- **Kill Switch:** Emergency stop closes all positions via `cli/main.py run_kill()`
+- **Since-probing:** `fetch_ohlcv_history()` auto-detects earliest valid `since` via binary search
+- **Kill Switch:** Emergency stop closes all positions via `live/kill_switch.py`
+- **Scripts vs Modules:** Utility scripts live in `scripts/`; core module tools (downloader, verify_apikey) live alongside their module in `data/`
+
+## KNOWN ISSUES
+
+1. **Backtest engine broken** — `backtest/engine.py` imports from `data.storage` (deleted). Needs update to use `data.repository.get_repository()` + `load_as_dataframe()`
+2. **Strategy model imports** — `strategy/base.py` imports `OrderBook, Ticker` from `data.models` — these models may not exist yet
+3. **No CLI entry point** — The `cli/` directory referenced in earlier design does not exist. Commands run via `python -m data.downloader` etc.
 
 ## MODULE GUIDES
 
-- See `cli/AGENTS.md` for CLI patterns
-- See `data/AGENTS.md` for data management
+- See `data/AGENTS.md` for data management (detailed and up-to-date)
+- See `backtest/AGENTS.md` for backtesting (needs update after engine fix)
 - See `live/AGENTS.md` for trading execution
-- See `backtest/AGENTS.md` for backtesting
 - See `strategy/AGENTS.md` for strategy development
 - See `risk/AGENTS.md` for risk controls
