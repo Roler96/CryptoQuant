@@ -283,14 +283,15 @@ class TrendFollowingStrategy(StrategyBase):
             direction = "long" if signal_type == SignalType.LONG else "short"
             self._set_atr_exit(candles, direction, current_price)
 
-        self.logger.debug(
-            "Signal generated",
-            signal=signal_type.name,
-            pair=context.pair,
-            fast_ma=float(fast_ma),
-            slow_ma=float(slow_ma),
-            confidence=float(confidence),
-        )
+        if signal_type is not SignalType.HOLD:
+            self.logger.debug(
+                "Signal generated",
+                signal=signal_type.name,
+                pair=context.pair,
+                fast_ma=float(fast_ma),
+                slow_ma=float(slow_ma),
+                confidence=float(confidence),
+            )
 
         return Signal(
             signal_type=signal_type,
@@ -345,8 +346,9 @@ class TrendFollowingStrategy(StrategyBase):
         # Long: stop if price drops to/below stop, take if price rises to/above take
         if direction == "long":
             if current_price <= self._trade_stop_price:
+                stop_val = self._trade_stop_price
                 self._reset_trade_state()
-                self.logger.info("atr_stop_loss_hit", price=float(current_price), stop=float(self._trade_stop_price))
+                self.logger.info("atr_stop_loss_hit", price=str(current_price), stop=str(stop_val))
                 return Signal(
                     signal_type=SignalType.CLOSE_LONG,
                     pair="", timestamp=current_time,
@@ -355,8 +357,9 @@ class TrendFollowingStrategy(StrategyBase):
                     metadata={"reason": "atr_stop_loss"},
                 )
             if current_price >= self._trade_take_price:
+                take_val = self._trade_take_price
                 self._reset_trade_state()
-                self.logger.info("atr_take_profit_hit", price=float(current_price), take=float(self._trade_take_price))
+                self.logger.info("atr_take_profit_hit", price=str(current_price), take=str(take_val))
                 return Signal(
                     signal_type=SignalType.CLOSE_LONG,
                     pair="", timestamp=current_time,
@@ -368,8 +371,9 @@ class TrendFollowingStrategy(StrategyBase):
         # Short: stop if price rises to/above stop, take if price drops to/below take
         elif direction == "short":
             if current_price >= self._trade_stop_price:
+                stop_val = self._trade_stop_price
                 self._reset_trade_state()
-                self.logger.info("atr_stop_loss_hit", price=float(current_price), stop=float(self._trade_stop_price))
+                self.logger.info("atr_stop_loss_hit", price=str(current_price), stop=str(stop_val))
                 return Signal(
                     signal_type=SignalType.CLOSE_SHORT,
                     pair="", timestamp=current_time,
@@ -378,8 +382,9 @@ class TrendFollowingStrategy(StrategyBase):
                     metadata={"reason": "atr_stop_loss"},
                 )
             if current_price <= self._trade_take_price:
+                take_val = self._trade_take_price
                 self._reset_trade_state()
-                self.logger.info("atr_take_profit_hit", price=float(current_price), take=float(self._trade_take_price))
+                self.logger.info("atr_take_profit_hit", price=str(current_price), take=str(take_val))
                 return Signal(
                     signal_type=SignalType.CLOSE_SHORT,
                     pair="", timestamp=current_time,
@@ -421,10 +426,10 @@ class TrendFollowingStrategy(StrategyBase):
         self.logger.debug(
             "atr_exit_set",
             direction=direction,
-            entry=float(entry_price),
-            stop=float(self._trade_stop_price),
-            take=float(self._trade_take_price),
-            atr=float(atr),
+            entry=str(entry_price),
+            stop=str(self._trade_stop_price),
+            take=str(self._trade_take_price),
+            atr=str(atr),
         )
 
     def _determine_signal(

@@ -62,15 +62,47 @@ def random_individual():
             ind[name] = random.choice(steps)
         elif space["type"] == "choice":
             ind[name] = random.choice(space["choices"])
-    return ind
+    return ensure_valid(ind)
 
 
 def ensure_valid(ind):
-    """Ensure individual is valid (fast < slow)."""
-    if ind["fast_ma_period"] >= ind["slow_ma_period"]:
-        ind["fast_ma_period"], ind["slow_ma_period"] = ind["slow_ma_period"] - 5, ind["slow_ma_period"]
-        if ind["fast_ma_period"] < 2:
-            ind["fast_ma_period"] = 2
+    """Ensure individual is valid (fast < slow, all within bounds and step-aligned)."""
+    fast = ind["fast_ma_period"]
+    slow = ind["slow_ma_period"]
+
+    fast_space = PARAM_SPACE["fast_ma_period"]
+    slow_space = PARAM_SPACE["slow_ma_period"]
+
+    def snap_to_step(val, space):
+        """Snap value to nearest valid step-aligned value within bounds."""
+        # Round to nearest step
+        steps_from_low = round((val - space["low"]) / space["step"])
+        snapped = space["low"] + steps_from_low * space["step"]
+        # Clamp to bounds
+        return max(space["low"], min(space["high"], snapped))
+
+    # Fix fast >= slow: swap so larger becomes slow
+    if fast >= slow:
+        fast, slow = slow, fast
+
+    # If still equal after swap (both same value), nudge apart
+    if fast >= slow:
+        slow = fast + slow_space["step"]
+
+    # Snap both to their step boundaries
+    fast = snap_to_step(fast, fast_space)
+    slow = snap_to_step(slow, slow_space)
+
+    # After snapping, fast might again be >= slow — fix by nudging slow up
+    if fast >= slow:
+        slow = snap_to_step(fast + slow_space["step"], slow_space)
+
+    # Final clamp (should be redundant but safe)
+    fast = max(fast_space["low"], min(fast_space["high"], fast))
+    slow = max(slow_space["low"], min(slow_space["high"], slow))
+
+    ind["fast_ma_period"] = fast
+    ind["slow_ma_period"] = slow
     return ind
 
 
