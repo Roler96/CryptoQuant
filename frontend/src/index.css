@@ -1,0 +1,5 @@
+/* Base styles - resets handled in App.css */
+
+html, body {
+  background: #0d0d1a;
+}
