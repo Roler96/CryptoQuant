@@ -2,6 +2,10 @@ import axios from 'axios';
 
 const API_BASE = 'http://localhost:8000/api';
 
+function encodePair(pair: string): string {
+  return pair.replace('/', '-');
+}
+
 export const api = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
@@ -92,7 +96,7 @@ export async function getPairs(): Promise<Record<string, string[]>> {
 }
 
 export async function getStats(pair: string, timeframe: string): Promise<Stats> {
-  const res = await api.get(`/stats/${pair}/${timeframe}`);
+  const res = await api.get(`/stats/${encodePair(pair)}/${timeframe}`);
   return res.data;
 }
 
@@ -102,9 +106,10 @@ export async function getCandles(
   since?: number,
   until?: number,
   limit?: number,
+  order?: 'asc' | 'desc',
 ): Promise<Candle[]> {
-  const res = await api.get(`/candles/${pair}/${timeframe}`, {
-    params: { since, until, limit },
+  const res = await api.get(`/candles/${encodePair(pair)}/${timeframe}`, {
+    params: { since, until, limit, order },
   });
   return res.data;
 }

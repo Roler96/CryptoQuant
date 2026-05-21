@@ -24,13 +24,23 @@ CryptoQuant/
 │       └── sqlite.py    # SQLite implementation
 ├── backtest/            # ✅ Backtesting (operational)
 │   ├── engine.py        # Backtrader integration (BacktestEngine, PandasDataFeed)
-│   └── metrics.py       # Performance metrics (Sharpe, drawdown, win rate, etc.)
-├── strategy/            # ✅ Strategy framework (adapted to data module)
+│   ├── metrics.py       # Performance metrics (Sharpe, drawdown, win rate, etc.)
+│   ├── run.py           # CLI backtest runner
+│   └── multi_asset/     # ✅ Vectorized multi-asset backtest
+│       ├── engine.py    # MultiAssetBacktestEngine + CrossSectionalStrategy
+│       └── data_loader.py
+├── strategy/            # ✅ Strategy framework (operational)
 │   ├── base.py          # StrategyBase ABC, Signal, StrategyContext
 │   ├── cta/
-│   │   └── trend_following.py  # SMA crossover
-│   └── stat_arb/
-│       └── pair_trading.py     # Pair trading
+│   │   └── trend_following.py  # SMA crossover + MA/RSI/ATR/ADX
+│   ├── stat_arb/
+│   │   └── pair_trading.py     # Pair trading
+│   ├── quant/           # ✅ Cross-sectional quant strategies
+│   │   ├── cross_sectional.py  # Multi-factor (momentum, carry, size, low-vol)
+│   │   ├── basis_strategy.py   # Basis mean reversion
+│   │   └── funding_rate_arb.py # Cash-and-carry arbitrage
+│   └── regime/          # ✅ Market regime detection
+│       └── detector.py  # STRONG_TREND, RANGING, HIGH_VOLATILITY via ADX/CHOP/ATR
 ├── live/                # ⚠️ Not yet integrated with data.repository
 │   ├── trading.py       # Live trading engine
 │   ├── paper_trading.py # Paper trading simulation
@@ -39,19 +49,24 @@ CryptoQuant/
 ├── risk/                # ⚠️ Not yet integrated with data.repository
 │   ├── position_sizing.py  # Position size calculations
 │   └── stop_loss.py        # Stop-loss + drawdown circuit breaker
+├── api/                 # ✅ FastAPI backend (operational)
+│   ├── main.py          # REST endpoints (data, backtest, download)
+│   └── routers/         # Placeholder for future split
+├── frontend/            # ✅ React + TypeScript UI (operational)
+│   └── src/
+│       ├── App.tsx      # Main layout + state management
+│       ├── api.ts       # Axios client + TypeScript interfaces
+│       └── components/  # Chart, DataPanel, StrategyPanel, ResultsPanel, DownloadPanel
 ├── config/              # Configuration
 │   └── config.yaml      # Trading params, risk limits, DB settings
 ├── logs/                # Logging and audit
 │   ├── audit.py         # Risk event audit trail
 │   └── logger.py        # structlog + file rotation
 ├── scripts/             # Utility scripts (legacy, not part of core modules)
-│   ├── db_manager.py         # Database status/validate/reset
-│   ├── batch_fetch.py        # Batch download
-│   ├── download_all_data.py  # Full download script
-│   ├── enhance_data.py       # Data enhancement
-│   ├── migrate_*.py          # Migration scripts
-│   └── test_*.py             # Connection test scripts
 ├── tests/               # Pytest test suite
+├── research/            # Strategy research documents
+├── docs/                # Documentation + implementation plans
+├── notebooks/           # Research notebooks (markdown)
 ├── AGENTS.md            # This file
 ├── TODO.md              # Project progress tracker
 └── requirements.txt     # Dependencies
@@ -86,6 +101,15 @@ CryptoQuant/
 - `risk/position_sizing.py` — Fixed fractional, Kelly, volatility-based
 - `risk/stop_loss.py` — Trailing stops, time stops, drawdown monitor
 
+**API (operational):**
+- `api/main.py` — FastAPI backend with REST endpoints
+- See `api/AGENTS.md` for endpoint details
+
+**Frontend (operational):**
+- `frontend/src/App.tsx` — Main React component
+- `frontend/src/api.ts` — Axios client + TypeScript types
+- See `frontend/AGENTS.md` for component details
+
 **Other:**
 - `config/config.yaml` — Trading params, risk limits, DB settings
 - `logs/audit.py` — Risk event audit trail
@@ -116,10 +140,16 @@ CryptoQuant/
 - `SignalType` — `strategy/base.py` — LONG, SHORT, CLOSE_LONG, CLOSE_SHORT, HOLD
 - `StrategyContext` — `strategy/base.py` — Market data + positions
 - `TrendFollowingStrategy` — `strategy/cta/trend_following.py` — SMA crossover
+- `CrossSectionalStrategy` — `backtest/multi_asset/engine.py` — Abstract base for cross-sectional
+- `MarketRegime` — `strategy/regime/detector.py` — STRONG_TREND, RANGING, HIGH_VOLATILITY
 
 **Risk:**
 - `PositionSizer` — `risk/position_sizing.py` — Position size calculations
 - `StopLossManager` — `risk/stop_loss.py` — Stop-loss + trailing + circuit breaker
+
+**API:**
+- `app` — `api/main.py` — FastAPI application
+- Endpoints: `/api/health`, `/api/pairs`, `/api/stats`, `/api/candles`, `/api/strategies`, `/api/backtest`, `/api/download`
 
 **Exceptions:**
 - `OKXAPIError` — `data/manager.py` — Base exception
@@ -222,6 +252,12 @@ result = engine.run_backtest(strategy, 'BTC/USDT', '1h', days=90)
 print(f'Return: {result.total_return:.2%}, Trades: {len(result.trades)}')
 "
 
+# Start API server (✅ working)
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# Start frontend (requires npm install first)
+cd frontend && npm run dev
+
 # Run tests
 pytest tests/ -v
 
@@ -241,17 +277,27 @@ black . && ruff check . --fix && mypy . --ignore-missing-imports
 - **Scripts vs Modules:** Utility scripts live in `scripts/`; core module tools (downloader, verify_apikey) live alongside their module in `data/`
 - **OHLCVCandle fields:** `pair, timeframe, timestamp, open, high, low, close, volume` (all Decimal except pair/timeframe)
 - **DataFrame columns:** `timestamp, open, high, low, close, volume` (from `load_as_dataframe()`)
+- **Frontend:** React 19 + TypeScript + Vite at `frontend/`, connects to API at `localhost:8000`
+- **API:** FastAPI backend, CORS configured for `localhost:5173` and `localhost:3000`
 
 ## KNOWN ISSUES
 
-1. **No CLI entry point** — No `cli/` directory. Commands run via `python -m data.downloader` or inline Python. A unified CLI would improve UX.
-2. **Live/Risk modules not integrated** — `live/` and `risk/` modules still reference old patterns (not tested against current data module)
-3. **Backtest trade recording** — Only closed trades are recorded; open positions at backtest end are not captured
+1. **No pyproject.toml** — Using legacy `requirements.txt` instead of modern Python packaging (PEP 621)
+2. **No unified CLI** — Commands run via `python -m data.downloader` or inline Python. A unified CLI would improve UX.
+3. **No CI/CD pipeline** — No `.github/workflows/` directory; manual testing and linting only
+4. **No pytest configuration** — Missing `conftest.py` for shared fixtures
+5. **No pre-commit hooks** — `pre-commit` in requirements but not configured (`.pre-commit-config.yaml` missing)
+6. **Live/Risk modules not integrated** — `live/` and `risk/` modules still reference old patterns (not tested against current data module)
+7. **Backtest trade recording** — Only closed trades are recorded; open positions at backtest end are not captured
+8. **API authentication** — No authentication/authorization on API endpoints (add before production)
+9. **Config directory missing** — `config/config.yaml` mentioned but directory structure unclear
 
 ## MODULE GUIDES
 
 - See `data/AGENTS.md` for data management (detailed and up-to-date)
 - See `backtest/AGENTS.md` for backtesting
-- See `live/AGENTS.md` for trading execution
 - See `strategy/AGENTS.md` for strategy development
+- See `live/AGENTS.md` for trading execution
 - See `risk/AGENTS.md` for risk controls
+- See `api/AGENTS.md` for FastAPI backend
+- See `frontend/AGENTS.md` for React UI

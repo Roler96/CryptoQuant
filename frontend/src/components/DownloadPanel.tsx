@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { startDownload, getDownloadStatus, DownloadStatus } from '../api';
+import { startDownload, getDownloadStatus } from '../api';
+import type { DownloadStatus } from '../api';
 
 interface DownloadPanelProps {
   selectedPair: string;
@@ -42,7 +43,7 @@ export function DownloadPanel({
 
   const handleStartDownload = async () => {
     if (!selectedPair || !selectedTimeframe) {
-      setError('Please select pair and timeframe');
+      setError('请选择交易对和时间周期');
       return;
     }
 
@@ -69,10 +70,10 @@ export function DownloadPanel({
 
   return (
     <div className="panel download-panel">
-      <h3>Download Data</h3>
+      <h3>数据下载</h3>
 
       <div className="form-row">
-        <label>Days:</label>
+        <label>天数:</label>
         <input
           type="number"
           value={days}
@@ -91,7 +92,7 @@ export function DownloadPanel({
             onChange={(e) => setSandbox(e.target.checked)}
             disabled={isRunning}
           />
-          Sandbox mode
+          模拟模式
         </label>
       </div>
 
@@ -99,7 +100,7 @@ export function DownloadPanel({
 
       {status && (
         <div className={`status status-${status.status}`}>
-          <span className="status-badge">{status.status}</span>
+          <span className="status-badge">{status.status === 'pending' ? '等待中' : status.status === 'running' ? '运行中' : status.status === 'completed' ? '已完成' : '失败'}</span>
           <span className="status-message">{status.message}</span>
           {status.progress && (
             <div className="progress-bar">
@@ -114,7 +115,7 @@ export function DownloadPanel({
 
       {isCompleted && (
         <button onClick={() => { setTaskId(null); setStatus(null); }} className="btn-secondary">
-          Clear
+          清除
         </button>
       )}
 
@@ -124,7 +125,7 @@ export function DownloadPanel({
           disabled={!selectedPair || !selectedTimeframe}
           className="btn-primary"
         >
-          Start Download
+          开始下载
         </button>
       )}
     </div>

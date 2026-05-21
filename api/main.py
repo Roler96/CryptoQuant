@@ -19,6 +19,11 @@ logger = structlog.get_logger(__name__)
 task_status: Dict[str, Dict[str, Any]] = {}
 
 
+def normalize_pair(pair: str) -> str:
+    """Convert URL-safe pair format (BTC-USDT) to database format (BTC/USDT)."""
+    return pair.replace("-", "/")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -151,14 +156,15 @@ async def list_pairs():
 @app.get("/api/stats/{pair}/{timeframe}", response_model=StatsResponse)
 async def get_stats(pair: str, timeframe: str):
     """Get data statistics for a pair/timeframe."""
+    pair_db = normalize_pair(pair)
     repo = get_repository()
     
-    count = repo.count(pair, timeframe)
+    count = repo.count(pair_db, timeframe)
     if count == 0:
-        raise HTTPException(404, f"No data for {pair}/{timeframe}")
+        raise HTTPException(404, f"No data for {pair_db}/{timeframe}")
     
-    earliest = repo.get_earliest_timestamp(pair, timeframe)
-    latest = repo.get_latest_timestamp(pair, timeframe)
+    earliest = repo.get_earliest_timestamp(pair_db, timeframe)
+    latest = repo.get_latest_timestamp(pair_db, timeframe)
     
     def ts_to_iso(ts: Optional[int]) -> Optional[str]:
         if ts is None:
@@ -166,7 +172,7 @@ async def get_stats(pair: str, timeframe: str):
         return datetime.utcfromtimestamp(ts / 1000).isoformat()
     
     return StatsResponse(
-        pair=pair,
+        pair=pair_db,
         timeframe=timeframe,
         count=count,
         earliest=earliest,
@@ -183,13 +189,15 @@ async def get_candles(
     since: Optional[int] = None,
     until: Optional[int] = None,
     limit: Optional[int] = 500,
+    order: Optional[str] = "asc",
 ):
     """Get OHLCV candles for a pair/timeframe."""
+    pair_db = normalize_pair(pair)
     repo = get_repository()
-    candles = repo.load_candles(pair, timeframe, since=since, until=until, limit=limit)
+    candles = repo.load_candles(pair_db, timeframe, since=since, until=until, limit=limit, order=order)
     
     if not candles:
-        raise HTTPException(404, f"No candles found for {pair}/{timeframe}")
+        raise HTTPException(404, f"No candles found for {pair_db}/{timeframe}")
     
     return [
         CandleResponse(

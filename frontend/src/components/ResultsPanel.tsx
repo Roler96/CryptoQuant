@@ -1,4 +1,4 @@
-import { BacktestResult, Trade } from '../api';
+import type { BacktestResult, Trade } from '../api';
 import { EquityChart } from './Chart';
 
 interface ResultsPanelProps {
@@ -9,8 +9,8 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
   if (!result) {
     return (
       <div className="panel results-panel">
-        <h3>Results</h3>
-        <p className="placeholder">Run a backtest to see results</p>
+        <h3>结果</h3>
+        <p className="placeholder">运行回测以查看结果</p>
       </div>
     );
   }
@@ -18,7 +18,7 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
   if (result.error) {
     return (
       <div className="panel results-panel">
-        <h3>Results</h3>
+        <h3>结果</h3>
         <p className="error">{result.error}</p>
       </div>
     );
@@ -29,56 +29,56 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
 
   return (
     <div className="panel results-panel">
-      <h3>Backtest Results</h3>
+      <h3>回测结果</h3>
       
       <div className="metrics-grid">
         <div className="metric">
-          <span className="metric-label">Strategy</span>
+          <span className="metric-label">策略</span>
           <span className="metric-value">{result.strategy_name}</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Pair</span>
+          <span className="metric-label">交易对</span>
           <span className="metric-value">{result.pair}</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Timeframe</span>
+          <span className="metric-label">时间周期</span>
           <span className="metric-value">{result.timeframe}</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Initial</span>
+          <span className="metric-label">初始资金</span>
           <span className="metric-value">{formatPrice(result.initial_value)}</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Final</span>
+          <span className="metric-label">最终资金</span>
           <span className="metric-value">{formatPrice(result.final_value)}</span>
         </div>
         <div className="metric highlight">
-          <span className="metric-label">Return</span>
+          <span className="metric-label">收益率</span>
           <span className={`metric-value ${result.total_return >= 0 ? 'positive' : 'negative'}`}>
             {formatPercent(result.total_return)}
           </span>
         </div>
         <div className="metric">
-          <span className="metric-label">Trades</span>
+          <span className="metric-label">交易次数</span>
           <span className="metric-value">{result.total_trades}</span>
         </div>
         <div className="metric">
-          <span className="metric-label">Sharpe</span>
+          <span className="metric-label">夏普比率</span>
           <span className="metric-value">
-            {result.sharpe_ratio?.toFixed(2) ?? 'N/A'}
+            {result.sharpe_ratio?.toFixed(2) ?? '无'}
           </span>
         </div>
         <div className="metric">
-          <span className="metric-label">Max DD</span>
+          <span className="metric-label">最大回撤</span>
           <span className="metric-value negative">
-            {result.max_drawdown ? formatPercent(result.max_drawdown) : 'N/A'}
+            {result.max_drawdown ? formatPercent(result.max_drawdown) : '无'}
           </span>
         </div>
       </div>
 
       {result.equity_curve.length > 0 && (
         <div className="equity-section">
-          <h4>Equity Curve</h4>
+          <h4>资金曲线</h4>
           <EquityChart
             timestamps={result.equity_timestamps}
             values={result.equity_curve}
@@ -89,21 +89,21 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
 
       {result.trades.length > 0 && (
         <div className="trades-section">
-          <h4>Trades ({result.trades.length})</h4>
+          <h4>交易记录 ({result.trades.length})</h4>
           <div className="trades-table">
             <table>
               <thead>
                 <tr>
-                  <th>Side</th>
-                  <th>Entry</th>
-                  <th>Exit</th>
-                  <th>PnL</th>
+                  <th>方向</th>
+                  <th>入场价</th>
+                  <th>出场价</th>
+                  <th>盈亏</th>
                 </tr>
               </thead>
               <tbody>
                 {result.trades.slice(0, 20).map((trade: Trade, i: number) => (
                   <tr key={i}>
-                    <td className={trade.side}>{trade.side}</td>
+                    <td className={trade.side}>{trade.side === 'long' ? '做多' : '做空'}</td>
                     <td>${parseFloat(trade.entry_price).toFixed(2)}</td>
                     <td>${parseFloat(trade.exit_price).toFixed(2)}</td>
                     <td className={trade.pnl >= 0 ? 'positive' : 'negative'}>
@@ -114,7 +114,7 @@ export function ResultsPanel({ result }: ResultsPanelProps) {
               </tbody>
             </table>
             {result.trades.length > 20 && (
-              <p className="table-note">Showing first 20 of {result.trades.length} trades</p>
+              <p className="table-note">显示前 20 条交易记录，共 {result.trades.length} 条</p>
             )}
           </div>
         </div>

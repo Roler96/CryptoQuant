@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { getCandles, Candle, BacktestResult } from './api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { getCandles } from './api';
+import type { Candle, BacktestResult } from './api';
 import { CandlestickChart } from './components/Chart';
 import { DataPanel } from './components/DataPanel';
 import { StrategyPanel } from './components/StrategyPanel';
@@ -14,20 +15,98 @@ function App() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [loadingCandles, setLoadingCandles] = useState(false);
   const [candleError, setCandleError] = useState<string | null>(null);
+  
+  const loadedRangeRef = useRef<{ from: number; to: number } | null>(null);
+  const debounceTimerRef = useRef<number | null>(null);
+  const candlesMapRef = useRef<Map<number, Candle>>(new Map());
 
-  // Load candles when pair/timeframe changes
-  const loadCandles = useCallback(async () => {
-    if (!selectedPair || !selectedTimeframe) {
-      setCandles([]);
-      return;
+  const loadCandlesInRange = useCallback(async (from: number, to: number, forceReload = false) => {
+    if (!selectedPair || !selectedTimeframe) return;
+
+    const existingRange = loadedRangeRef.current;
+    
+    if (!forceReload && existingRange) {
+      if (from >= existingRange.from && to <= existingRange.to) {
+        return;
+      }
     }
 
     setLoadingCandles(true);
     setCandleError(null);
 
     try {
-      const data = await getCandles(selectedPair, selectedTimeframe, undefined, undefined, 1000);
-      setCandles(data);
+      const fetchFrom = forceReload ? from : (existingRange ? Math.min(from, existingRange.from) : from);
+      const fetchTo = forceReload ? to : (existingRange ? Math.max(to, existingRange.to) : to);
+      
+      const data = await getCandles(
+        selectedPair, 
+        selectedTimeframe, 
+        fetchFrom, 
+        fetchTo, 
+        2000,
+        'asc'
+      );
+
+      data.forEach((c) => {
+        candlesMapRef.current.set(c.timestamp, c);
+      });
+
+      const allCandles = Array.from(candlesMapRef.current.values())
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      setCandles(allCandles);
+      loadedRangeRef.current = { from: fetchFrom, to: fetchTo };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setCandleError(msg);
+    } finally {
+      setLoadingCandles(false);
+    }
+  }, [selectedPair, selectedTimeframe]);
+
+  const handleVisibleRangeChange = useCallback((range: { from: number; to: number } | null) => {
+    if (!range) return;
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = window.setTimeout(() => {
+      loadCandlesInRange(range.from, range.to);
+    }, 300);
+  }, [loadCandlesInRange]);
+
+  const loadInitialCandles = useCallback(async () => {
+    if (!selectedPair || !selectedTimeframe) {
+      setCandles([]);
+      candlesMapRef.current.clear();
+      loadedRangeRef.current = null;
+      return;
+    }
+
+    candlesMapRef.current.clear();
+    loadedRangeRef.current = null;
+
+    setLoadingCandles(true);
+    setCandleError(null);
+
+    try {
+      const data = await getCandles(selectedPair, selectedTimeframe, undefined, undefined, 1000, 'desc');
+      
+      data.forEach((c) => {
+        candlesMapRef.current.set(c.timestamp, c);
+      });
+      
+      const sortedData = data.sort((a, b) => a.timestamp - b.timestamp);
+      
+      setCandles(sortedData);
+      
+      if (sortedData.length > 0) {
+        loadedRangeRef.current = {
+          from: sortedData[0].timestamp,
+          to: sortedData[sortedData.length - 1].timestamp,
+        };
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Unknown error';
       setCandleError(msg);
@@ -38,22 +117,36 @@ function App() {
   }, [selectedPair, selectedTimeframe]);
 
   useEffect(() => {
-    loadCandles();
-  }, [loadCandles]);
+    loadInitialCandles();
+  }, [loadInitialCandles]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleBacktestComplete = (result: BacktestResult) => {
     setBacktestResult(result);
   };
 
   const handleDataUpdated = () => {
-    loadCandles();
+    candlesMapRef.current.clear();
+    loadedRangeRef.current = null;
+    loadInitialCandles();
   };
+
+  const initialRange = candles.length > 0 
+    ? { from: candles[0].timestamp, to: candles[candles.length - 1].timestamp }
+    : undefined;
 
   return (
     <div className="app">
       <header className="header">
         <h1>CryptoQuant</h1>
-        <p className="subtitle">Quantitative Crypto Trading Platform</p>
+        <p className="subtitle">量化加密货币交易平台</p>
       </header>
 
       <main className="main">
@@ -80,7 +173,7 @@ function App() {
           <div className="chart-section">
             {loadingCandles && (
               <div className="loading-overlay">
-                <p>Loading candles...</p>
+                <p>加载行情数据...</p>
               </div>
             )}
             {candleError && (
@@ -89,11 +182,16 @@ function App() {
               </div>
             )}
             {!loadingCandles && !candleError && candles.length > 0 && (
-              <CandlestickChart candles={candles} height={450} />
+              <CandlestickChart 
+                candles={candles} 
+                height={450} 
+                onVisibleRangeChange={handleVisibleRangeChange}
+                initialRange={initialRange}
+              />
             )}
             {!loadingCandles && !candleError && candles.length === 0 && (
               <div className="placeholder-overlay">
-                <p>Select a pair and timeframe to view chart</p>
+                <p>选择交易对和时间周期以查看图表</p>
               </div>
             )}
           </div>

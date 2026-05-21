@@ -198,6 +198,7 @@ class SQLiteRepository(DataRepository):
         since: Optional[int] = None,
         until: Optional[int] = None,
         limit: Optional[int] = None,
+        order: Optional[str] = "asc",
     ) -> List[OHLCVCandle]:
         """Load candles as OHLCVCandle objects.
 
@@ -207,9 +208,10 @@ class SQLiteRepository(DataRepository):
             since: Start timestamp (ms, inclusive)
             until: End timestamp (ms, inclusive)
             limit: Maximum number of candles
+            order: Sort order ("asc" for oldest-first, "desc" for newest-first)
 
         Returns:
-            List of OHLCVCandle sorted by timestamp ascending
+            List of OHLCVCandle sorted by timestamp in specified order
         """
         with self.Session() as session:
             stmt = select(CandleModel).where(
@@ -222,7 +224,10 @@ class SQLiteRepository(DataRepository):
             if until is not None:
                 stmt = stmt.where(CandleModel.timestamp <= until)
 
-            stmt = stmt.order_by(CandleModel.timestamp.asc())
+            if order == "desc":
+                stmt = stmt.order_by(CandleModel.timestamp.desc())
+            else:
+                stmt = stmt.order_by(CandleModel.timestamp.asc())
 
             if limit is not None:
                 stmt = stmt.limit(limit)

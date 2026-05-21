@@ -1,16 +1,30 @@
-import { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType, IChartApi } from 'lightweight-charts';
-import { Candle } from '../api';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import type { IChartApi, IRange, Time } from 'lightweight-charts';
+import type { Candle } from '../api';
 
 interface ChartProps {
   candles: Candle[];
   height?: number;
+  onVisibleRangeChange?: (range: { from: number; to: number } | null) => void;
+  initialRange?: { from: number; to: number };
 }
 
-export function CandlestickChart({ candles, height = 400 }: ChartProps) {
+export function CandlestickChart({ candles, height = 400, onVisibleRangeChange, initialRange }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<any>(null);
+  const loadedDataRef = useRef<Map<number, Candle>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
+
+  const handleVisibleRangeChange = useCallback((range: IRange<Time> | null) => {
+    if (!range || !onVisibleRangeChange) return;
+    const from = typeof range.from === 'number' ? range.from * 1000 : 0;
+    const to = typeof range.to === 'number' ? range.to * 1000 : 0;
+    if (from > 0 && to > 0) {
+      onVisibleRangeChange({ from, to });
+    }
+  }, [onVisibleRangeChange]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -38,7 +52,7 @@ export function CandlestickChart({ candles, height = 400 }: ChartProps) {
 
     chartRef.current = chart;
 
-    const candlestickSeries = chart.addCandlestickSeries({
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#26a69a',
       downColor: '#ef5350',
       borderDownColor: '#ef5350',
@@ -47,16 +61,12 @@ export function CandlestickChart({ candles, height = 400 }: ChartProps) {
       wickUpColor: '#26a69a',
     });
 
-    const data = candles.map((c) => ({
-      time: Math.floor(c.timestamp / 1000) as unknown as number,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    }));
+    seriesRef.current = candlestickSeries;
 
-    candlestickSeries.setData(data);
-    chart.timeScale().fitContent();
+    if (onVisibleRangeChange) {
+      chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+    }
+
     setIsLoading(false);
 
     const handleResize = () => {
@@ -71,9 +81,39 @@ export function CandlestickChart({ candles, height = 400 }: ChartProps) {
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (onVisibleRangeChange) {
+        chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+      }
       chart.remove();
     };
-  }, [candles, height]);
+  }, [height, handleVisibleRangeChange, onVisibleRangeChange]);
+
+  useEffect(() => {
+    if (!seriesRef.current || candles.length === 0) return;
+
+    candles.forEach((c) => {
+      loadedDataRef.current.set(c.timestamp, c);
+    });
+
+    const data = candles.map((c) => ({
+      time: Math.floor(c.timestamp / 1000) as unknown as number,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+
+    seriesRef.current.setData(data);
+
+    if (initialRange && chartRef.current) {
+      chartRef.current.timeScale().setVisibleRange({
+        from: Math.floor(initialRange.from / 1000) as Time,
+        to: Math.floor(initialRange.to / 1000) as Time,
+      });
+    } else {
+      chartRef.current?.timeScale().fitContent();
+    }
+  }, [candles, initialRange]);
 
   if (isLoading && candles.length === 0) {
     return (
@@ -87,7 +127,7 @@ export function CandlestickChart({ candles, height = 400 }: ChartProps) {
           color: '#d1d4dc',
         }}
       >
-        Loading chart...
+        加载图表...
       </div>
     );
   }
@@ -131,7 +171,7 @@ export function EquityChart({ timestamps, values, height = 200 }: EquityChartPro
 
     chartRef.current = chart;
 
-    const lineSeries = chart.addLineSeries({
+    const lineSeries = chart.addSeries(LineSeries, {
       color: '#2962ff',
       lineWidth: 2,
     });

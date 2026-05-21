@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getStrategies, StrategyInfo, runBacktest, BacktestResult } from '../api';
+import { getStrategies, runBacktest } from '../api';
+import type { StrategyInfo, BacktestResult } from '../api';
 
 interface StrategyPanelProps {
   selectedPair: string;
@@ -32,7 +33,7 @@ export function StrategyPanel({
 
   const handleRunBacktest = async () => {
     if (!selectedPair || !selectedTimeframe || !selectedStrategy) {
-      setError('Please select pair, timeframe, and strategy');
+      setError('请选择交易对、时间周期和策略');
       return;
     }
 
@@ -60,10 +61,10 @@ export function StrategyPanel({
 
   return (
     <div className="panel">
-      <h3>Backtest</h3>
+      <h3>回测</h3>
 
       <div className="form-row">
-        <label>Strategy:</label>
+        <label>策略:</label>
         <select
           value={selectedStrategy}
           onChange={(e) => setSelectedStrategy(e.target.value)}
@@ -77,7 +78,7 @@ export function StrategyPanel({
       </div>
 
       <div className="form-row">
-        <label>Days:</label>
+        <label>天数:</label>
         <input
           type="number"
           value={days}
@@ -88,7 +89,7 @@ export function StrategyPanel({
       </div>
 
       <div className="form-row">
-        <label>Initial Cash:</label>
+        <label>初始资金:</label>
         <input
           type="number"
           value={initialCash}
@@ -99,7 +100,7 @@ export function StrategyPanel({
       </div>
 
       <div className="form-row">
-        <label>Commission:</label>
+        <label>手续费:</label>
         <input
           type="number"
           value={commission}
@@ -111,7 +112,7 @@ export function StrategyPanel({
       </div>
 
       <div className="form-row">
-        <label>Slippage:</label>
+        <label>滑点:</label>
         <input
           type="number"
           value={slippage}
@@ -129,7 +130,7 @@ export function StrategyPanel({
         disabled={loading || !selectedPair || !selectedTimeframe}
         className="btn-primary"
       >
-        {loading ? 'Running...' : 'Run Backtest'}
+        {loading ? '运行中...' : '运行回测'}
       </button>
     </div>
   );
