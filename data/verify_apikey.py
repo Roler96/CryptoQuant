@@ -147,7 +147,7 @@ def check_public_connectivity(sandbox: bool) -> bool:
 
         server_time = exchange.fetch_time()
         import datetime
-        dt = datetime.datetime.fromtimestamp(server_time / 1000, tz=datetime.timezone.utc)
+        dt = datetime.datetime.fromtimestamp(server_time / 1000, tz=datetime.timezone(datetime.timedelta(hours=8)))
         print(green(f"  OK:   OKX server time = {dt.isoformat()}"))
         if hasattr(exchange, "close"):
             exchange.close()

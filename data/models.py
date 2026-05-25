@@ -5,11 +5,11 @@ Core OHLCV candle model aligned with the SQLite schema:
 
 Field names match DB column names exactly -- no mapping layer needed.
 All prices/volumes use Decimal for exact precision.
-Timestamps are milliseconds (Unix epoch). iso_time is UTC ISO 8601.
+Timestamps are milliseconds (Unix epoch). iso_time is UTC+8 (Asia/Shanghai).
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 
@@ -40,9 +40,9 @@ class OHLCVCandle:
 
     @property
     def iso_time(self) -> str:
-        """ISO 8601 UTC string (e.g., '2024-05-12T14:00:00+00:00').
+        """ISO 8601 UTC+8 string (e.g., '2024-05-12T22:00:00+08:00').
 
-        Derived from timestamp, always UTC. Stored as iso_time column in DB.
+        Derived from timestamp, always UTC+8. Stored as iso_time column in DB.
         """
-        dt = datetime.fromtimestamp(self.timestamp / 1000, tz=timezone.utc)
+        dt = datetime.fromtimestamp(self.timestamp / 1000, tz=timezone(timedelta(hours=8)))
         return dt.isoformat()

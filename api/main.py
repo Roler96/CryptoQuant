@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -169,7 +169,7 @@ async def get_stats(pair: str, timeframe: str):
     def ts_to_iso(ts: Optional[int]) -> Optional[str]:
         if ts is None:
             return None
-        return datetime.utcfromtimestamp(ts / 1000).isoformat()
+        return datetime.fromtimestamp(ts / 1000, tz=timezone(timedelta(hours=8))).isoformat()
     
     return StatsResponse(
         pair=pair_db,
