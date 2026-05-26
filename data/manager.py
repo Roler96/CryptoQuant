@@ -509,6 +509,98 @@ class OKXClient:
 
         return all_candles
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0)
+    def fetch_trading_fee(
+        self,
+        symbol: str,
+        market_type: str = "spot",
+    ) -> Dict[str, float]:
+        """Fetch trading fee rate for a specific symbol.
+
+        Args:
+            symbol: Trading pair (e.g., "BTC/USDT")
+            market_type: Market type - "spot" or "swap" (futures)
+
+        Returns:
+            Dict with 'maker' and 'taker' fee rates as decimals
+            Example: {"maker": 0.0008, "taker": 0.001}
+
+        Raises:
+            OKXAPIError: On API errors
+
+        Example:
+            >>> client = OKXClient()
+            >>> fees = client.fetch_trading_fee("BTC/USDT")
+            >>> print(f"Maker: {fees['maker']:.4%}, Taker: {fees['taker']:.4%}")
+        """
+        symbol = self._normalize_symbol(symbol)
+
+        try:
+            # OKX provides fee rates via fetchTradingFees or fetchTradingFee
+            # ccxt unified interface: fetchTradingFee(symbol) or fetchTradingFees()
+            if hasattr(self.exchange, 'fetchTradingFee'):
+                fee_info = self.exchange.fetchTradingFee(symbol)
+            else:
+                # Fallback: fetch all fees and filter
+                fees = self.exchange.fetchTradingFees()
+                fee_info = fees.get(symbol, {})
+
+            # Extract maker and taker rates
+            maker_fee = fee_info.get('maker', fee_info.get('make', 0.001))
+            taker_fee = fee_info.get('taker', fee_info.get('take', 0.001))
+
+            logger.info(
+                "trading_fee_fetched",
+                symbol=symbol,
+                market_type=market_type,
+                maker=maker_fee,
+                taker=taker_fee,
+            )
+
+            return {
+                "maker": float(maker_fee),
+                "taker": float(taker_fee),
+            }
+
+        except Exception as e:
+            logger.error("fetch_trading_fee_failed", symbol=symbol, error=str(e))
+            # Return default OKX fees if API fails
+            # OKX default: spot maker 0.08%, taker 0.1%; swap maker 0.02%, taker 0.05%
+            default_fees = {
+                "spot": {"maker": 0.0008, "taker": 0.001},
+                "swap": {"maker": 0.0002, "taker": 0.0005},
+            }
+            return default_fees.get(market_type, default_fees["spot"])
+
+    def get_effective_commission(
+        self,
+        symbol: str = "BTC/USDT",
+        market_type: str = "spot",
+        use_taker: bool = True,
+    ) -> float:
+        """Get effective commission rate for backtesting.
+
+        For realistic backtesting, use taker fee (executed immediately).
+        For limit order strategies, use maker fee.
+
+        Args:
+            symbol: Trading pair (default: "BTC/USDT")
+            market_type: "spot" or "swap" (futures)
+            use_taker: True for taker fee (immediate execution),
+                       False for maker fee (limit orders)
+
+        Returns:
+            Commission rate as decimal (e.g., 0.001 = 0.1%)
+
+        Example:
+            >>> client = OKXClient()
+            >>> # Taker fee for market orders
+            >>> commission = client.get_effective_commission("BTC/USDT", use_taker=True)
+            >>> config = BacktestConfig(commission=commission)
+        """
+        fees = self.fetch_trading_fee(symbol, market_type)
+        return fees["taker"] if use_taker else fees["maker"]
+
     def close(self):
         """Close exchange connection and cleanup resources."""
         try:
