@@ -167,13 +167,25 @@ def download(
         )
     else:
         # Range mode: use specified time range
-        # Parse start date
+        # Parse start date (default: get earliest valid timestamp from server)
         if start:
             try:
                 start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 since_ms = int(start_dt.timestamp() * 1000)
             except ValueError:
                 raise ValueError(f"Invalid start date format: {start}. Use YYYY-MM-DD.")
+        else:
+            # Get earliest valid timestamp from server
+            client = OKXClient(sandbox=sandbox)
+            try:
+                since_ms = client.get_earliest_valid_timestamp(pair, timeframe)
+                if since_ms is None:
+                    raise ValueError(
+                        f"Unable to determine earliest valid timestamp for {pair}/{timeframe}. "
+                        f"Please specify --start date manually."
+                    )
+            finally:
+                client.close()
 
         # Parse end date (default: today)
         if end:
@@ -193,7 +205,7 @@ def download(
             "download_range_start",
             pair=pair,
             timeframe=timeframe,
-            start=start or "earliest",
+            start=start or "earliest (from server)",
             end=end or "today",
         )
 

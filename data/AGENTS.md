@@ -8,8 +8,8 @@
 
 OKX exchange integration via ccxt. Core OHLCV candle model with SQLite-backed
 unified repository for persistence. Standalone validation module for data quality.
-CLI-based downloader supports incremental, full, and backfill modes with automatic
-pagination and since-probing.
+CLI-based downloader supports time range download with automatic pagination and
+since-probing. Database path configurable via environment variable.
 
 ## STRUCTURE
 
@@ -22,6 +22,7 @@ data/
 │                         #   - OKXAPIError exception hierarchy
 │                         #   - fetch_ohlcv / fetch_ohlcv_history
 │                         #   - since-probing mechanism
+│                         #   - get_earliest_valid_timestamp
 ├── validation.py         # Data quality validation (722 lines)
 │                         #   - validate_candle / validate_candles_batch
 │                         #   - ValidationIssue / ValidationReport
@@ -29,17 +30,19 @@ data/
 │                         #   - check_price_anomalies
 │                         #   - check_volume_validation
 │                         #   - auto_repair_data
-├── downloader.py         # Historical download orchestrator (426 lines)
-│                         #   - download() function
+├── downloader.py         # Historical download orchestrator (~360 lines)
+│                         #   - download() function (range/update modes)
 │                         #   - DownloadResult dataclass
+│                         #   - Database path from env variable
 │                         #   - CLI entry point
 ├── verify_apikey.py      # 3-step API key verification (263 lines)
 ├── repository/           # Unified data access layer
 │   ├── __init__.py       # Singleton factory (47 lines)
 │   ├── base.py           # DataRepository abstract interface (207 lines)
-│   └── sqlite.py         # SQLite implementation (359 lines)
+│   └── sqlite.py         # SQLite implementation (364 lines)
 │                         #   - WAL mode + PRAGMA optimizations
 │                         #   - Upsert via INSERT OR REPLACE
+│                         #   - Default path: db/cryptoquant.db
 └── cryptoquant.db        # SQLite database (gitignored)
 ```
 
@@ -535,9 +538,22 @@ class DownloadResult:
     total_fetched: int     # Total candles from API
     valid_count: int       # Passed validation
     rejected_count: int    # Failed validation
-    start_time: str        # First candle time (human-readable)
-    end_time: str          # Last candle time (human-readable)
-    mode: str              # "incremental" | "full" | "backfill"
+    start_time: str        # First candle time (human-readable, UTC+8)
+    end_time: str          # Last candle time (human-readable, UTC+8)
+```
+
+### Database Path Configuration
+
+Database path priority:
+1. `--db` CLI parameter (highest)
+2. `DATABASE_URL` environment variable
+3. Default: `db/cryptoquant.db` (lowest)
+
+```bash
+# .env file
+DATABASE_URL=sqlite:///db/cryptoquant.db
+# or
+DATABASE_URL=db/cryptoquant.db
 ```
 
 ### download() Function
@@ -548,11 +564,11 @@ from data.downloader import download
 result = download(
     pair="BTC/USDT",
     timeframe="1h",
-    days=365,              # Number of days (default 365)
-    since=None,            # Override: "YYYY-MM-DD" format
-    incremental=True,      # Only fetch new data (default)
-    backfill=None,         # None, -1 (unlimited), or N days
-    sandbox=True,          # Use sandbox environment
+    start=None,            # Optional: "YYYY-MM-DD" (default: earliest from server)
+    end=None,              # Optional: "YYYY-MM-DD" (default: today)
+    update=False,          # Update mode: fetch from latest stored to today
+    db_path=None,          # Optional: custom database path
+    sandbox=False,         # Use production environment (default)
 )
 ```
 
@@ -560,17 +576,31 @@ result = download(
 
 | Mode | Flag | Behavior |
 |------|------|----------|
-| **Incremental** | (default) | Fetch data after `latest_timestamp` in DB |
-| **Full** | `--full` | Re-download from `--since` or `now - --days` |
-| **Backfill N** | `--backfill N` | Fetch N days before `earliest_timestamp` |
-| **Backfill unlimited** | `--backfill` | Fetch from beginning of available data |
+| **Range** | (default) | Download from `--start` (earliest) to `--end` (today) |
+| **Update** | `--update` | Fetch data from latest stored timestamp to today |
 
 **Key behaviors:**
-- `--backfill` requires existing data in DB (errors if none found)
-- `--backfill` without argument auto-probes for earliest valid `since`
-- `--days` default is 365 regardless of timeframe
-- `--since YYYY-MM-DD` overrides `--days`
-- Three modes are mutually exclusive
+- `--start` defaults to earliest valid timestamp from server (auto-detected)
+- `--end` defaults to today (inclusive)
+- `--update` requires existing data in DB (errors if none found)
+- `--update` and `--start` are mutually exclusive
+- Database path configurable via `DATABASE_URL` environment variable
+
+### get_earliest_valid_timestamp() — Server Earliest Data Detection
+
+```python
+from data.manager import OKXClient
+
+client = OKXClient(sandbox=False)
+earliest_ts = client.get_earliest_valid_timestamp("BTC/USDT", "1h")
+# Returns: earliest valid timestamp in milliseconds (binary search)
+client.close()
+```
+
+**How it works:**
+- Binary search between 2015-01-01 and current time
+- Finds earliest timestamp that returns data from OKX
+- Useful for determining when a pair was first listed
 
 ---
 
@@ -648,14 +678,22 @@ from data import (
 ### Download Data
 
 ```bash
-# Incremental (default): fetch new data after latest stored
-python -m data.downloader --pair BTC/USDT --timeframe 1h --days 365
+# Download all available data (earliest to today)
+python -m data.downloader --pair BTC/USDT --timeframe 1h
 
-# From specific date
-python -m data.downloader --pair ETH/USDT --timeframe 4h --since 2024-01-01
+# Update data (from latest stored to today)
+python -m data.downloader --pair BTC/USDT --timeframe 1h --update
 
-# Full re-download from start date
-python -m data.downloader --pair BTC/USDT --timeframe 1h --full --sandbox
+# Download with specific time range
+python -m data.downloader --pair ETH/USDT --timeframe 4h --start 2024-01-01 --end 2024-12-31
+python -m data.downloader --pair BTC/USDT --timeframe 1h --start 2024-01-01
+python -m data.downloader --pair BTC/USDT --timeframe 1h --end 2024-12-31
+
+# Custom database path
+python -m data.downloader --pair BTC/USDT --timeframe 1h --db custom.db
+
+# Sandbox environment (default is production)
+python -m data.downloader --pair BTC/USDT --timeframe 1h --sandbox
 
 # Backfill N days before earliest stored
 python -m data.downloader --pair BTC/USDT --timeframe 1h --backfill 180
@@ -701,8 +739,14 @@ stats = repo.get_stats("BTC/USDT", "1h")
 
 # Download via orchestrator
 from data.downloader import download
-result = download(pair="BTC/USDT", timeframe="1h", days=365, sandbox=True)
+result = download(pair="BTC/USDT", timeframe="1h", sandbox=False)
 print(result)  # DownloadResult(...)
+
+# Get earliest valid timestamp from server
+from data.manager import OKXClient
+client = OKXClient()
+earliest = client.get_earliest_valid_timestamp("BTC/USDT", "1h")
+client.close()
 ```
 
 ---
@@ -712,6 +756,7 @@ print(result)  # DownloadResult(...)
 **FORBIDDEN:**
 - Using `float` for prices/volumes (precision loss, MUST use `Decimal`)
 - Hardcoding API credentials (use `.env` + python-dotenv)
+- Hardcoding database path (use `DATABASE_URL` environment variable)
 - Calling `reset_repository()` in production code (tests only)
 - Using `xxx_price` field names (e.g. `close_price`) — use `open/high/low/close`
 - Using `OrderBook`/`Ticker` from `data.models` (not defined, use `Optional[Dict[str, Any]]`)
@@ -728,9 +773,13 @@ print(result)  # DownloadResult(...)
 ## NOTES
 
 - **Security:** API keys in `.env` (never committed). See `.env.example` template
-- **Data Storage:** SQLite at `data/cryptoquant.db` (WAL mode, single `candles` table)
+- **Data Storage:** SQLite at `db/cryptoquant.db` (WAL mode, single `candles` table)
+  - Configurable via `DATABASE_URL` environment variable
+  - Default path: `db/cryptoquant.db`
 - **Exchange:** OKX only (ccxt allows others but not implemented)
 - **Proxy:** WSL/corporate environments need `HTTPS_PROXY=http://host:port`
-- **Mode:** Sandbox default (use `--no-sandbox` for production)
+- **Mode:** Production default (use `--sandbox` for testnet)
 - **Since-probing:** Handles OKX's empty response for pre-listing dates
+- **Earliest detection:** `get_earliest_valid_timestamp()` finds earliest valid data via binary search
 - **Dedup:** Composite PK + upsert = true deduplication (no duplicate timestamps)
+- **Timezone:** Internal calculations use UTC; display times use UTC+8 (Asia/Shanghai)

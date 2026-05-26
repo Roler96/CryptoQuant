@@ -6,6 +6,7 @@ Rate limiting is handled by ccxt's built-in mechanism.
 
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 from typing import Any, Dict, List, Optional
@@ -347,6 +348,56 @@ class OKXClient:
         # Fallback: assume 1h
         return 3_600_000
 
+    def get_earliest_valid_timestamp(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+    ) -> Optional[int]:
+        """Get the earliest valid timestamp for a trading pair.
+
+        Uses binary search to find the earliest timestamp that returns data
+        from OKX. This is useful for determining when a pair was first listed.
+
+        Args:
+            symbol: Trading pair (e.g., "BTC/USDT")
+            timeframe: Candle timeframe (default: "1h")
+
+        Returns:
+            Earliest valid timestamp in milliseconds, or None if no data exists
+        """
+        # Use 2015-01-01 as a safe early date (before most crypto exchanges)
+        early_date = datetime(2015, 1, 1, tzinfo=timezone.utc)
+        since_ms = int(early_date.timestamp() * 1000)
+        
+        # Use current time as the upper bound
+        until_ms = int(time.time() * 1000)
+        
+        logger.info(
+            "get_earliest_valid_timestamp_start",
+            symbol=symbol,
+            timeframe=timeframe,
+            since=since_ms,
+            until=until_ms,
+        )
+        
+        result = self._probe_valid_since(symbol, timeframe, since_ms, until_ms)
+        
+        if result is not None:
+            logger.info(
+                "get_earliest_valid_timestamp_found",
+                symbol=symbol,
+                timeframe=timeframe,
+                earliest_timestamp=result,
+            )
+        else:
+            logger.warning(
+                "get_earliest_valid_timestamp_not_found",
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+        
+        return result
+
     def fetch_ohlcv_history(
         self,
         symbol: str,
@@ -441,6 +492,7 @@ class OKXClient:
                 timeframe=timeframe,
                 total_so_far=len(all_candles),
                 next_cursor=cursor,
+                next_cursor_utc8=datetime.fromtimestamp(cursor / 1000, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"),
             )
 
             time.sleep(sleep_between_pages)
