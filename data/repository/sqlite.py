@@ -38,7 +38,7 @@ logger = structlog.get_logger(__name__)
 Base = declarative_base()
 
 # Default SQLite database path
-DEFAULT_DB_PATH = "data/cryptoquant.db"
+DEFAULT_DB_PATH = "db/cryptoquant.db"
 
 
 class CandleModel(Base):

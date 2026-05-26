@@ -3,28 +3,27 @@
 Combines OKXClient (API + pagination), SQLiteRepository (storage),
 and validation (data quality) into a single download workflow.
 
-Download modes:
-  - incremental (default): fetch new data after the latest stored timestamp
-  - full: re-download from the specified start date
-  - backfill: extend history backwards before the earliest stored timestamp
+Downloads data within specified time range:
+  - --start: If not specified, downloads from earliest available data
+  - --end: If not specified, downloads until today
 
 Usage:
-    python -m data.downloader --pair BTC/USDT --timeframe 1h --days 365
-    python -m data.downloader --pair ETH/USDT --timeframe 4h --since 2024-01-01
-    python -m data.downloader --pair BTC/USDT --timeframe 1h --full --sandbox
-    python -m data.downloader --pair BTC/USDT --timeframe 1h --backfill 180
-    python -m data.downloader --pair BTC/USDT --timeframe 1h --backfill
+    python -m data.downloader --pair BTC/USDT --timeframe 1h
+    python -m data.downloader --pair ETH/USDT --timeframe 4h --start 2024-01-01 --end 2024-12-31
+    python -m data.downloader --pair BTC/USDT --timeframe 1h --start 2024-01-01
+    python -m data.downloader --pair BTC/USDT --timeframe 1h --end 2024-12-31
 """
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 # Display timezone: UTC+8 (Asia/Shanghai)
 TZ_UTC8 = timezone(timedelta(hours=8))
-from typing import Optional
 
 import structlog
 from dotenv import load_dotenv
@@ -43,6 +42,34 @@ from data.validation import validate_candles_batch
 logger = structlog.get_logger(__name__)
 
 
+def _get_db_path(db_path: Optional[str] = None) -> Optional[str]:
+    """Get database path from parameter, environment variable, or default.
+
+    Priority:
+    1. Explicit parameter (highest)
+    2. DATABASE_URL environment variable
+    3. Default: db/cryptoquant.db
+
+    Args:
+        db_path: Explicit database path parameter
+
+    Returns:
+        Database path string or None (to use default)
+    """
+    if db_path is not None:
+        return db_path
+
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        # Parse DATABASE_URL (e.g., "sqlite:///db/cryptoquant.db")
+        if db_url.startswith("sqlite:///"):
+            return db_url.replace("sqlite:///", "")
+        else:
+            return db_url
+
+    return "db/cryptoquant.db"  # Default path
+
+
 @dataclass(frozen=True)
 class DownloadResult:
     """Result of a single download operation."""
@@ -54,19 +81,17 @@ class DownloadResult:
     rejected_count: int
     start_time: str   # human-readable
     end_time: str     # human-readable
-    mode: str         # "incremental" | "full" | "backfill"
 
     def __str__(self) -> str:
         return (
-            f"DownloadResult({self.pair}/{self.timeframe} "
-            f"[{self.mode}]: "
+            f"DownloadResult({self.pair}/{self.timeframe}: "
             f"fetched={self.total_fetched} valid={self.valid_count} "
             f"rejected={self.rejected_count} "
             f"range={self.start_time} ~ {self.end_time})"
         )
 
 
-def _empty_result(pair: str, timeframe: str, mode: str) -> DownloadResult:
+def _empty_result(pair: str, timeframe: str) -> DownloadResult:
     """Build a result for the case where no new data was found."""
     return DownloadResult(
         pair=pair,
@@ -76,230 +101,117 @@ def _empty_result(pair: str, timeframe: str, mode: str) -> DownloadResult:
         rejected_count=0,
         start_time="N/A",
         end_time="N/A",
-        mode=mode,
     )
 
 
 def download(
     pair: str,
     timeframe: str = "1h",
-    since: Optional[str] = None,
-    incremental: bool = True,
-    backfill: Optional[int] = None,
-    sandbox: bool = True,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    update: bool = False,
+    db_path: Optional[str] = None,
+    sandbox: bool = False,
 ) -> DownloadResult:
     """Download historical OHLCV data and save to SQLite.
 
-    Three download modes:
-      - incremental (default): fetch data after the latest stored timestamp
-      - full (--full flag): re-download from the specified start date (requires --since)
-      - backfill (--backfill N): extend history N days before the earliest
-        stored timestamp
+    Two download modes:
+      - update mode (--update): fetch data from latest stored timestamp to today
+      - range mode (default): download data within specified time range
 
     Args:
         pair: Trading pair (e.g., "BTC/USDT")
         timeframe: Candle timeframe (e.g., "1h", "4h", "1d")
-        since: Start date as "YYYY-MM-DD". Required for --full mode.
-               Optional for incremental (defaults to latest stored timestamp).
-        incremental: Only fetch data after the latest stored timestamp
-        backfill: Number of days to extend backwards (None = not requested,
-            -1 = unlimited, >0 = N days back)
-        sandbox: Use OKX sandbox environment
+        start: Start date as "YYYY-MM-DD" (default: earliest available data)
+        end: End date as "YYYY-MM-DD" (default: today)
+        update: Update mode - fetch from latest stored timestamp to today
+        db_path: SQLite database path (optional, reads from DATABASE_URL env or uses default)
+        sandbox: Use OKX sandbox environment (default: False, use production)
 
     Returns:
         DownloadResult with download statistics
 
     Raises:
-        ValueError: If parameters are invalid or incompatible
+        ValueError: If date format is invalid or no data found in update mode
     """
-    repo = get_repository()
+    # Get database path from parameter, env, or default
+    actual_db_path = _get_db_path(db_path)
+    repo = get_repository(db_path=actual_db_path)
 
-    # ── Backfill mode ─────────────────────────────────────────────────
-    if backfill is not None:
-        return _download_backfill(repo, pair, timeframe, backfill, sandbox)
+    # Parse time range parameters
+    since_ms = None
+    until_ms = None
 
-    # ── 1. Validate since parameter for full mode ────────────────────────
-    if not incremental and since is None:
-        raise ValueError("--full mode requires --since parameter")
-
-    # ── 2. Calculate target start time ────────────────────────────────
-    if since:
-        try:
-            dt = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            target_since_ms = int(dt.timestamp() * 1000)
-        except ValueError:
-            raise ValueError(f"Invalid date format: {since}. Use YYYY-MM-DD.")
-    else:
-        # Incremental mode without --since: start from latest stored timestamp
-        target_since_ms = None
-
-    # ── 3. Determine actual start time (incremental vs full) ──────────
-    mode = "full"
-    actual_since_ms = target_since_ms
-
-    if incremental:
+    if update:
+        # Update mode: fetch from latest stored timestamp to today
         latest_ts = repo.get_latest_timestamp(pair, timeframe)
-        if latest_ts is not None:
-            if target_since_ms is not None and latest_ts > target_since_ms:
-                actual_since_ms = latest_ts + 1  # Start one ms after existing data
-            elif target_since_ms is None:
-                actual_since_ms = latest_ts + 1  # No --since, start from latest
-            else:
-                actual_since_ms = target_since_ms  # --since is earlier than latest
-            mode = "incremental"
-        elif target_since_ms is None:
-            # No existing data and no --since: cannot proceed
+        if latest_ts is None:
             raise ValueError(
                 f"No existing data for {pair}/{timeframe}. "
-                f"Use --since to specify start date for initial download."
+                f"Use --start to specify start date for initial download."
             )
-            latest_dt = datetime.fromtimestamp(latest_ts / 1000, tz=TZ_UTC8)
-            logger.info(
-                "download_incremental",
-                pair=pair,
-                timeframe=timeframe,
-                existing_latest=latest_dt.isoformat(),
-            )
-
-    # ── 3. Fetch data from OKX ────────────────────────────────────────
-    logger.info(
-        "download_start",
-        pair=pair,
-        timeframe=timeframe,
-        since_ms=actual_since_ms,
-        mode=mode,
-    )
-
-    client = OKXClient(sandbox=sandbox)
-    try:
-        candles = client.fetch_ohlcv_history(
-            symbol=pair,
-            timeframe=timeframe,
-            since=actual_since_ms,
-        )
-    finally:
-        client.close()
-
-    if not candles:
-        logger.info("download_no_new_data", pair=pair, timeframe=timeframe)
-        return _empty_result(pair, timeframe, mode)
-
-    # ── 4. Validate ───────────────────────────────────────────────────
-    valid, rejected = validate_candles_batch(candles)
-
-    if rejected:
-        logger.warning(
-            "download_rejected_candles",
-            pair=pair,
-            timeframe=timeframe,
-            rejected_count=len(rejected),
-            sample_reasons=[r[1] for r in rejected[:3]],
-        )
-
-    # ── 5. Save to SQLite ─────────────────────────────────────────────
-    if valid:
-        repo.save_candles(valid, pair, timeframe)
+        since_ms = latest_ts + 1  # Start one ms after existing data
+        
+        # End date: today
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = end_dt + timedelta(days=1)
+        until_ms = int(end_dt.timestamp() * 1000) - 1
+        
+        latest_dt = datetime.fromtimestamp(latest_ts / 1000, tz=TZ_UTC8)
         logger.info(
-            "download_saved",
+            "download_update_start",
             pair=pair,
             timeframe=timeframe,
-            count=len(valid),
+            existing_latest=latest_dt.isoformat(),
+            end="today",
         )
-
-    # ── 6. Build result ───────────────────────────────────────────────
-    first_ts = candles[0].timestamp
-    last_ts = candles[-1].timestamp
-    start_dt = datetime.fromtimestamp(first_ts / 1000, tz=TZ_UTC8)
-    end_dt = datetime.fromtimestamp(last_ts / 1000, tz=TZ_UTC8)
-
-    result = DownloadResult(
-        pair=pair,
-        timeframe=timeframe,
-        total_fetched=len(candles),
-        valid_count=len(valid),
-        rejected_count=len(rejected),
-        start_time=start_dt.strftime("%Y-%m-%d %H:%M UTC+8"),
-        end_time=end_dt.strftime("%Y-%m-%d %H:%M UTC+8"),
-        mode=mode,
-    )
-
-    logger.info("download_complete", result=str(result))
-    return result
-
-
-def _download_backfill(
-    repo,
-    pair: str,
-    timeframe: str,
-    backfill_days: int,
-    sandbox: bool,
-) -> DownloadResult:
-    """Download older data before the earliest stored timestamp.
-
-    Finds the earliest candle in the database, calculates a target start
-    time N days before that, and fetches all candles in the range
-    [target, earliest). Uses fetch_ohlcv_history's until parameter to
-    avoid re-downloading existing data.
-
-    Args:
-        repo: DataRepository instance
-        pair: Trading pair
-        timeframe: Candle timeframe
-        backfill_days: How many days to extend backwards
-        sandbox: Use OKX sandbox environment
-
-    Returns:
-        DownloadResult with download statistics
-
-    Raises:
-        ValueError: If no existing data found (need data to backfill from)
-    """
-    mode = "backfill"
-
-    earliest_ts = repo.get_earliest_timestamp(pair, timeframe)
-    if earliest_ts is None:
-        raise ValueError(
-            f"No existing data for {pair}/{timeframe}. "
-            f"Run a normal download first before using --backfill."
-        )
-
-    earliest_dt = datetime.fromtimestamp(earliest_ts / 1000, tz=TZ_UTC8)
-
-    if backfill_days > 0:
-        # Fixed number of days back
-        target_since_dt = earliest_dt - timedelta(days=backfill_days)
     else:
-        # Unlimited (--backfill without argument): go back to before any crypto exchange existed
-        target_since_dt = datetime(2015, 1, 1, tzinfo=timezone.utc)
+        # Range mode: use specified time range
+        # Parse start date
+        if start:
+            try:
+                start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                since_ms = int(start_dt.timestamp() * 1000)
+            except ValueError:
+                raise ValueError(f"Invalid start date format: {start}. Use YYYY-MM-DD.")
 
-    target_since_ms = int(target_since_dt.timestamp() * 1000)
+        # Parse end date (default: today)
+        if end:
+            try:
+                end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise ValueError(f"Invalid end date format: {end}. Use YYYY-MM-DD.")
+        else:
+            # Default to today
+            end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Don't re-fetch the earliest candle — stop one ms before it
-    until_ms = earliest_ts - 1
+        # End date inclusive: add 1 day to include the end date's candles
+        end_dt = end_dt + timedelta(days=1)
+        until_ms = int(end_dt.timestamp() * 1000) - 1
 
-    logger.info(
-        "download_backfill_start",
-        pair=pair,
-        timeframe=timeframe,
-        existing_earliest=earliest_dt.isoformat(),
-        target_since=target_since_dt.isoformat(),
-        backfill_days=backfill_days,
-    )
+        logger.info(
+            "download_range_start",
+            pair=pair,
+            timeframe=timeframe,
+            start=start or "earliest",
+            end=end or "today",
+        )
 
+    # Fetch data from OKX
     client = OKXClient(sandbox=sandbox)
     try:
         candles = client.fetch_ohlcv_history(
             symbol=pair,
             timeframe=timeframe,
-            since=target_since_ms,
+            since=since_ms,
             until=until_ms,
         )
     finally:
         client.close()
 
     if not candles:
-        logger.info("download_backfill_no_data", pair=pair, timeframe=timeframe)
-        return _empty_result(pair, timeframe, mode)
+        logger.info("download_no_new_data", pair=pair, timeframe=timeframe, mode=mode)
+        return _empty_result(pair, timeframe)
 
     # Validate
     valid, rejected = validate_candles_batch(candles)
@@ -313,7 +225,7 @@ def _download_backfill(
             sample_reasons=[r[1] for r in rejected[:3]],
         )
 
-    # Save
+    # Save to SQLite
     if valid:
         repo.save_candles(valid, pair, timeframe)
         logger.info(
@@ -337,10 +249,9 @@ def _download_backfill(
         rejected_count=len(rejected),
         start_time=start_dt.strftime("%Y-%m-%d %H:%M UTC+8"),
         end_time=end_dt.strftime("%Y-%m-%d %H:%M UTC+8"),
-        mode=mode,
     )
 
-    logger.info("download_backfill_complete", result=str(result))
+    logger.info("download_complete", result=str(result))
     return result
 
 
@@ -349,7 +260,7 @@ def _download_backfill(
 def _print_result(result: DownloadResult) -> None:
     """Print a human-readable summary to stdout."""
     print(f"\n{'=' * 50}")
-    print(f"  Download: {result.pair} / {result.timeframe} [{result.mode.upper()}]")
+    print(f"  Download: {result.pair} / {result.timeframe}")
     print(f"{'=' * 50}")
     print(f"  Fetched:   {result.total_fetched} candles")
     print(f"  Valid:     {result.valid_count}")
@@ -371,18 +282,17 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  # Incremental download (fetch new data after latest stored)
+  # Download all available data (earliest to today)
   python -m data.downloader --pair BTC/USDT --timeframe 1h
+  python -m data.downloader --pair ETH/USDT --timeframe 4h
 
-  # Initial download with start date
-  python -m data.downloader --pair BTC/USDT --timeframe 1h --since 2024-01-01
+  # Update data (from latest stored to today)
+  python -m data.downloader --pair BTC/USDT --timeframe 1h --update
 
-  # Full re-download from specific date
-  python -m data.downloader --pair BTC/USDT --timeframe 1h --full --since 2024-01-01
-
-  # Backfill history (extend backwards)
-  python -m data.downloader --pair BTC/USDT --timeframe 1h --backfill 180
-  python -m data.downloader --pair BTC/USDT --timeframe 1h --backfill
+  # Download with specific time range
+  python -m data.downloader --pair BTC/USDT --timeframe 1h --start 2024-01-01 --end 2024-12-31
+  python -m data.downloader --pair BTC/USDT --timeframe 1h --start 2024-01-01
+  python -m data.downloader --pair BTC/USDT --timeframe 1h --end 2024-12-31
 """,
     )
     parser.add_argument(
@@ -393,26 +303,29 @@ Examples:
         "--timeframe", type=str, default="1h",
         help="Candle timeframe (default: 1h)",
     )
-    parser.add_argument(
-        "--since", type=str, metavar="YYYY-MM-DD",
-        help="Start date. Required for --full mode. Optional for incremental (defaults to latest stored)",
-    )
+    
+    # Create mutually exclusive group for update vs range mode
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "--full", action="store_true",
-        help="Re-download from --since date (requires --since)",
+        "--update", action="store_true",
+        help="Update mode: fetch data from latest stored timestamp to today",
     )
     group.add_argument(
-        "--backfill", type=int, nargs='?', const=-1, metavar="N",
-        help="Extend history backwards. --backfill alone = fill until no more data; --backfill N = N days back",
+        "--start", type=str, metavar="YYYY-MM-DD",
+        help="Start date (default: earliest available data)",
+    )
+    
+    parser.add_argument(
+        "--end", type=str, metavar="YYYY-MM-DD",
+        help="End date (default: today, inclusive)",
     )
     parser.add_argument(
-        "--sandbox", action="store_true", default=True,
-        help="Use OKX sandbox environment (default: true)",
+        "--db", type=str, metavar="PATH",
+        help="SQLite database path (default: reads from DATABASE_URL env or uses db/cryptoquant.db)",
     )
     parser.add_argument(
-        "--no-sandbox", action="store_false", dest="sandbox",
-        help="Use OKX production environment",
+        "--sandbox", action="store_true", default=False,
+        help="Use OKX sandbox environment (default: False, use production)",
     )
     args = parser.parse_args()
 
@@ -420,9 +333,10 @@ Examples:
         result = download(
             pair=args.pair,
             timeframe=args.timeframe,
-            since=args.since,
-            incremental=not args.full and args.backfill is None,
-            backfill=args.backfill,
+            start=args.start,
+            end=args.end,
+            update=args.update,
+            db_path=args.db,
             sandbox=args.sandbox,
         )
         _print_result(result)
