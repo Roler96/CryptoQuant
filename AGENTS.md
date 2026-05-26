@@ -25,18 +25,14 @@ CryptoQuant/
 ├── backtest/            # ✅ Backtesting (operational)
 │   ├── engine.py        # Backtrader integration (BacktestEngine, PandasDataFeed)
 │   ├── metrics.py       # Performance metrics (Sharpe, drawdown, win rate, etc.)
-│   ├── run.py           # CLI backtest runner
-│   └── multi_asset/     # ✅ Vectorized multi-asset backtest
-│       ├── engine.py    # MultiAssetBacktestEngine + CrossSectionalStrategy
-│       └── data_loader.py
+│   └── run.py           # CLI backtest runner
 ├── strategy/            # ✅ Strategy framework (operational)
 │   ├── base.py          # StrategyBase ABC, Signal, StrategyContext
 │   ├── cta/
 │   │   └── trend_following.py  # SMA crossover + MA/RSI/ATR/ADX
 │   ├── stat_arb/
 │   │   └── pair_trading.py     # Pair trading
-│   ├── quant/           # ✅ Cross-sectional quant strategies
-│   │   ├── cross_sectional.py  # Multi-factor (momentum, carry, size, low-vol)
+│   ├── quant/           # ✅ Quant strategies
 │   │   ├── basis_strategy.py   # Basis mean reversion
 │   │   └── funding_rate_arb.py # Cash-and-carry arbitrage
 │   └── regime/          # ✅ Market regime detection
@@ -140,7 +136,6 @@ CryptoQuant/
 - `SignalType` — `strategy/base.py` — LONG, SHORT, CLOSE_LONG, CLOSE_SHORT, HOLD
 - `StrategyContext` — `strategy/base.py` — Market data + positions
 - `TrendFollowingStrategy` — `strategy/cta/trend_following.py` — SMA crossover
-- `CrossSectionalStrategy` — `backtest/multi_asset/engine.py` — Abstract base for cross-sectional
 - `MarketRegime` — `strategy/regime/detector.py` — STRONG_TREND, RANGING, HIGH_VOLATILITY
 
 **Risk:**

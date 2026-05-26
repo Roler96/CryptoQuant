@@ -13,7 +13,7 @@ structlog.configure(
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backtest.engine import BacktestEngine, BacktestConfig
+from backtest import BacktestEngine, BacktestConfig
 from strategy.cta.trend_following import TrendFollowingStrategy
 
 # Top-ranked strategy from ga_results_2025.md

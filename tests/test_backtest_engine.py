@@ -3,7 +3,7 @@
 import unittest
 
 
-from backtest.engine import BacktestConfig, BacktestEngine, BacktestResult
+from backtest import BacktestConfig, BacktestEngine, BacktestResult
 
 
 class TestBacktestConfig(unittest.TestCase):

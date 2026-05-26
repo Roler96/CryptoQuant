@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backtest.engine import BacktestConfig, BacktestEngine
+from backtest import BacktestConfig, BacktestEngine
 
 # Search space definition
 PARAM_SPACE = {

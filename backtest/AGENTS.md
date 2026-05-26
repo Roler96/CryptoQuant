@@ -3,16 +3,13 @@
 **Module:** Historical backtesting engine  
 **Purpose:** Strategy validation with realistic commission/slippage  
 **Status:** ✅ Operational — adapted to SQLite repository  
-**Lines of Code:** 2,155 total
+**Lines of Code:** 1,426 total
 
 ## OVERVIEW
 
 Backtrader-based backtesting with custom PandasData feed from SQLite repository. 
 Data is loaded via `data.repository.get_repository().load_as_dataframe()`, which 
 returns a DataFrame with columns: `timestamp, open, high, low, close, volume`.
-
-Supports both single-asset (Backtrader event-driven) and multi-asset (vectorized) 
-backtesting modes.
 
 ## STRUCTURE
 
@@ -28,15 +25,6 @@ backtest/
 │                             #   - generate_performance_report
 ├── run.py                    # CLI runner (133 lines)
 ├── run_2024_oos.py           # 2024 out-of-sample test (68 lines)
-│
-├── multi_asset/              # Vectorized multi-asset backtesting (729 lines)
-│   ├── __init__.py           # Exports (15 lines)
-│   ├── engine.py             # MultiAssetBacktestEngine (507 lines)
-│   │                         #   - CrossSectionalStrategy base class
-│   │                         #   - Market-neutral portfolio simulation
-│   └── data_loader.py        # MultiAssetDataLoader (207 lines)
-│                             #   - Timestamp alignment, data pivoting
-│
 ├── ga_results_2025.md        # GA optimization results (research doc)
 └── AGENTS.md                 # This file
 ```
@@ -99,31 +87,6 @@ backtest/
 | `format_period()` | 57-64 | Format date range for display |
 | `run()` | 67-133 | CLI entry point, result printing |
 
-### multi_asset/engine.py (507 lines)
-
-| Class/Function | Lines | Description |
-|----------------|-------|-------------|
-| `MultiAssetBacktestConfig` | 36-46 | Config for multi-asset (exposure, concentration) |
-| `MultiAssetBacktestResult` | 49-93 | Result with equity, positions, turnover |
-| `MultiAssetBacktestEngine` | 95-465 | Vectorized backtest engine |
-| `MultiAssetBacktestEngine.run_backtest()` | 115-299 | Main loop: load → rebalance → track |
-| `_get_rebalance_timestamps()` | 301-330 | Determine rebalance points (daily/weekly) |
-| `_allocate_positions()` | 332-377 | Factor score → long/short weights |
-| `_execute_rebalance()` | 379-443 | Trade execution simulation |
-| `CrossSectionalStrategy` | 467-508 | Abstract base for cross-sectional strategies |
-| `CrossSectionalStrategy.compute_scores()` | 485-504 | MUST implement: returns factor scores |
-
-### multi_asset/data_loader.py (207 lines)
-
-| Class/Function | Lines | Description |
-|----------------|-------|-------------|
-| `MultiAssetDataLoader` | 20-149 | Multi-asset data loader |
-| `MultiAssetDataLoader.load_data()` | 35-89 | Load multi-index DataFrame |
-| `MultiAssetDataLoader.get_close_prices()` | 91-117 | Pivot → timestamp × pair matrix |
-| `MultiAssetDataLoader.get_returns()` | 119-142 | Percentage returns matrix |
-| `MultiAssetDataLoader.get_available_pairs()` | 144-149 | List pairs in repository |
-| `download_missing_pairs()` | 151-208 | Download data for missing pairs |
-
 ---
 
 ## DATA FLOW
@@ -141,22 +104,6 @@ SQLite (data/cryptoquant.db)
               → OHLCVCandle → Strategy.on_bar()
                 → Signal → order execution
                   → trades[], equity_curve[]
-```
-
-### Multi-Asset Backtest
-
-```
-SQLite (data/cryptoquant.db)
-  → MultiAssetDataLoader.get_close_prices(pairs, timeframe, start, end)
-    → DataFrame [timestamp × pair] with close prices
-      → returns = prices.pct_change()
-        → CrossSectionalStrategy.compute_scores(prices, returns, ts)
-          → factor_scores Series [pair → score]
-            → MultiAssetBacktestEngine._allocate_positions()
-              → long_weights[], short_weights[]
-                → _execute_rebalance()
-                  → trades[], positions_history[]
-                    → equity_curve[]
 ```
 
 ---
@@ -321,85 +268,6 @@ class BacktraderStrategyAdapter(bt.Strategy):
 
 ---
 
-## MULTI-ASSET BACKTESTING
-
-### MultiAssetBacktestConfig (multi_asset/engine.py:36-46)
-
-```python
-@dataclass
-class MultiAssetBacktestConfig:
-    initial_cash: float = 100000.0
-    commission: float = 0.0005        # 0.05% (OKX futures rate)
-    slippage: float = 0.0002          # 0.02%
-    gross_exposure: float = 2.0       # 100% long + 100% short
-    rebalance_frequency: str = "1d"   # Daily rebalance
-    position_concentration_limit: float = 0.15  # Max 15% per position
-    min_position_size: float = 0.01   # Min 1% position
-```
-
-### CrossSectionalStrategy (multi_asset/engine.py:467-508)
-
-Abstract base class for cross-sectional (market-neutral) strategies:
-
-```python
-class CrossSectionalStrategy:
-    def __init__(self, name: str, params: Optional[Dict[str, Any]] = None):
-        self.name = name
-        self.params = params or {}
-    
-    def compute_scores(
-        self,
-        prices: pd.DataFrame,    # Historical close prices
-        returns: pd.DataFrame,   # Historical returns
-        timestamp: int,
-    ) -> pd.Series:
-        """Return factor scores indexed by pair.
-        Higher = better (longed), Lower = worse (shorted).
-        """
-        raise NotImplementedError()
-    
-    def get_param(self, key: str, default: Any = None) -> Any: ...
-```
-
-**Implementation example:**
-
-```python
-class MomentumStrategy(CrossSectionalStrategy):
-    def compute_scores(self, prices, returns, timestamp):
-        # 20-day momentum
-        lookback = self.get_param("lookback", 20)
-        momentum = prices.iloc[-lookback:].pct_change().sum()
-        return momentum  # Higher momentum → longed
-```
-
-### MultiAssetDataLoader (multi_asset/data_loader.py:20-149)
-
-```python
-loader = MultiAssetDataLoader()
-
-# Load as multi-index DataFrame
-df = loader.load_data(
-    pairs=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
-    timeframe="1h",
-    start_date="2024-01-01",
-    end_date="2024-12-31",
-)
-# Index: (timestamp, pair), Columns: open, high, low, close, volume
-
-# Get close prices as matrix
-close_prices = loader.get_close_prices(pairs, timeframe, start, end)
-# Index: timestamp, Columns: pair names, Values: close prices
-
-# Get returns matrix
-returns = loader.get_returns(pairs, timeframe, start, end)
-# Index: timestamp, Columns: pair names, Values: pct_change()
-
-# Get available pairs
-pairs = loader.get_available_pairs()
-```
-
----
-
 ## CLI USAGE
 
 ### run.py — Single-Asset Backtest CLI
@@ -490,43 +358,6 @@ else:
     )
 ```
 
-### Multi-Asset Backtest
-
-```python
-from backtest.multi_asset import MultiAssetBacktestEngine, MultiAssetBacktestConfig
-from backtest.multi_asset.engine import CrossSectionalStrategy
-
-# Define strategy
-class MomentumStrategy(CrossSectionalStrategy):
-    def compute_scores(self, prices, returns, timestamp):
-        lookback = self.get_param("lookback", 20)
-        return prices.iloc[-lookback:].pct_change().sum()
-
-# Initialize engine
-config = MultiAssetBacktestConfig(
-    initial_cash=100000,
-    gross_exposure=2.0,  # Market-neutral
-    rebalance_frequency="1d",
-)
-engine = MultiAssetBacktestEngine(config)
-
-# Run backtest
-strategy = MomentumStrategy("momentum", {"lookback": 20})
-result = engine.run_backtest(
-    strategy=strategy,
-    pairs=["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"],
-    timeframe="1h",
-    start_date="2024-01-01",
-    end_date="2024-12-31",
-)
-
-print(f"Return: {result.total_return:.2%}")
-print(f"Sharpe: {result.sharpe_ratio:.4f}")
-print(f"Turnover: {result.turnover:.2f}")
-print(f"Long Exposure Avg: {result.long_exposure_avg:.2%}")
-print(f"Short Exposure Avg: {result.short_exposure_avg:.2%}")
-```
-
 ### Register Custom Strategy
 
 ```python
@@ -563,7 +394,6 @@ strategy = engine.load_strategy("my_strategy")
 - Survivorship bias in historical data
 - Data must exist in SQLite before backtesting (download first)
 - `PandasDataFeed` requires `timestamp` column in milliseconds
-- Multi-asset backtest assumes market-neutral (no net directional exposure)
 
 ---
 
@@ -573,7 +403,7 @@ strategy = engine.load_strategy("my_strategy")
 - **Backtrader:** Uses `bt.Cerebro` with built-in Sharpe/DrawDown analyzers
 - **Plotting:** Uses matplotlib (Agg backend for headless servers)
 - **Metrics:** Sharpe, max drawdown, total return, win rate, profit factor, Calmar
-- **Commission:** 0.1% default (OKX spot rate), 0.05% for futures (multi-asset)
+- **Commission:** 0.1% default (OKX spot rate)
 - **Timeframes:** Supports 1m, 5m, 15m, 1h, 4h, 1d, 1w
 - **Position Size:** Single-asset uses 95% of available cash
 - **Reversal:** Handles position reversal (long→short, short→long) cleanly
@@ -603,12 +433,5 @@ from backtest import (
     SHARPE_THRESHOLD,
     MAX_DRAWDOWN_THRESHOLD,
     WIN_RATE_THRESHOLD,
-)
-
-from backtest.multi_asset import (
-    MultiAssetBacktestEngine,
-    MultiAssetBacktestConfig,
-    MultiAssetBacktestResult,
-    MultiAssetDataLoader,
 )
 ```

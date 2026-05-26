@@ -10,10 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# Support running as `python backtest/run.py` (add project root to sys.path)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from backtest.engine import BacktestConfig, BacktestEngine
+from backtest import BacktestConfig, BacktestEngine
 
 
 def parse_args(argv=None):

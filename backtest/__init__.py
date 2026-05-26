@@ -5,16 +5,14 @@ Provides backtesting capabilities through Backtrader integration:
 - BacktestConfig: Configuration dataclass for backtest parameters
 - BacktestResult: Result container for backtest outputs
 - PandasDataFeed: Custom data feed for DataFrames from SQLite repository
+- BacktraderStrategyAdapter: Bridge between StrategyBase and Backtrader
 - Performance metrics for result analysis
 """
 
-from backtest.engine import (
-    BacktestConfig,
-    BacktestEngine,
-    BacktestResult,
-    BacktraderStrategyAdapter,
-    PandasDataFeed,
-)
+from backtest.adapter import BacktraderStrategyAdapter
+from backtest.data_feed import PandasDataFeed
+from backtest.engine import BacktestEngine
+from backtest.models import BacktestConfig, BacktestResult
 from backtest.metrics import (
     SHARPE_THRESHOLD,
     MAX_DRAWDOWN_THRESHOLD,

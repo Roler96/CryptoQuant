@@ -11,7 +11,7 @@ from pydantic import BaseModel
 import structlog
 
 from data.repository import get_repository
-from backtest.engine import BacktestEngine, BacktestConfig, BacktestResult
+from backtest import BacktestEngine, BacktestConfig, BacktestResult
 
 logger = structlog.get_logger(__name__)
 
