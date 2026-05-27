@@ -194,22 +194,18 @@ class BacktraderStrategyAdapter(bt.Strategy):
     def notify_order(self, order):
         """Called when order status changes."""
         if order.status in [order.Completed]:
-            if order.isbuy():
-                self.logger.debug(
-                    "buy_executed",
-                    price=order.executed.price,
-                    size=order.executed.size,
-                    cost=order.executed.value,
-                    commission=order.executed.comm,
-                )
-            else:
-                self.logger.debug(
-                    "sell_executed",
-                    price=order.executed.price,
-                    size=order.executed.size,
-                    cost=order.executed.value,
-                    commission=order.executed.comm,
-                )
+            dt = self.datas[0].datetime.datetime(0)
+            portfolio_value = self.broker.getvalue()
+            side = "buy" if order.isbuy() else "sell"
+            self.logger.debug(
+                f"{side}_executed",
+                datetime=str(dt),
+                price=order.executed.price,
+                size=order.executed.size,
+                cost=order.executed.value,
+                commission=order.executed.comm,
+                portfolio_value=portfolio_value,
+            )
 
     def stop(self):
         """Called when backtest ends."""
