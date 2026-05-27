@@ -2,6 +2,12 @@
 
 Bridges StrategyBase to Backtrader's bt.Strategy, handling signal processing,
 position management, and trade recording.
+
+Optimized for backtest speed:
+- Uses float arrays instead of OHLCVCandle list (avoids Decimal overhead)
+- Trims data window to prevent O(n²) growth
+- Skips per-bar OHLCVCandle creation
+- Initializes strategy once at startup
 """
 
 from decimal import Decimal
@@ -10,7 +16,6 @@ from typing import Any, Dict, List, Optional
 import backtrader as bt
 import structlog
 
-from data.models import OHLCVCandle
 from strategy.base import Signal, SignalType, StrategyContext
 
 
@@ -18,12 +23,14 @@ class BacktraderStrategyAdapter(bt.Strategy):
     """Backtrader strategy adapter that wraps our StrategyBase classes.
 
     This adapter bridges our strategy framework with Backtrader's Cerebro engine.
+    Optimized for speed: uses float arrays, trims data window, skips candle creation.
     """
 
     params = (
         ("strategy_instance", None),
         ("pair", ""),
         ("timeframe", ""),
+        ("max_window", 200),  # Max bars to keep in float arrays (prevents O(n²))
     )
 
     def __init__(self):
@@ -31,13 +38,26 @@ class BacktraderStrategyAdapter(bt.Strategy):
         self.strategy = self.params.strategy_instance
         self.pair = self.params.pair
         self.timeframe = self.params.timeframe
-        self.candles: List[OHLCVCandle] = []
+        self.max_window = self.params.max_window
+
+        # Fast float arrays (main performance optimization)
+        self.closes_f: List[float] = []
+        self.opens_f: List[float] = []
+        self.highs_f: List[float] = []
+        self.lows_f: List[float] = []
+        self.volumes_f: List[float] = []
+
         self.trades: List[Dict[str, Any]] = []
         self.equity_curve: List[float] = []
         self.equity_timestamps: List[int] = []
         self.position_state = None
         self.entry_price: Optional[Decimal] = None
         self.entry_time: Optional[int] = None
+
+        # Initialize strategy once at startup (instead of per-bar in on_bar)
+        if self.strategy:
+            self.strategy.initialize()
+            self.strategy._initialized = True
 
         self.logger = structlog.get_logger(__name__).bind(
             strategy=self.strategy.name if self.strategy else "unknown",
@@ -50,48 +70,51 @@ class BacktraderStrategyAdapter(bt.Strategy):
         self.logger.info(txt, datetime=str(dt))
 
     def next(self):
-        """Called for each new bar."""
+        """Called for each new bar — optimized hot path."""
         data = self.datas[0]
 
-        candle = self._create_candle(data)
-        self.candles.append(candle)
+        # Append to float arrays (fast — no Decimal/dataclass overhead)
+        self.opens_f.append(float(data.open[0]))
+        self.highs_f.append(float(data.high[0]))
+        self.lows_f.append(float(data.low[0]))
+        self.closes_f.append(float(data.close[0]))
+        self.volumes_f.append(float(data.volume[0]))
+
+        # Trim arrays to max window (prevents O(n²) in indicator calculations)
+        if len(self.closes_f) > self.max_window:
+            trim = len(self.closes_f) - self.max_window
+            self.closes_f = self.closes_f[trim:]
+            self.opens_f = self.opens_f[trim:]
+            self.highs_f = self.highs_f[trim:]
+            self.lows_f = self.lows_f[trim:]
+            self.volumes_f = self.volumes_f[trim:]
 
         current_price = Decimal(str(data.close[0]))
         current_time = int(data.datetime.datetime(0).timestamp() * 1000)
 
-        context = self._create_context(current_price, current_time)
+        # Create context with fast float arrays
+        context = StrategyContext(
+            pair=self.pair,
+            timeframe=self.timeframe,
+            current_price=current_price,
+            candles=[],  # Empty — strategy uses float arrays via has_fast_data
+            current_time=current_time,
+            closes_f=self.closes_f,
+            opens_f=self.opens_f,
+            highs_f=self.highs_f,
+            lows_f=self.lows_f,
+            volumes_f=self.volumes_f,
+        )
 
         try:
-            signal = self.strategy.on_bar(candle, context)
+            # Call generate_signal directly (skip on_bar overhead)
+            signal = self.strategy.generate_signal(context)
             self._process_signal(signal, current_price, current_time)
         except Exception as e:
             self.logger.error("signal_processing_error", error=str(e))
 
         self.equity_curve.append(self.broker.getvalue())
         self.equity_timestamps.append(current_time)
-
-    def _create_candle(self, data) -> OHLCVCandle:
-        """Create OHLCVCandle from Backtrader data."""
-        return OHLCVCandle(
-            timestamp=int(data.datetime.datetime(0).timestamp() * 1000),
-            open=Decimal(str(data.open[0])),
-            high=Decimal(str(data.high[0])),
-            low=Decimal(str(data.low[0])),
-            close=Decimal(str(data.close[0])),
-            volume=Decimal(str(data.volume[0])),
-            pair=self.pair,
-            timeframe=self.timeframe,
-        )
-
-    def _create_context(self, current_price: Decimal, current_time: int) -> StrategyContext:
-        """Create strategy context."""
-        return StrategyContext(
-            pair=self.pair,
-            timeframe=self.timeframe,
-            current_price=current_price,
-            candles=self.candles,
-            current_time=current_time,
-        )
 
     def _process_signal(self, signal: Signal, current_price: Decimal, current_time: int):
         """Process trading signal and execute orders.
@@ -114,7 +137,6 @@ class BacktraderStrategyAdapter(bt.Strategy):
                 self.buy(size=size)
                 self.entry_price = current_price
                 self.entry_time = current_time
-                self.logger.debug("long_position_opened", size=size, price=str(current_price))
 
         elif signal.signal_type == SignalType.SHORT:
             if self.position and self.position.size > 0:
@@ -125,7 +147,6 @@ class BacktraderStrategyAdapter(bt.Strategy):
                 self.sell(size=size)
                 self.entry_price = current_price
                 self.entry_time = current_time
-                self.logger.debug("short_position_opened", size=size, price=str(current_price))
 
         elif signal.signal_type == SignalType.CLOSE_LONG:
             if self.position and self.position.size > 0:
@@ -166,13 +187,6 @@ class BacktraderStrategyAdapter(bt.Strategy):
         }
 
         self.trades.append(trade)
-        self.logger.debug(
-            "trade_recorded",
-            side=side,
-            entry_price=str(entry_price),
-            exit_price=str(exit_price),
-            pnl=float(pnl),
-        )
 
         self.entry_price = None
         self.entry_time = None

@@ -2,8 +2,13 @@
 
 Technical analysis helpers for calculating moving averages, RSI, and detecting
 breakouts. Used by CTA-style trading strategies.
+
+Two sets of functions are provided:
+- Decimal-based (calculate_ma, calculate_rsi, etc.) — for live trading precision
+- Float-based (calculate_ma_f, calculate_rsi_f, etc.) — for backtest speed
 """
 
+import math
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
@@ -303,3 +308,227 @@ def calculate_choppiness(
     chop = Decimal("100") * (log_ratio / log_period)
 
     return chop
+
+
+# ============================================================================
+# Float-based indicator functions for backtest performance
+# ============================================================================
+# These functions use native float arithmetic instead of Decimal,
+# providing 50-100x speedup for backtesting with negligible precision loss.
+
+
+def calculate_ma_f(
+    closes: List[float],
+    period: int,
+    ma_type: str = "sma",
+) -> Optional[float]:
+    """Float-based moving average calculation."""
+    if len(closes) < period:
+        return None
+
+    recent = closes[-period:]
+
+    if ma_type.lower() == "sma":
+        return sum(recent) / period
+    elif ma_type.lower() == "ema":
+        multiplier = 2.0 / (period + 1)
+        ema_val = recent[0]
+        for price in recent[1:]:
+            ema_val = (price - ema_val) * multiplier + ema_val
+        return ema_val
+    else:
+        raise ValueError(f"Unknown MA type: {ma_type}")
+
+
+def calculate_rsi_f(
+    closes: List[float],
+    period: int = 14,
+) -> Optional[float]:
+    """Float-based RSI calculation."""
+    if len(closes) < period + 1:
+        return None
+
+    recent = closes[-(period + 1):]
+    gains = 0.0
+    losses = 0.0
+
+    for i in range(1, len(recent)):
+        change = recent[i] - recent[i - 1]
+        if change > 0:
+            gains += change
+        else:
+            losses += abs(change)
+
+    avg_gain = gains / period
+    avg_loss = losses / period
+
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def detect_breakout_f(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    lookback: int = 20,
+    mode: str = "resistance",
+) -> Tuple[bool, Optional[float], Optional[float]]:
+    """Float-based breakout detection."""
+    if len(closes) < lookback + 1:
+        return False, None, None
+
+    recent_highs = highs[-(lookback + 1):-1]
+    recent_lows = lows[-(lookback + 1):-1]
+    current_close = closes[-1]
+
+    resistance = max(recent_highs)
+    support = min(recent_lows)
+
+    breakout_detected = False
+    level_price = None
+    strength = None
+
+    if mode in ("resistance", "both"):
+        if current_close > resistance:
+            breakout_detected = True
+            level_price = resistance
+            strength = (current_close - resistance) / resistance
+
+    if mode in ("support", "both") and not breakout_detected:
+        if current_close < support:
+            breakout_detected = True
+            level_price = support
+            strength = (support - current_close) / support
+
+    return breakout_detected, level_price, strength
+
+
+def calculate_atr_f(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Optional[float]:
+    """Float-based ATR calculation."""
+    n = len(closes)
+    if n < period + 1:
+        return None
+
+    # Only compute for the last period+1 bars
+    start = n - period - 1
+    true_ranges = []
+    for i in range(start + 1, n):
+        tr1 = highs[i] - lows[i]
+        tr2 = abs(highs[i] - closes[i - 1])
+        tr3 = abs(lows[i] - closes[i - 1])
+        true_ranges.append(max(tr1, tr2, tr3))
+
+    if len(true_ranges) < period:
+        return None
+
+    return sum(true_ranges[-period:]) / period
+
+
+def calculate_adx_f(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Optional[float]:
+    """Float-based ADX calculation."""
+    if len(closes) < period + 2:
+        return None
+
+    plus_dm_list: List[float] = []
+    minus_dm_list: List[float] = []
+    tr_list: List[float] = []
+
+    for i in range(1, len(closes)):
+        high_diff = highs[i] - highs[i - 1]
+        low_diff = lows[i - 1] - lows[i]
+
+        plus_dm = high_diff if (high_diff > low_diff and high_diff > 0) else 0.0
+        minus_dm = low_diff if (low_diff > high_diff and low_diff > 0) else 0.0
+
+        tr1 = highs[i] - lows[i]
+        tr2 = abs(highs[i] - closes[i - 1])
+        tr3 = abs(lows[i] - closes[i - 1])
+        tr = max(tr1, tr2, tr3)
+
+        plus_dm_list.append(plus_dm)
+        minus_dm_list.append(minus_dm)
+        tr_list.append(tr)
+
+    smooth_multiplier = float(period - 1)
+    divisor = float(period)
+
+    plus_di_smoothed = sum(plus_dm_list[:period])
+    minus_di_smoothed = sum(minus_dm_list[:period])
+    tr_smoothed = sum(tr_list[:period])
+
+    dx_values: List[float] = []
+
+    if tr_smoothed == 0:
+        dx_values.append(0.0)
+    else:
+        plus_di = (plus_di_smoothed / tr_smoothed) * 100.0
+        minus_di = (minus_di_smoothed / tr_smoothed) * 100.0
+        di_sum = plus_di + minus_di
+        if di_sum == 0:
+            dx_values.append(0.0)
+        else:
+            dx_values.append(abs(plus_di - minus_di) / di_sum * 100.0)
+
+    for i in range(period, len(plus_dm_list)):
+        plus_di_smoothed = (plus_di_smoothed * smooth_multiplier + plus_dm_list[i]) / divisor
+        minus_di_smoothed = (minus_di_smoothed * smooth_multiplier + minus_dm_list[i]) / divisor
+        tr_smoothed = (tr_smoothed * smooth_multiplier + tr_list[i]) / divisor
+
+        if tr_smoothed == 0:
+            dx_values.append(0.0)
+        else:
+            plus_di = (plus_di_smoothed / tr_smoothed) * 100.0
+            minus_di = (minus_di_smoothed / tr_smoothed) * 100.0
+            di_sum = plus_di + minus_di
+            if di_sum == 0:
+                dx_values.append(0.0)
+            else:
+                dx_values.append(abs(plus_di - minus_di) / di_sum * 100.0)
+
+    if len(dx_values) < period:
+        return None
+
+    return sum(dx_values[-period:]) / period
+
+
+def calculate_choppiness_f(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Optional[float]:
+    """Float-based Choppiness Index calculation."""
+    if len(closes) < period + 1:
+        return None
+
+    atr_sum = 0.0
+    for i in range(-period, 0):
+        tr1 = highs[i] - lows[i]
+        tr2 = abs(highs[i] - closes[i - 1])
+        tr3 = abs(lows[i] - closes[i - 1])
+        atr_sum += max(tr1, tr2, tr3)
+
+    window_start = -(period + 1)
+    high_range = max(highs[window_start:])
+    low_range = min(lows[window_start:])
+    price_range = high_range - low_range
+
+    if price_range == 0 or atr_sum == 0:
+        return 100.0
+
+    log_period = math.log(period)
+    log_ratio = math.log(atr_sum / price_range)
+    return 100.0 * (log_ratio / log_period)

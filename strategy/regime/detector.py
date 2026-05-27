@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 from data.models import OHLCVCandle
 from strategy.cta import calculate_adx, calculate_atr, calculate_choppiness
+from strategy.cta import calculate_adx_f, calculate_atr_f, calculate_choppiness_f
 
 
 class MarketRegime(Enum):
@@ -52,6 +53,50 @@ class RegimeDetector:
         self.chop_high = chop_high
         self.chop_low = chop_low
 
+    def _classify_from_indicators(
+        self,
+        adx: Optional[float],
+        chop: Optional[float],
+        atr: Optional[float],
+    ) -> MarketRegime:
+        """Classify regime from pre-calculated indicator values.
+
+        Args:
+            adx: ADX value (float or Decimal, will be compared as float)
+            chop: CHOP value (float or Decimal, will be compared as float)
+            atr: ATR value (unused in current rules, reserved for future)
+
+        Returns:
+            Detected MarketRegime
+        """
+        adx_f = float(adx) if adx is not None else None
+        chop_f = float(chop) if chop is not None else None
+
+        if adx_f is None and chop_f is None:
+            return MarketRegime.UNKNOWN
+
+        # Priority 1: High choppiness overrides everything → RANGING
+        if chop_f is not None and chop_f > self.chop_high:
+            return MarketRegime.RANGING
+
+        # Priority 2: Strong ADX → STRONG_TREND
+        if adx_f is not None and adx_f > self.adx_strong:
+            return MarketRegime.STRONG_TREND
+
+        # Priority 3: Weak ADX → WEAK_TREND
+        if adx_f is not None and adx_f > self.adx_weak:
+            return MarketRegime.WEAK_TREND
+
+        # Priority 4: Low ADX + low chop → could be weak trend building
+        if chop_f is not None and chop_f < self.chop_low:
+            return MarketRegime.WEAK_TREND
+
+        # Fallback: RANGING
+        if adx_f is not None:
+            return MarketRegime.RANGING
+
+        return MarketRegime.UNKNOWN
+
     def detect(self, candles: List[OHLCVCandle]) -> MarketRegime:
         """Detect current market regime.
 
@@ -65,31 +110,7 @@ class RegimeDetector:
         chop = calculate_choppiness(candles, self.chop_period)
         atr = calculate_atr(candles, self.atr_period)
 
-        if adx is None and chop is None:
-            return MarketRegime.UNKNOWN
-
-        # Rule-based classification
-        # Priority 1: High choppiness overrides everything → RANGING
-        if chop is not None and chop > self.chop_high:
-            return MarketRegime.RANGING
-
-        # Priority 2: Strong ADX → STRONG_TREND
-        if adx is not None and adx > self.adx_strong:
-            return MarketRegime.STRONG_TREND
-
-        # Priority 3: Weak ADX → WEAK_TREND
-        if adx is not None and adx > self.adx_weak:
-            return MarketRegime.WEAK_TREND
-
-        # Priority 4: Low ADX + low chop → could be weak trend building
-        if chop is not None and chop < self.chop_low:
-            return MarketRegime.WEAK_TREND
-
-        # Fallback: RANGING
-        if adx is not None:
-            return MarketRegime.RANGING
-
-        return MarketRegime.UNKNOWN
+        return self._classify_from_indicators(adx, chop, atr)
 
     def detect_with_scores(
         self, candles: List[OHLCVCandle],
@@ -102,16 +123,68 @@ class RegimeDetector:
         Returns:
             Tuple of (regime, scores_dict with adx/chop/atr values)
         """
-        regime = self.detect(candles)
-
         adx = calculate_adx(candles, self.adx_period)
         chop = calculate_choppiness(candles, self.chop_period)
         atr = calculate_atr(candles, self.atr_period)
+
+        regime = self._classify_from_indicators(adx, chop, atr)
 
         scores = {
             "adx": float(adx) if adx is not None else None,
             "chop": float(chop) if chop is not None else None,
             "atr": float(atr) if atr is not None else None,
+        }
+
+        return regime, scores
+
+    def detect_f(
+        self,
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+    ) -> MarketRegime:
+        """Detect market regime using float arrays (fast path for backtest).
+
+        Args:
+            highs: List of high prices
+            lows: List of low prices
+            closes: List of close prices
+
+        Returns:
+            Detected MarketRegime
+        """
+        adx = calculate_adx_f(highs, lows, closes, self.adx_period)
+        chop = calculate_choppiness_f(highs, lows, closes, self.chop_period)
+        atr = calculate_atr_f(highs, lows, closes, self.atr_period)
+
+        return self._classify_from_indicators(adx, chop, atr)
+
+    def detect_with_scores_f(
+        self,
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+    ) -> Tuple[MarketRegime, dict]:
+        """Detect regime with scores using float arrays (fast path for backtest).
+
+        Args:
+            highs: List of high prices
+            lows: List of low prices
+            closes: List of close prices
+
+        Returns:
+            Tuple of (regime, scores_dict with adx/chop/atr values)
+        """
+        adx = calculate_adx_f(highs, lows, closes, self.adx_period)
+        chop = calculate_choppiness_f(highs, lows, closes, self.chop_period)
+        atr = calculate_atr_f(highs, lows, closes, self.atr_period)
+
+        regime = self._classify_from_indicators(adx, chop, atr)
+
+        scores = {
+            "adx": adx,
+            "chop": chop,
+            "atr": atr,
         }
 
         return regime, scores

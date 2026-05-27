@@ -126,6 +126,11 @@ class StrategyContext:
         order_book: Latest order book snapshot
         current_time: Current Unix timestamp in milliseconds
         params: Strategy-specific parameters
+        closes_f: Fast float array of close prices (backtest optimization)
+        opens_f: Fast float array of open prices (backtest optimization)
+        highs_f: Fast float array of high prices (backtest optimization)
+        lows_f: Fast float array of low prices (backtest optimization)
+        volumes_f: Fast float array of volumes (backtest optimization)
     """
     pair: str
     timeframe: str
@@ -137,6 +142,17 @@ class StrategyContext:
     order_book: Optional[Dict[str, Any]] = None
     current_time: int = 0
     params: Dict[str, Any] = field(default_factory=dict)
+    # Fast float arrays for backtest mode (avoids Decimal overhead)
+    closes_f: Optional[List[float]] = None
+    opens_f: Optional[List[float]] = None
+    highs_f: Optional[List[float]] = None
+    lows_f: Optional[List[float]] = None
+    volumes_f: Optional[List[float]] = None
+
+    @property
+    def has_fast_data(self) -> bool:
+        """Check if fast float arrays are available for optimized calculation."""
+        return self.closes_f is not None
 
     def get_position(self, pair: Optional[str] = None) -> Optional[Position]:
         """Get position for specified pair or default pair.

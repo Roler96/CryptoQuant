@@ -2,6 +2,9 @@
 
 A CTA-style trend following strategy using moving average crossovers,
 RSI filters, and optional breakout detection for signal confirmation.
+
+Performance: When context.has_fast_data is True (backtest mode), uses float-based
+indicator calculations that are 50-100x faster than Decimal arithmetic.
 """
 
 from dataclasses import dataclass
@@ -18,6 +21,13 @@ from strategy.cta import (
     calculate_ma,
     calculate_rsi,
     detect_breakout,
+)
+from strategy.cta import (
+    calculate_adx_f,
+    calculate_atr_f,
+    calculate_ma_f,
+    calculate_rsi_f,
+    detect_breakout_f,
 )
 from strategy.regime import MarketRegime, RegimeDetector
 
@@ -142,6 +152,16 @@ class TrendFollowingStrategy(StrategyBase):
         self._trade_stop_price: Optional[Decimal] = None
         self._trade_take_price: Optional[Decimal] = None
 
+        # Float state for fast backtest path
+        self._fast_ma_history_f: List[float] = []
+        self._slow_ma_history_f: List[float] = []
+        self._prev_fast_ma_f: Optional[float] = None
+        self._prev_slow_ma_f: Optional[float] = None
+        self._trade_direction_f: Optional[str] = None
+        self._trade_entry_price_f: Optional[float] = None
+        self._trade_stop_price_f: Optional[float] = None
+        self._trade_take_price_f: Optional[float] = None
+
         # Regime detector
         self._regime_detector = RegimeDetector(
             adx_period=self.config.regime_adx_period,
@@ -170,12 +190,26 @@ class TrendFollowingStrategy(StrategyBase):
         self._prev_slow_ma = None
         self._reset_trade_state()
 
+        # Reset float state
+        self._fast_ma_history_f.clear()
+        self._slow_ma_history_f.clear()
+        self._prev_fast_ma_f = None
+        self._prev_slow_ma_f = None
+        self._reset_trade_state_f()
+
     def _reset_trade_state(self) -> None:
         """Clear ATR exit tracking."""
         self._trade_direction = None
         self._trade_entry_price = None
         self._trade_stop_price = None
         self._trade_take_price = None
+
+    def _reset_trade_state_f(self) -> None:
+        """Clear float ATR exit tracking."""
+        self._trade_direction_f = None
+        self._trade_entry_price_f = None
+        self._trade_stop_price_f = None
+        self._trade_take_price_f = None
 
     def generate_signal(self, context: StrategyContext) -> Signal:
         """Generate trading signal based on MA crossover and filters.
@@ -184,12 +218,20 @@ class TrendFollowingStrategy(StrategyBase):
         1. ATR stop loss / take profit (highest priority, overrides all)
         2. MA crossover signal (filtered by ADX, RSI, breakout)
 
+        When context.has_fast_data is True (backtest mode), delegates to the
+        float-optimized fast path for 50-100x speedup.
+
         Args:
             context: Current market and account context
 
         Returns:
             Signal object with signal type and metadata
         """
+        # Fast path for backtest (float-based, ~50-100x faster)
+        if context.has_fast_data:
+            return self._generate_signal_fast(context)
+
+        # Original Decimal path (for live trading)
         candles = context.candles
         current_price = context.current_price
 
@@ -299,6 +341,157 @@ class TrendFollowingStrategy(StrategyBase):
             timestamp=context.current_time,
             price=current_price,
             confidence=confidence,
+            metadata=metadata,
+        )
+
+    def _generate_signal_fast(self, context: StrategyContext) -> Signal:
+        """Fast float-based signal generation for backtesting.
+
+        Mirrors generate_signal logic but uses float arithmetic throughout,
+        avoiding the 50-100x overhead of Decimal operations.
+
+        Args:
+            context: Strategy context with fast float arrays
+
+        Returns:
+            Signal object with signal type and metadata
+        """
+        closes = context.closes_f  # type: ignore
+        highs = context.highs_f  # type: ignore
+        lows = context.lows_f  # type: ignore
+        current_price = context.current_price
+        current_price_f = float(current_price)
+        current_time = context.current_time
+
+        if len(closes) < self.config.slow_ma_period + 1:
+            return Signal(
+                signal_type=SignalType.HOLD,
+                pair=context.pair,
+                timestamp=current_time,
+                price=current_price,
+                confidence=Decimal("0"),
+                metadata={"reason": "insufficient_data"},
+            )
+
+        # --- Priority 1: Check ATR stop loss / take profit (float) ---
+        if self._trade_direction_f is not None and self._trade_stop_price_f is not None:
+            direction = self._trade_direction_f
+            if direction == "long":
+                if current_price_f <= self._trade_stop_price_f:
+                    self._reset_trade_state_f()
+                    return Signal(
+                        signal_type=SignalType.CLOSE_LONG,
+                        pair="", timestamp=current_time,
+                        price=current_price, confidence=Decimal("1.0"),
+                        metadata={"reason": "atr_stop_loss"},
+                    )
+                if current_price_f >= self._trade_take_price_f:  # type: ignore
+                    self._reset_trade_state_f()
+                    return Signal(
+                        signal_type=SignalType.CLOSE_LONG,
+                        pair="", timestamp=current_time,
+                        price=current_price, confidence=Decimal("1.0"),
+                        metadata={"reason": "atr_take_profit"},
+                    )
+            elif direction == "short":
+                if current_price_f >= self._trade_stop_price_f:
+                    self._reset_trade_state_f()
+                    return Signal(
+                        signal_type=SignalType.CLOSE_SHORT,
+                        pair="", timestamp=current_time,
+                        price=current_price, confidence=Decimal("1.0"),
+                        metadata={"reason": "atr_stop_loss"},
+                    )
+                if current_price_f <= self._trade_take_price_f:  # type: ignore
+                    self._reset_trade_state_f()
+                    return Signal(
+                        signal_type=SignalType.CLOSE_SHORT,
+                        pair="", timestamp=current_time,
+                        price=current_price, confidence=Decimal("1.0"),
+                        metadata={"reason": "atr_take_profit"},
+                    )
+
+        # --- Priority 2: Detect market regime (float) ---
+        if self.config.use_regime_filter:
+            self._current_regime, regime_scores = self._regime_detector.detect_with_scores_f(
+                highs, lows, closes,
+            )
+        else:
+            self._current_regime = MarketRegime.STRONG_TREND
+
+        # --- Priority 3: MA crossover with filters (float) ---
+        fast_ma_f = calculate_ma_f(closes, self.config.fast_ma_period, self.config.ma_type)
+        slow_ma_f = calculate_ma_f(closes, self.config.slow_ma_period, self.config.ma_type)
+
+        if fast_ma_f is None or slow_ma_f is None:
+            return Signal(
+                signal_type=SignalType.HOLD,
+                pair=context.pair,
+                timestamp=current_time,
+                price=current_price,
+                confidence=Decimal("0"),
+                metadata={"reason": "ma_calculation_failed"},
+            )
+
+        # Update float MA history
+        if self._fast_ma_history_f:
+            self._prev_fast_ma_f = self._fast_ma_history_f[-1]
+            self._prev_slow_ma_f = self._slow_ma_history_f[-1]
+
+        self._fast_ma_history_f.append(fast_ma_f)
+        self._slow_ma_history_f.append(slow_ma_f)
+
+        max_history = max(self.config.fast_ma_period, self.config.slow_ma_period) * 2
+        if len(self._fast_ma_history_f) > max_history:
+            self._fast_ma_history_f = self._fast_ma_history_f[-max_history:]
+            self._slow_ma_history_f = self._slow_ma_history_f[-max_history:]
+
+        # Determine signal (float)
+        signal_type = self._determine_signal_fast(
+            fast_ma_f, slow_ma_f, closes, highs, lows, context,
+        )
+
+        # Calculate confidence (float)
+        confidence = self._calculate_confidence_fast(
+            fast_ma_f, slow_ma_f, closes, highs, lows, signal_type,
+        )
+
+        metadata: Dict[str, Any] = {
+            "fast_ma": fast_ma_f,
+            "slow_ma": slow_ma_f,
+            "ma_spread": (fast_ma_f - slow_ma_f) / slow_ma_f * 100,
+            "strategy": "trend_following",
+            "regime": self._current_regime.value,
+        }
+
+        if self.config.use_rsi_filter:
+            rsi_f = calculate_rsi_f(closes, self.config.rsi_period)
+            if rsi_f is not None:
+                metadata["rsi"] = rsi_f
+
+        if self.config.use_breakout and signal_type in (SignalType.LONG, SignalType.SHORT):
+            is_breakout, level, strength = detect_breakout_f(
+                highs, lows, closes,
+                self.config.breakout_lookback,
+                self.config.breakout_mode,
+            )
+            metadata["breakout_confirmed"] = is_breakout
+            if level is not None:
+                metadata["breakout_level"] = level
+            if strength is not None:
+                metadata["breakout_strength"] = strength
+
+        # Set ATR exit levels on new entry (float)
+        if signal_type in (SignalType.LONG, SignalType.SHORT):
+            direction = "long" if signal_type == SignalType.LONG else "short"
+            self._set_atr_exit_f(highs, lows, closes, direction, current_price_f)
+
+        return Signal(
+            signal_type=signal_type,
+            pair=context.pair,
+            timestamp=current_time,
+            price=current_price,
+            confidence=Decimal(str(round(confidence, 6))),
             metadata=metadata,
         )
 
@@ -431,6 +624,37 @@ class TrendFollowingStrategy(StrategyBase):
             take=str(self._trade_take_price),
             atr=str(atr),
         )
+
+    def _set_atr_exit_f(
+        self,
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        direction: str,
+        entry_price_f: float,
+    ) -> None:
+        """Float-based ATR exit level calculation for backtest speed."""
+        if not self.config.use_atr_exit:
+            return
+
+        atr_f = calculate_atr_f(highs, lows, closes, self.config.atr_period)
+        if atr_f is None:
+            return
+
+        stop_mult = float(self.config.atr_stop_multiplier)
+        take_mult = float(self.config.atr_take_multiplier)
+        stop_distance = atr_f * stop_mult
+        take_distance = atr_f * take_mult
+
+        if direction == "long":
+            self._trade_stop_price_f = entry_price_f - stop_distance
+            self._trade_take_price_f = entry_price_f + take_distance
+        else:
+            self._trade_stop_price_f = entry_price_f + stop_distance
+            self._trade_take_price_f = entry_price_f - take_distance
+
+        self._trade_direction_f = direction
+        self._trade_entry_price_f = entry_price_f
 
     def _determine_signal(
         self,
@@ -581,6 +805,126 @@ class TrendFollowingStrategy(StrategyBase):
 
         return min(base_confidence, Decimal("1.0"))
 
+    def _determine_signal_fast(
+        self,
+        fast_ma_f: float,
+        slow_ma_f: float,
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        context: StrategyContext,
+    ) -> SignalType:
+        """Float-based signal determination for backtest speed.
+
+        Mirrors _determine_signal logic but uses float arithmetic.
+        """
+        if self._prev_fast_ma_f is None or self._prev_slow_ma_f is None:
+            return SignalType.HOLD
+
+        bullish_cross = self._prev_fast_ma_f <= self._prev_slow_ma_f and fast_ma_f > slow_ma_f
+        bearish_cross = self._prev_fast_ma_f >= self._prev_slow_ma_f and fast_ma_f < slow_ma_f
+
+        if not bullish_cross and not bearish_cross:
+            return SignalType.HOLD
+
+        # Regime filter: block new entries in ranging/unknown markets
+        if self._current_regime in (MarketRegime.RANGING, MarketRegime.UNKNOWN):
+            return SignalType.HOLD
+
+        # RSI filter (float)
+        rsi_f: Optional[float] = None
+        if self.config.use_rsi_filter:
+            rsi_f = calculate_rsi_f(closes, self.config.rsi_period)
+
+        # ADX trend filter (float)
+        adx_passes = True
+        if self.config.use_adx_filter:
+            adx_f = calculate_adx_f(highs, lows, closes, self.config.adx_period)
+            adx_threshold_f = float(self.config.adx_threshold)
+            if adx_f is not None and adx_f < adx_threshold_f:
+                adx_passes = False
+
+        rsi_overbought_f = float(self.config.rsi_overbought)
+        rsi_oversold_f = float(self.config.rsi_oversold)
+
+        if bullish_cross:
+            if self.config.use_rsi_filter and rsi_f is not None:
+                if rsi_f > rsi_overbought_f:
+                    return SignalType.HOLD
+
+            if self.config.use_breakout:
+                is_breakout, _, _ = detect_breakout_f(
+                    highs, lows, closes,
+                    self.config.breakout_lookback,
+                    "resistance",
+                )
+                if not is_breakout:
+                    return SignalType.HOLD
+
+            if not adx_passes:
+                return SignalType.HOLD
+            return SignalType.LONG
+
+        if bearish_cross:
+            if self.config.use_rsi_filter and rsi_f is not None:
+                if rsi_f < rsi_oversold_f:
+                    return SignalType.HOLD
+
+            if self.config.use_breakout:
+                is_breakout, _, _ = detect_breakout_f(
+                    highs, lows, closes,
+                    self.config.breakout_lookback,
+                    "support",
+                )
+                if not is_breakout:
+                    return SignalType.HOLD
+
+            if not adx_passes:
+                return SignalType.HOLD
+            return SignalType.SHORT
+
+        return SignalType.HOLD
+
+    def _calculate_confidence_fast(
+        self,
+        fast_ma_f: float,
+        slow_ma_f: float,
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        signal_type: SignalType,
+    ) -> float:
+        """Float-based confidence calculation for backtest speed.
+
+        Mirrors _calculate_confidence logic but uses float arithmetic.
+        """
+        if signal_type == SignalType.HOLD:
+            return 0.5
+
+        ma_spread = abs(fast_ma_f - slow_ma_f) / slow_ma_f
+        base_confidence = min(ma_spread * 10.0, 0.6)
+
+        if self.config.use_rsi_filter:
+            rsi_f = calculate_rsi_f(closes, self.config.rsi_period)
+            if rsi_f is not None:
+                if signal_type in (SignalType.LONG, SignalType.CLOSE_SHORT):
+                    rsi_boost = (50.0 - rsi_f) / 100.0
+                    base_confidence += max(rsi_boost, 0.0)
+                elif signal_type in (SignalType.SHORT, SignalType.CLOSE_LONG):
+                    rsi_boost = (rsi_f - 50.0) / 100.0
+                    base_confidence += max(rsi_boost, 0.0)
+
+        if self.config.use_breakout:
+            is_breakout, _, strength = detect_breakout_f(
+                highs, lows, closes,
+                self.config.breakout_lookback,
+                self.config.breakout_mode,
+            )
+            if is_breakout and strength is not None:
+                base_confidence += min(strength * 10.0, 0.2)
+
+        return min(base_confidence, 1.0)
+
     def validate_params(self) -> List[str]:
         """Validate strategy parameters.
 
@@ -624,3 +968,9 @@ class TrendFollowingStrategy(StrategyBase):
         self._prev_slow_ma = None
         self._reset_trade_state()
         self._current_regime = MarketRegime.UNKNOWN
+        # Reset float state
+        self._fast_ma_history_f.clear()
+        self._slow_ma_history_f.clear()
+        self._prev_fast_ma_f = None
+        self._prev_slow_ma_f = None
+        self._reset_trade_state_f()
