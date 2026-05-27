@@ -256,7 +256,7 @@ class StrategyBase(ABC):
         self.logger.debug(
             "Processing bar",
             pair=candle.pair,
-            timestamp=candle.timestamp,
+            utc8=candle.iso_time,
             close=candle.close,
         )
 
