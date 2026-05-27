@@ -15,9 +15,12 @@ Usage:
 """
 
 import itertools
+import json
 import random
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import structlog
@@ -539,6 +542,130 @@ class ParameterOptimizer:
                       f"MaxDD={test.max_drawdown:.2%}, "
                       f"Trades={len(test.trades)}")
             print()
+
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for JSON serialization."""
+        d: Dict[str, Any] = {
+            "params": self.params,
+            "score": self.score,
+            "train": {
+                "return": self.train_result.total_return,
+                "sharpe": self.train_result.sharpe_ratio,
+                "max_drawdown": self.train_result.max_drawdown,
+                "trades": len(self.train_result.trades),
+                "initial_value": self.train_result.initial_value,
+                "final_value": self.train_result.final_value,
+            },
+        }
+        if self.test_result:
+            d["test"] = {
+                "return": self.test_result.total_return,
+                "sharpe": self.test_result.sharpe_ratio,
+                "max_drawdown": self.test_result.max_drawdown,
+                "trades": len(self.test_result.trades),
+                "initial_value": self.test_result.initial_value,
+                "final_value": self.test_result.final_value,
+            }
+        return d
+
+
+def save_results(
+    results: List[OptimizerResult],
+    filepath: str = "logs/optimizer_results.json",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Save optimization results to JSON file.
+
+    Args:
+        results: List of optimizer results
+        filepath: Output file path
+        metadata: Optional metadata to include (strategy, pair, timeframe, etc.)
+
+    Returns:
+        Path to saved file
+    """
+    path = Path(filepath)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data: Dict[str, Any] = {
+        "timestamp": datetime.now().isoformat(),
+        "metadata": metadata or {},
+        "total_combinations": len(results),
+        "results": [r.to_dict() for r in results],
+    }
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+    logger.info("results_saved", path=str(path), count=len(results))
+    return str(path)
+
+
+def load_results(filepath: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Load optimization results from JSON file.
+
+    Args:
+        filepath: Path to JSON results file
+
+    Returns:
+        Tuple of (metadata, list of result dicts)
+    """
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("metadata", {}), data.get("results", [])
+
+
+def load_best_params(filepath: str) -> Dict[str, Any]:
+    """Load the best (top-scoring) parameters from a saved results file.
+
+    Args:
+        filepath: Path to JSON results file
+
+    Returns:
+        Dict of parameter names to values
+    """
+    _, results = load_results(filepath)
+    if not results:
+        return {}
+    best = max(results, key=lambda r: r.get("score", -1))
+    return best.get("params", {})
+
+
+def apply_best_params(
+    strategy_name: str = "cta",
+    filepath: str = "logs/optimizer_results.json",
+    pair: str = "BTC/USDT",
+    timeframe: str = "1h",
+    days: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> BacktestResult:
+    """Load best params from file and run backtest with them.
+
+    Convenience function: load best params → create strategy → run backtest.
+
+    Args:
+        strategy_name: Strategy to use
+        filepath: Path to saved optimizer results
+        pair: Trading pair
+        timeframe: Candle timeframe
+        days: Backtest period in days
+        start_date: Backtest start date
+        end_date: Backtest end date
+
+    Returns:
+        BacktestResult
+    """
+    best_params = load_best_params(filepath)
+    logger.info("applying_best_params", params=best_params)
+
+    engine = BacktestEngine(BacktestConfig(plot_results=True))
+    strategy = engine.load_strategy(strategy_name, params=best_params)
+    return engine.run_backtest(
+        strategy, pair, timeframe,
+        days=days, start_date=start_date, end_date=end_date,
+    )
 
 
 def _params_key(params: Dict[str, Any]) -> str:

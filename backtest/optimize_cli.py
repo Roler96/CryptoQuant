@@ -16,11 +16,12 @@ Usage:
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backtest.optimizer import ParameterOptimizer, SearchSpace
+from backtest.optimizer import ParameterOptimizer, SearchSpace, save_results
 
 
 def parse_range(value: str):
@@ -110,6 +111,8 @@ Examples:
     # Output
     parser.add_argument("--top", type=int, default=10, help="Number of top results to show (default: 10)")
     parser.add_argument("--validate-top", type=int, default=20, help="Top N train results to validate on test (default: 20)")
+    parser.add_argument("--save", metavar="FILE", help="Save results to JSON file (default: logs/optimizer_{strategy}_{pair}_{time}.json)")
+    parser.add_argument("--no-save", action="store_true", help="Do not save results to file")
 
     # Cash/fees
     parser.add_argument("--cash", type=float, default=10000, help="Initial cash (default: 10000)")
@@ -181,6 +184,32 @@ Examples:
 
     # Print results
     ParameterOptimizer.print_top_results(valid_results, n=args.top)
+
+    # Save results to JSON
+    if not args.no_save:
+        if args.save:
+            save_path = args.save
+        else:
+            pair_slug = args.pair.replace("/", "_")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = f"logs/optimizer_{args.strategy}_{pair_slug}_{args.timeframe}_{ts}.json"
+
+        metadata = {
+            "strategy": args.strategy,
+            "pair": args.pair,
+            "timeframe": args.timeframe,
+            "search_mode": "random" if args.random else "grid",
+            "train_days": args.train_days,
+            "test_days": args.test_days,
+            "train_start": args.train_start,
+            "train_end": args.train_end,
+            "test_start": args.test_start,
+            "test_end": args.test_end,
+            "initial_cash": args.cash,
+        }
+        actual_path = save_results(valid_results, filepath=save_path, metadata=metadata)
+        print(f"\n  Results saved to: {actual_path}")
+        print(f"  Load best params: python -c \"from backtest.optimizer import load_best_params; print(load_best_params('{actual_path}'))\"")
 
     # Overfitting warning
     if args.test_days or args.test_start:
