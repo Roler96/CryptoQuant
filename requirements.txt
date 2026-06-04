@@ -7,6 +7,11 @@ numpy>=1.24.0
 pyarrow>=14.0.0
 sqlalchemy>=2.0.0
 
+# Machine Learning
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+lightgbm>=4.1.0
+
 # Exchange APIs
 ccxt>=4.2.0
 

@@ -30,6 +30,12 @@ from strategy.stat_arb import (
 )
 from strategy.stat_arb.pair_trading import StatArbStrategy
 
+# ML strategy — optional (requires xgboost or lightgbm)
+try:
+    from strategy.ml import FeatureEngineer, ModelManager, PricePredictorStrategy
+except ImportError:
+    pass
+
 __all__ = [
     "Position",
     "Signal",
@@ -49,4 +55,7 @@ __all__ = [
     "calculate_cointegration",
     "calculate_hedge_ratio",
     "calculate_zscore",
+    "PricePredictorStrategy",
+    "FeatureEngineer",
+    "ModelManager",
 ]

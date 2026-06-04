@@ -30,7 +30,7 @@ class BacktraderStrategyAdapter(bt.Strategy):
         ("strategy_instance", None),
         ("pair", ""),
         ("timeframe", ""),
-        ("max_window", 200),  # Max bars to keep in float arrays (prevents O(n²))
+        ("max_window", 500),  # Max bars to keep in float arrays (increased for long MAs)
     )
 
     def __init__(self):
@@ -53,6 +53,7 @@ class BacktraderStrategyAdapter(bt.Strategy):
         self.position_state = None
         self.entry_price: Optional[Decimal] = None
         self.entry_time: Optional[int] = None
+        self.position_size: Decimal = Decimal('0')
 
         # Initialize strategy once at startup (instead of per-bar in on_bar)
         if self.strategy:
@@ -137,6 +138,7 @@ class BacktraderStrategyAdapter(bt.Strategy):
                 self.buy(size=size)
                 self.entry_price = current_price
                 self.entry_time = current_time
+                self.position_size = Decimal(str(size))
 
         elif signal.signal_type == SignalType.SHORT:
             if self.position and self.position.size > 0:
@@ -147,6 +149,7 @@ class BacktraderStrategyAdapter(bt.Strategy):
                 self.sell(size=size)
                 self.entry_price = current_price
                 self.entry_time = current_time
+                self.position_size = Decimal(str(size))
 
         elif signal.signal_type == SignalType.CLOSE_LONG:
             if self.position and self.position.size > 0:
@@ -183,13 +186,16 @@ class BacktraderStrategyAdapter(bt.Strategy):
             "entry_price": str(entry_price),
             "exit_price": str(exit_price),
             "side": side,
-            "pnl": float(pnl),
+            "pnl": float(pnl),  # percentage return
+            "position_size": float(self.position_size) if self.position_size else 0,
+            "entry_value": float(entry_price * self.position_size) if self.position_size else 0,
         }
 
         self.trades.append(trade)
 
         self.entry_price = None
         self.entry_time = None
+        self.position_size = Decimal('0')
 
     def notify_order(self, order):
         """Called when order status changes."""

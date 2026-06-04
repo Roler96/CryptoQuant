@@ -25,6 +25,15 @@ from strategy.cta.trend_following import TrendFollowingStrategy
 
 logger = structlog.get_logger(__name__)
 
+
+def _try_import_ml_strategy():
+    """Lazily import ML strategy (requires xgboost/lightgbm)."""
+    try:
+        from strategy.ml.price_predictor import PricePredictorStrategy
+        return PricePredictorStrategy
+    except ImportError:
+        return None
+
 matplotlib.use("Agg")
 
 
@@ -48,11 +57,45 @@ class BacktestEngine:
         self.cerebro: Optional[bt.Cerebro] = None
         self.logger = structlog.get_logger(__name__)
 
+        # Lazy imports for optional strategies
+        self._mr_cls = None
+        self._mo_cls = None
+
         self._strategy_map: Dict[str, Type[StrategyBase]] = {
             "cta": TrendFollowingStrategy,
             "trend_following": TrendFollowingStrategy,
             "trend": TrendFollowingStrategy,
         }
+
+        # Register ML strategy if dependencies available
+        ml_cls = _try_import_ml_strategy()
+        if ml_cls is not None:
+            self._strategy_map["ml"] = ml_cls
+            self._strategy_map["ml_predictor"] = ml_cls
+
+    def _get_strategy_map(self) -> Dict[str, Any]:
+        """Lazy-load all strategies including optional ones."""
+        if not hasattr(self, '_mr_cls') or self._mr_cls is None:
+            try:
+                from strategy.cta.mean_reversion import MeanReversionStrategy
+                self._mr_cls = MeanReversionStrategy
+            except ImportError:
+                self._mr_cls = False
+        if not hasattr(self, '_mo_cls') or self._mo_cls is None:
+            try:
+                from strategy.cta.ma_state import MAStateStrategy
+                self._mo_cls = MAStateStrategy
+            except ImportError:
+                self._mo_cls = False
+        
+        result = dict(self._strategy_map)
+        if self._mr_cls:
+            result["mean_reversion"] = self._mr_cls
+            result["mr"] = self._mr_cls
+        if self._mo_cls:
+            result["ma_state"] = self._mo_cls
+            result["ma"] = self._mo_cls
+        return result
 
     def load_strategy(self, strategy_name: str, params: Optional[Dict[str, Any]] = None) -> StrategyBase:
         """Load strategy by name.
@@ -68,12 +111,13 @@ class BacktestEngine:
             ValueError: If strategy name is not recognized
         """
         strategy_name_lower = strategy_name.lower()
+        strategy_map = self._get_strategy_map()
 
-        if strategy_name_lower not in self._strategy_map:
-            available = ", ".join(self._strategy_map.keys())
+        if strategy_name_lower not in strategy_map:
+            available = ", ".join(strategy_map.keys())
             raise ValueError(f"Unknown strategy '{strategy_name}'. Available: {available}")
 
-        strategy_class = self._strategy_map[strategy_name_lower]
+        strategy_class = strategy_map[strategy_name_lower]
         strategy = strategy_class(name=strategy_name, params=params)
 
         self.logger.info(
@@ -360,7 +404,7 @@ class BacktestEngine:
         Returns:
             List of strategy identifiers
         """
-        return list(self._strategy_map.keys())
+        return list(self._get_strategy_map().keys())
 
     def register_strategy(self, name: str, strategy_class: Type[StrategyBase]):
         """Register a new strategy for use in backtests.
