@@ -6,7 +6,9 @@
 
 **Architecture:** 分层架构 — Data Layer（数据获取/存储）→ Strategy Layer（策略信号）→ Engine Layer（回测/实盘）→ Execution Layer（交易所）→ Monitor Layer（风控/日志）。先 OKX，架构支持多交易所扩展。
 
-**Tech Stack:** Python 3.11+, pandas/NumPy, ccxt, SQLite, pytest, loguru
+**Tech Stack:** Python 3.11+, pandas/NumPy, ccxt, SQLite, pytest, loguru, pyright (type checking)
+
+**CI/CD:** GitHub Actions — lint (ruff) + typecheck (pyright) + test (pytest) on every push
 
 ---
 
@@ -41,6 +43,7 @@ CryptoQuant/
 │   │   ├── __init__.py
 │   │   ├── logger.py      # 结构化日志（loguru）
 │   │   └── reporter.py    # PnL 报告、交易统计
+│   ├── exceptions.py      # 统一异常层次
 │   └── config.py          # 全局配置
 ├── strategies/            # 具体策略实现
 │   └── example/
@@ -52,6 +55,112 @@ CryptoQuant/
 ├── .env.example           # API Key 模板
 ├── pyproject.toml         # 项目配置 + 依赖
 └── .gitignore
+```
+
+---
+
+## 跨 Phase 基础设计
+
+### 统一异常层次
+
+```python
+# cryptoquant/exceptions.py
+class CryptoQuantError(Exception):
+    """所有 CryptoQuant 异常的基类。"""
+
+class DataError(CryptoQuantError):
+    """数据获取/存储相关异常。"""
+
+class DataFetchError(DataError):
+    """从交易所获取数据失败。"""
+
+class DataValidationError(DataError):
+    """OHLCV 数据校验失败。"""
+
+class StrategyError(CryptoQuantError):
+    """策略相关异常。"""
+
+class ExecutionError(CryptoQuantError):
+    """订单执行相关异常。"""
+
+class InsufficientFundsError(ExecutionError):
+    """余额不足。"""
+
+class OrderRejectedError(ExecutionError):
+    """订单被拒绝。"""
+
+class RiskError(CryptoQuantError):
+    """风控相关异常。"""
+
+class EmergencyStopError(RiskError):
+    """紧急停止已触发。"""
+```
+
+### CI/CD 配置
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest --cov=cryptoquant
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check .env not committed
+        run: |
+          if git ls-files | grep -qE '^\.env$|\.env\.local$'; then
+            echo "ERROR: .env file detected in repository!"
+            exit 1
+          fi
+      - name: Check no API keys in source
+        run: |
+          if grep -rE '(apiKey|api_key|secret)\s*[:=]\s*["\x27][A-Za-z0-9]{16,}' \
+            --include='*.py' --include='*.yaml' --include='*.yml' . \
+            | grep -v 'test_' | grep -v 'example' | grep -v 'your_'; then
+            echo "ERROR: Potential API key found in source code!"
+            exit 1
+          fi
+```
+
+### 依赖锁定
+
+使用 `uv lock` 生成 `uv.lock`，CI 和本地安装都使用 `--frozen` 确保可复现环境。
+
+### 配置加载安全
+
+```python
+# cryptoquant/config.py — 改进版
+ALLOWED_ENV_PREFIXES = ("OKX_", "BINANCE_", "BYBIT_")
+
+def load_config(config_path: str | None = None) -> dict:
+    """只加载已知前缀的环境变量，避免污染。"""
+    for key, value in os.environ.items():
+        if any(key.startswith(prefix) for prefix in ALLOWED_ENV_PREFIXES):
+            config[key] = value
+    return config
+```
+
+### 异步 I/O 规划
+
+Phase 4 的 Broker 和 Fetcher 预留 async 接口，为高并发场景做准备：
+
+```python
+class Broker:
+    def market_buy(self, symbol: str, amount: float) -> Order: ...
+    async def market_buy_async(self, symbol: str, amount: float) -> Order: ...
 ```
 
 ---
@@ -84,6 +193,7 @@ dependencies = [
     "pyyaml>=6.0",
     "loguru>=0.7.0",
     "python-dotenv>=1.0.0",
+    "pydantic-settings>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -91,6 +201,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
+    "pyright>=1.1.0",
+    "hypothesis>=6.0",
+]
+perf = [
+    "numba>=0.59.0",
 ]
 
 [tool.ruff]
@@ -122,6 +237,41 @@ touch cryptoquant/execution/__init__.py
 touch cryptoquant/risk/__init__.py
 touch cryptoquant/monitor/__init__.py
 mkdir -p strategies/example tests docs/plans
+```
+
+**Step 3.5: 创建 exceptions.py**
+
+```python
+# cryptoquant/exceptions.py
+class CryptoQuantError(Exception):
+    """Base exception for all CryptoQuant errors."""
+
+class DataError(CryptoQuantError):
+    pass
+
+class DataFetchError(DataError):
+    pass
+
+class DataValidationError(DataError):
+    pass
+
+class StrategyError(CryptoQuantError):
+    pass
+
+class ExecutionError(CryptoQuantError):
+    pass
+
+class InsufficientFundsError(ExecutionError):
+    pass
+
+class OrderRejectedError(ExecutionError):
+    pass
+
+class RiskError(CryptoQuantError):
+    pass
+
+class EmergencyStopError(RiskError):
+    pass
 ```
 
 **Step 4: 创建 .env.example**
@@ -158,14 +308,38 @@ logging:
   dir: logs/
 ```
 
-**Step 6: 验证**
+**Step 6: 生成 lock 文件**
+
+```bash
+uv lock
+```
+
+**Step 7: 创建 CI 配置**
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - run: uv run pytest --cov=cryptoquant
+```
+
+**Step 8: 验证**
 
 ```bash
 python -c "import cryptoquant; print('OK')"
 pytest  # 0 tests, 但确保配置正确
 ```
 
-**Step 7: Commit**
+**Step 9: Commit**
 
 ```bash
 git add -A
@@ -225,13 +399,14 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+ALLOWED_ENV_PREFIXES = ("OKX_", "BINANCE_", "BYBIT_")
+
 
 def load_config(config_path: str | None = None) -> dict:
     """Load config from YAML file and overlay .env vars."""
     if config_path is None:
         config_path = Path(__file__).parent.parent / "config.yaml"
 
-    # Load .env from project root
     load_dotenv(Path(__file__).parent.parent / ".env")
 
     config = {}
@@ -239,9 +414,8 @@ def load_config(config_path: str | None = None) -> dict:
         with open(config_path) as f:
             config = yaml.safe_load(f) or {}
 
-    # Overlay env vars (flattened, for API keys etc.)
     for key, value in os.environ.items():
-        if key.endswith(("_API_KEY", "_SECRET", "_PASSWORD")):
+        if any(key.startswith(prefix) for prefix in ALLOWED_ENV_PREFIXES):
             config[key] = value
 
     return config
@@ -590,6 +764,117 @@ Phase 1 (Data) → Phase 2 (Strategy) → Phase 3 (Backtest) → Phase 4 (Live) 
 
 ---
 
+## 端到端集成测试
+
+每个 Phase 完成后，增加一层端到端集成测试验证全链路：
+
+```python
+# tests/test_e2e_pipeline.py
+"""端到端集成测试：验证 Data → Strategy → Backtest → Report 全链路。"""
+
+import pytest
+from cryptoquant.data.fetcher import OHLCVFetcher
+from cryptoquant.data.store import OHLCVStore
+from cryptoquant.data.cache import DataCache
+from cryptoquant.strategy.base import Strategy
+from cryptoquant.engine.backtest import BacktestEngine
+
+
+@pytest.mark.integration
+def test_full_pipeline_fetch_to_report(tmp_path):
+    """完整流水线：fetch → store → cache → strategy → backtest → report。"""
+    # 1. Data Layer
+    fetcher = OHLCVFetcher(exchange="okx", testnet=True)
+    store = OHLCVStore(db_path=str(tmp_path / "test.db"))
+    cache = DataCache(store=store, fetcher=fetcher)
+
+    df = cache.get_ohlcv("okx", "BTC/USDT", "1h", lookback=200)
+    assert len(df) >= 100
+
+    # 2. Strategy Layer
+    from strategies.example.ma_cross import MACrossover
+    strategy = MACrossover({"fast": 12, "slow": 26})
+    signals = strategy.generate_signal(df)
+    assert len(signals) == len(df)
+    assert set(signals.unique()).issubset({-1, 0, 1})
+
+    # 3. Backtest Layer
+    engine = BacktestEngine(initial_capital=10000)
+    result = engine.run(df, strategy, symbol="BTC/USDT")
+    assert result.strategy_name == "MACrossover"
+    assert result.initial_capital == 10000
+    assert len(result.equity_curve) == len(df)
+    assert result.metrics.total_trades >= 0
+
+    # 4. Report
+    from cryptoquant.engine.report import generate_report
+    report = generate_report(result)
+    assert "Backtest Report" in report
+    assert "MACrossover" in report
+```
+
+---
+
+## 数据迁移策略
+
+SQLite schema 变更时（如新增列、修改表结构），需要平滑迁移：
+
+```python
+# cryptoquant/data/migration.py
+"""SQLite schema 版本管理。"""
+
+SCHEMA_VERSION = 1  # 当前 schema 版本
+
+
+def get_schema_version(conn) -> int:
+    """获取当前数据库 schema 版本。"""
+    try:
+        row = conn.execute(
+            "SELECT version FROM _schema_meta LIMIT 1"
+        ).fetchone()
+        return row[0] if row else 0
+    except Exception:
+        return 0
+
+
+def migrate(conn, target_version: int = SCHEMA_VERSION):
+    """执行 schema 迁移。"""
+    current = get_schema_version(conn)
+    if current >= target_version:
+        return
+
+    migrations = {
+        1: _migration_v1,
+        # 后续版本在此追加
+    }
+
+    for v in range(current + 1, target_version + 1):
+        if v in migrations:
+            migrations[v](conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO _schema_meta(version) VALUES (?)",
+                (v,)
+            )
+            conn.commit()
+
+
+def _migration_v1(conn):
+    """v1: 初始 schema。"""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS _schema_meta (
+            version INTEGER PRIMARY KEY,
+            migrated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+```
+
+**迁移原则：**
+- 只增不删：新列用 `ALTER TABLE ADD COLUMN`，不删除旧列
+- 向后兼容：旧代码能读取新 schema（新列有默认值）
+- 幂等执行：同一迁移重复执行不报错
+
+---
+
 ## 关键设计决策
 
 1. **向量化回测，非事件驱动** — 对于分钟/小时级策略，向量化更快更简单。事件驱动留给 L2 做高频。
@@ -597,3 +882,6 @@ Phase 1 (Data) → Phase 2 (Strategy) → Phase 3 (Backtest) → Phase 4 (Live) 
 3. **先 OKX Testnet** — Phase 4 在 testnet 验证，资金风险为零。
 4. **SQLite 单文件数据库** — 轻量、无需运维，后期可切 PostgreSQL/TimescaleDB，因为存储层有抽象。
 5. **ccxt 统一交易所接口** — 原生支持 100+ 交易所，扩展成本低。
+6. **Spot 模式仅支持做多** — OKX spot 不支持裸卖空。做空需要合约账户（`account_type: "swap"`），Phase 4 默认 spot long-only。
+7. **统一异常层次** — 所有模块通过 `cryptoquant.exceptions` 抛出/捕获异常，便于上层统一处理。
+8. **依赖锁定** — `uv.lock` 确保 CI 和本地环境一致，安装使用 `--frozen`。

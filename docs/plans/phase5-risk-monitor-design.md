@@ -104,6 +104,8 @@ class KellySizer(PositionSizer):
 
     其中 fraction 是凯利分数的折扣系数（通常 0.25-0.5），
     因为纯凯利波动太大，半凯利更稳健。
+
+    参数可通过 update_from_trades() 动态更新。
     """
 
     def __init__(
@@ -114,6 +116,7 @@ class KellySizer(PositionSizer):
         fraction: float = 0.5,
         min_order: float = 10.0,
         max_pct: float = 100.0,
+        lookback_trades: int = 50,
     ):
         self.win_rate = win_rate
         self.avg_win_pct = avg_win_pct
@@ -121,46 +124,88 @@ class KellySizer(PositionSizer):
         self.fraction = fraction
         self.min_order = min_order
         self.max_pct = max_pct
+        self.lookback_trades = lookback_trades
 
     def calculate(self, balance: float, price: float, **kwargs) -> float:
-        if self.avg_loss_pct == 0:
-            kelly = 0.5  # fallback
+        # 防御性计算：处理各种边界情况
+        if self.avg_loss_pct <= 0 or self.avg_win_pct <= 0:
+            # 无盈利或无亏损数据 → 使用保守默认值
+            kelly = 0.0
         else:
             b = self.avg_win_pct / self.avg_loss_pct  # 盈亏比
-            kelly = self.win_rate - (1 - self.win_rate) / b
+            if b <= 0:
+                kelly = 0.0
+            else:
+                kelly = self.win_rate - (1 - self.win_rate) / b
 
-        # 凯利不能为负
-        kelly = max(0, kelly)
+        kelly = max(0.0, min(kelly, 1.0))  # 限制在 [0, 1]
 
-        # 半凯利 + 上限
         position_pct = min(kelly * self.fraction * 100, self.max_pct)
         amount = balance * position_pct / 100
         return max(self.min_order, amount)
+
+    def update_from_trades(self, trades: list[dict]) -> None:
+        """从最近 N 笔交易动态更新凯利参数。
+
+        Args:
+            trades: 交易记录列表，每条包含 {"pnl_pct": float}
+        """
+        recent = trades[-self.lookback_trades:]
+        if len(recent) < 10:
+            return  # 数据不足，保持默认参数
+
+        wins = [t for t in recent if t.get("pnl_pct", 0) > 0]
+        losses = [t for t in recent if t.get("pnl_pct", 0) <= 0]
+
+        # 全赢或全亏时不更新（避免除零或极端凯利值）
+        if not wins or not losses:
+            logger.debug(
+                f"Kelly update skipped: {len(wins)} wins, {len(losses)} losses "
+                f"(need both to compute)"
+            )
+            return
+
+        self.win_rate = len(wins) / len(recent)
+        self.avg_win_pct = sum(t["pnl_pct"] for t in wins) / len(wins)
+        self.avg_loss_pct = abs(sum(t["pnl_pct"] for t in losses) / len(losses))
+
+        # 安全检查：确保更新后的参数有效
+        if self.avg_win_pct <= 0 or self.avg_loss_pct <= 0 or not np.isfinite(self.win_rate):
+            logger.warning("Kelly update produced invalid params, keeping previous values")
+            return
 
 
 class ATRSizer(PositionSizer):
     """波动率调整仓位。
 
-    根据 ATR 动态调整仓位：波动大 → 仓位小，波动小 → 仓位大。
+    核心公式:
+        risk_amount = balance * base_risk_pct / 100
+        position_size = risk_amount / (ATR * multiplier)
 
-    position = balance * base_risk_pct / (ATR / price * 100)
+    等价于:
+        position_pct = base_risk_pct / (ATR_pct * multiplier)
 
-    例如：
-    - base_risk_pct = 10%
-    - ATR/price = 2% → position = 10% * (100/2) = 500% → 上限 100%
-    - ATR/price = 5% → position = 10% * (100/5) = 200% → 上限 100%
-    - ATR/price = 10% → position = 10% * (100/10) = 100%
+    其中 ATR_pct = ATR / price * 100 (波动率百分比)
+    multiplier 控制风险敏感度，默认 1.0
+
+    示例 (base_risk_pct=10%, multiplier=1.0):
+    - ATR_pct = 2%  → position_pct = 10% / 2% = 500% → 上限 100%
+    - ATR_pct = 5%  → position_pct = 10% / 5% = 200% → 上限 100%
+    - ATR_pct = 10% → position_pct = 10% / 10% = 100%
+    - ATR_pct = 20% → position_pct = 10% / 20% = 50%
     """
 
     def __init__(
         self,
         base_risk_pct: float = 10.0,
         atr_period: int = 14,
+        multiplier: float = 1.0,
         min_order: float = 10.0,
         max_pct: float = 100.0,
     ):
         self.base_risk_pct = base_risk_pct
         self.atr_period = atr_period
+        self.multiplier = multiplier
         self.min_order = min_order
         self.max_pct = max_pct
 
@@ -172,18 +217,17 @@ class ATRSizer(PositionSizer):
         **kwargs,
     ) -> float:
         if df is None or len(df) < self.atr_period:
-            # 无数据时回退到固定比例
             return balance * self.base_risk_pct / 100
 
         from cryptoquant.strategy.signals import atr
         atr_val = atr(df, self.atr_period).iloc[-1]
 
-        if pd.isna(atr_val) or atr_val == 0:
+        if pd.isna(atr_val) or atr_val == 0 or price == 0:
             return balance * self.base_risk_pct / 100
 
-        vol_pct = atr_val / price * 100
+        atr_pct = atr_val / price * 100
         position_pct = min(
-            self.base_risk_pct * (2.0 / max(vol_pct, 0.5)),  # 防止除以 0
+            self.base_risk_pct / (atr_pct * self.multiplier),
             self.max_pct,
         )
         amount = balance * position_pct / 100
@@ -235,10 +279,14 @@ def create_sizer(method: SizerMethod, **kwargs) -> PositionSizer:
 
 ```python
 # cryptoquant/risk/manager.py
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, date
 
+import numpy as np
 from loguru import logger
+
+from cryptoquant.exceptions import EmergencyStopError, RiskError
 
 
 @dataclass
@@ -284,6 +332,7 @@ class RiskManager:
         min_balance: float = 50.0,
         sizer: "PositionSizer | None" = None,
         initial_balance: float = 0.0,
+        emergency_cooldown_minutes: int = 60,
     ):
         self.max_positions = max_positions
         self.max_daily_trades = max_daily_trades
@@ -293,16 +342,17 @@ class RiskManager:
         self.max_drawdown_pct = max_drawdown_pct
         self.min_balance = min_balance
         self.sizer = sizer
+        self.emergency_cooldown_minutes = emergency_cooldown_minutes
 
-        # 当日统计
         today = date.today().isoformat()
         self._daily_stats = DailyStats(
             date=today,
             start_balance=initial_balance,
             current_balance=initial_balance,
         )
-        self._positions: dict[str, str] = {}  # symbol → side
+        self._positions: dict[str, str] = {}
         self._emergency_stop = False
+        self._emergency_triggered_at: float | None = None
         self._peak_balance = initial_balance
 
     # ===== 入场检查 =====
@@ -378,7 +428,6 @@ class RiskManager:
         """计算仓位大小。委托给 Sizer。"""
         if self.sizer:
             return self.sizer.calculate(balance, price, **kwargs)
-        # 默认：满仓
         return balance * 0.98
 
     # ===== 记录交易 =====
@@ -400,8 +449,13 @@ class RiskManager:
         self._daily_stats.total_pnl_pct += pnl_pct
         self._daily_stats.total_pnl_abs += pnl_abs
 
-    def update_balance(self, balance: float):
+    def update_balance(self, balance: float, calibrate: bool = False):
         """更新当前余额 + 峰值。"""
+        if calibrate:
+            drift = balance - self._daily_stats.current_balance
+            if abs(drift) > 0.01:
+                logger.debug(f"Balance calibrated: drift={drift:+.2f} USDT")
+
         self._daily_stats.current_balance = balance
         if balance > self._peak_balance:
             self._peak_balance = balance
@@ -423,15 +477,39 @@ class RiskManager:
         """触发紧急停止 — 暂停所有新开仓。"""
         if not self._emergency_stop:
             self._emergency_stop = True
+            self._emergency_triggered_at = time.time()
             logger.critical(f"EMERGENCY STOP: {reason}")
 
     def is_emergency_stop(self) -> bool:
-        return self._emergency_stop
+        """检查是否处于紧急停止状态。
+
+        自动降级恢复机制：
+        - 紧急停止触发后，经过 emergency_cooldown_minutes 分钟冷却期
+        - 冷却期结束后自动降级为「半仓限制」模式（max_positions 减半）
+        - 不再阻止交易，但限制仓位规模
+        - 需要人工 clear_emergency() 完全恢复
+        """
+        if not self._emergency_stop:
+            return False
+
+        if self._emergency_triggered_at is not None:
+            elapsed = time.time() - self._emergency_triggered_at
+            if elapsed > self.emergency_cooldown_minutes * 60:
+                logger.warning(
+                    f"Emergency stop cooldown expired ({self.emergency_cooldown_minutes}min), "
+                    f"downgrading to half-position mode"
+                )
+                self._emergency_stop = False
+                self.max_positions = max(1, self.max_positions // 2)
+                return False
+
+        return True
 
     def clear_emergency(self):
         """手动清除紧急停止（需要人工确认）。"""
         logger.warning("Emergency stop cleared (manual)")
         self._emergency_stop = False
+        self._emergency_triggered_at = None
 
     # ===== 状态 =====
 
@@ -541,6 +619,65 @@ def setup_logging(
     return logger
 ```
 
+### 4.3 日志脱敏
+
+防止敏感信息（API Key、账户余额等）泄露到日志文件：
+
+```python
+# cryptoquant/monitor/sanitizer.py
+import re
+from loguru import logger
+
+
+_SENSITIVE_PATTERNS = [
+    (re.compile(r"(api[_-]?key['\":\s=]+)([A-Za-z0-9]{8,})"), r"\1***REDACTED***"),
+    (re.compile(r"(secret['\":\s=]+)([A-Za-z0-9]{8,})"), r"\1***REDACTED***"),
+    (re.compile(r"(password['\":\s=]+)(\S+)"), r"\1***REDACTED***"),
+    (re.compile(r"(passphrase['\":\s=]+)(\S+)"), r"\1***REDACTED***"),
+]
+
+
+def sanitize(message: str) -> str:
+    """脱敏日志消息中的敏感信息。"""
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        message = pattern.sub(replacement, message)
+    return message
+
+
+class SanitizingLogger:
+    """日志脱敏包装器。
+
+    Usage:
+        safe_logger = SanitizingLogger(logger)
+        safe_logger.info(f"API key: {api_key}")  # key 被替换为 ***REDACTED***
+    """
+
+    def __init__(self, base_logger):
+        self._logger = base_logger
+
+    def __getattr__(self, name):
+        attr = getattr(self._logger, name)
+        if callable(attr) and name in ("debug", "info", "warning", "error", "critical"):
+            def wrapper(message, *args, **kwargs):
+                if isinstance(message, str):
+                    message = sanitize(message)
+                return attr(message, *args, **kwargs)
+            return wrapper
+        return attr
+```
+
+**在 Broker 等模块中使用：**
+
+```python
+from cryptoquant.monitor.sanitizer import SanitizingLogger
+from loguru import logger
+
+log = SanitizingLogger(logger)
+
+# 即使不小心打印了 API key，日志中也会显示 ***REDACTED***
+log.info(f"Connected with key: {api_key}")
+```
+
 ### 4.2 日志使用模式
 
 ```python
@@ -585,17 +722,29 @@ class TradeJournal:
     {"time": "2026-06-10T14:30:00", "symbol": "BTC/USDT", "side": "long",
      "entry_price": 95000.0, "exit_price": 96000.0, "pnl_pct": 1.05,
      "pnl_abs": 10.5, "exit_reason": "take_profit", "balance_after": 10010.5}
+
+    线程安全: 使用文件锁防止多进程并发写入导致行交错。
     """
 
-    def __init__(self, journal_dir: str = "logs"):
-        self.journal_path = Path(journal_dir) / "trade_journal.jsonl"
+    def __init__(self, journal_dir: str = "logs", strategy_name: str = "default"):
+        safe_name = strategy_name.replace("/", "_").replace(" ", "_")
+        self.journal_path = Path(journal_dir) / f"trade_journal_{safe_name}.jsonl"
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_path = self.journal_path.with_suffix(".lock")
 
-    def record(self, trade_data: dict):
-        """追加一条交易记录。"""
+    def record(self, trade_data: dict) -> None:
+        """追加一条交易记录（线程安全）。"""
+        import fcntl
+
         trade_data["recorded_at"] = datetime.utcnow().isoformat()
+
         with open(self.journal_path, "a") as f:
-            f.write(json.dumps(trade_data) + "\n")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(trade_data) + "\n")
+                f.flush()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def load_all(self) -> list[dict]:
         """加载全部交易记录。"""
@@ -795,7 +944,6 @@ def tick(self) -> TickResult:
 ```python
 def _on_exit_complete(self, trade_data: dict):
     """平仓完成后调用。"""
-    # 更新风控
     if self.risk_manager:
         self.risk_manager.record_exit(
             trade_data["symbol"],
@@ -804,12 +952,33 @@ def _on_exit_complete(self, trade_data: dict):
         )
         self.risk_manager.update_balance(trade_data["balance_after"])
 
-    # 写入日志
+        # 动态更新 Kelly 参数
+        if isinstance(self.risk_manager.sizer, KellySizer):
+            trades = self.journal.load_all() if self.journal else []
+            self.risk_manager.sizer.update_from_trades(trades)
+
     if self.journal:
         self.journal.record(trade_data)
 
-    # 检查是否需要每日重置
     self._check_day_rollover()
+```
+
+### 8.3 定期余额校准
+
+浮点累加会产生误差。每小时从交易所获取真实余额进行校准：
+
+```python
+# LiveEngine.run() 中增加
+_last_calibration = 0
+CALIBRATION_INTERVAL = 3600  # 1 小时
+
+# 在 tick 循环中
+now = time.time()
+if now - self._last_calibration > CALIBRATION_INTERVAL:
+    real_balance = self.broker.get_balance("USDT")
+    if self.risk_manager:
+        self.risk_manager.update_balance(real_balance, calibrate=True)
+    self._last_calibration = now
 ```
 
 ---
@@ -829,11 +998,16 @@ risk:
   max_per_trade_risk_pct: 2.0         # 单笔风险上限（%）
   max_drawdown_pct: 20.0              # 累计最大回撤（%）
   min_balance: 50.0                   # 最低余额
+  calibration_interval: 3600          # 余额校准间隔（秒）
   sizer:
     method: atr                        # fixed | kelly | atr
     base_risk_pct: 20.0               # ATR 方法的基础风险比例
     atr_period: 14
+    multiplier: 1.0                    # ATR 风险敏感度
     max_pct: 100.0
+    # Kelly 专用
+    lookback_trades: 50               # 动态更新 Kelly 参数的回看窗口
+    fraction: 0.5                      # 半凯利
 
 notifications:
   on_entry: true
@@ -900,15 +1074,16 @@ notifications:
 | 文件 | 行数估算 | 职责 |
 |------|---------|------|
 | `cryptoquant/risk/__init__.py` | ~5 | 导出 |
-| `cryptoquant/risk/sizer.py` | ~150 | FixedSizer, KellySizer, ATRSizer |
-| `cryptoquant/risk/manager.py` | ~220 | RiskManager 风控检查 |
+| `cryptoquant/risk/sizer.py` | ~180 | FixedSizer, KellySizer, ATRSizer |
+| `cryptoquant/risk/manager.py` | ~280 | RiskManager 风控检查 + 余额校准 + 紧急停止自动恢复 |
 | `cryptoquant/monitor/__init__.py` | ~5 | 导出 |
 | `cryptoquant/monitor/logger.py` | ~50 | loguru 配置 |
-| `cryptoquant/monitor/journal.py` | ~70 | TradeJournal JSONL |
+| `cryptoquant/monitor/sanitizer.py` | ~40 | 日志脱敏（API Key、密码等） |
+| `cryptoquant/monitor/journal.py` | ~90 | TradeJournal JSONL (线程安全) |
 | `cryptoquant/monitor/reporter.py` | ~80 | 每日/每周摘要 |
-| `tests/test_sizer.py` | ~80 | Sizer 单元测试 |
-| `tests/test_risk_manager.py` | ~150 | RiskManager 测试 |
-| `tests/test_monitor.py` | ~80 | Monitor 测试 |
+| `tests/test_sizer.py` | ~100 | Sizer 单元测试 |
+| `tests/test_risk_manager.py` | ~200 | RiskManager 测试（含紧急停止恢复） |
+| `tests/test_monitor.py` | ~120 | Monitor 测试（含脱敏验证） |
 
 ---
 

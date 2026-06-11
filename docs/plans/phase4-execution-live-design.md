@@ -30,6 +30,12 @@ Phase 4 将策略从回测推向实盘。分两层：执行层（交易所抽象
 - 所有状态持久化，进程重启后无缝恢复
 - 错误不静默 — 任何异常都告警 + 记录
 
+**Spot 模式限制（重要）：**
+- OKX spot **不支持裸卖空**。`market_sell()` 仅用于**平已有持仓**
+- 策略发出 -1（做空）信号时，LiveEngine 在 spot 模式下仅执行平仓（如有持仓），不开新空仓
+- 做空需要合约账户（`account_type: "swap"`），Phase 4 默认 `spot` 模式
+- `get_position()` 在 spot 下通过查询 base 货币余额判断是否有持仓
+
 ---
 
 ## 2. 执行层：Broker 设计
@@ -43,20 +49,22 @@ Phase 4 将策略从回测推向实盘。分两层：执行层（交易所抽象
 │ - exchange: ccxt.Exchange                                │
 │ - exchange_name: str                                     │
 │ - testnet: bool                                          │
-│ - config: dict                                           │
+│ - account_type: str  # "spot" | "swap"                   │
 ├──────────────────────────────────────────────────────────┤
-│ + get_balance(quote="USDT") → float                       │
-│ + get_positions() → list[Position]                        │
-│ + get_position(symbol) → Position | None                  │
-│ + get_open_orders(symbol) → list[Order]                   │
-│ + market_buy(symbol, amount) → Order                      │
-│ + market_sell(symbol, amount) → Order                     │
-│ + limit_buy(symbol, amount, price) → Order                │
-│ + limit_sell(symbol, amount, price) → Order               │
-│ + cancel_order(id, symbol) → bool                         │
-│ + cancel_all_orders(symbol) → int                         │
-│ + fetch_order(id, symbol) → Order                         │
-│ + get_ticker(symbol) → dict  # {bid, ask, last}          │
+│ + can_short → bool  (property)                           │
+│ + get_balance(quote="USDT") → float                      │
+│ + get_position(symbol) → Position | None                 │
+│ + get_open_orders(symbol) → list[Order]                  │
+│ + market_buy(symbol, amount) → Order                     │
+│ + market_sell(symbol, amount) → Order                    │
+│ + limit_buy(symbol, amount, price) → Order               │
+│ + limit_sell(symbol, amount, price) → Order              │
+│ + cancel_order(id, symbol) → bool                        │
+│ + cancel_all_orders(symbol) → int                        │
+│ + fetch_order(id, symbol) → Order                        │
+│ + wait_for_fill(id, symbol, timeout) → Order             │
+│ + get_ticker(symbol) → dict                              │
+│ + reconnect() → None                                     │
 │ + is_testnet() → bool                                    │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -69,6 +77,12 @@ import ccxt
 from loguru import logger
 from typing import Optional
 
+from cryptoquant.exceptions import (
+    ExecutionError,
+    InsufficientFundsError,
+    OrderRejectedError,
+)
+
 
 class Broker:
     """交易所抽象层。通过 ccxt 与交易所通信。
@@ -77,6 +91,10 @@ class Broker:
     - 统一多交易所接口，调用方不感知是 OKX 还是 Binance
     - 所有方法有统一错误处理（网络重试 + 业务异常转换）
     - testnet 模式下可用沙盒 API Key 验证完整流程
+
+    账户类型：
+    - "spot": 现货交易，仅支持做多（不能裸卖空）
+    - "swap": 永续合约，支持做多和做空（需要合约账户）
     """
 
     def __init__(
@@ -86,9 +104,11 @@ class Broker:
         secret: str = "",
         password: str = "",
         testnet: bool = True,
+        account_type: str = "spot",  # "spot" | "swap"
     ):
         self.exchange_name = exchange
         self.testnet = testnet
+        self.account_type = account_type
 
         exchange_class = getattr(ccxt, exchange)
         self.exchange = exchange_class({
@@ -96,29 +116,34 @@ class Broker:
             "secret": secret,
             "password": password,
             "enableRateLimit": True,
-            "options": {"defaultType": "spot"},
+            "options": {"defaultType": account_type},
         })
 
         if testnet:
             self.exchange.set_sandbox_mode(True)
-            logger.info(f"Broker initialized: {exchange} TESTNET")
+            logger.info(f"Broker initialized: {exchange} TESTNET ({account_type})")
         else:
-            logger.warning(f"Broker initialized: {exchange} LIVE ⚠️")
+            logger.warning(f"Broker initialized: {exchange} LIVE ({account_type})")
+
+    @property
+    def can_short(self) -> bool:
+        """是否支持做空。"""
+        return self.account_type == "swap"
 
     def _handle_ccxt_error(self, e: Exception, context: str) -> None:
         """统一的 ccxt 异常处理。"""
         if isinstance(e, ccxt.NetworkError):
             logger.error(f"[{context}] Network error: {e}")
-            raise ConnectionError(f"Exchange network error: {e}") from e
+            raise ExecutionError(f"Exchange network error: {e}") from e
         elif isinstance(e, ccxt.AuthenticationError):
             logger.error(f"[{context}] Auth error — check API keys")
-            raise PermissionError("Exchange authentication failed") from e
+            raise ExecutionError("Exchange authentication failed") from e
         elif isinstance(e, ccxt.InsufficientFunds):
             logger.error(f"[{context}] Insufficient funds")
-            raise ValueError("Insufficient funds") from e
+            raise InsufficientFundsError("Insufficient funds") from e
         elif isinstance(e, ccxt.InvalidOrder):
             logger.error(f"[{context}] Invalid order: {e}")
-            raise ValueError(f"Invalid order: {e}") from e
+            raise OrderRejectedError(f"Invalid order: {e}") from e
         else:
             logger.error(f"[{context}] Unknown error: {e}")
             raise
@@ -260,6 +285,111 @@ def get_open_orders(self, symbol: str) -> list[Order]:
     except Exception as e:
         self._handle_ccxt_error(e, f"get_open_orders({symbol})")
         return []
+
+
+def get_position(self, symbol: str) -> "Position | None":
+    """获取当前持仓。
+
+    Spot 模式: 查询 base 货币余额。有余额即视为 long 持仓。
+    Swap 模式: 查询合约持仓信息。
+
+    Returns:
+        Position 对象，无持仓返回 None
+    """
+    try:
+        if self.account_type == "spot":
+            return self._get_spot_position(symbol)
+        else:
+            return self._get_swap_position(symbol)
+    except Exception as e:
+        self._handle_ccxt_error(e, f"get_position({symbol})")
+        return None
+
+
+def _get_spot_position(self, symbol: str) -> "Position | None":
+    """Spot 持仓 = base 货币可用余额 > 0。"""
+    base = symbol.split("/")[0]  # "BTC/USDT" → "BTC"
+    balance = self.exchange.fetch_balance()
+    free = float(balance.get(base, {}).get("free", 0) or 0)
+
+    if free <= 0:
+        return None
+
+    ticker = self.exchange.fetch_ticker(symbol)
+    current_price = float(ticker.get("last", 0))
+
+    return Position(
+        symbol=symbol,
+        side="long",  # spot 只能是 long
+        amount=free,
+        entry_price=0.0,  # spot 无法获取精确入场价，需从 state 恢复
+        current_price=current_price,
+        unrealized_pnl=0.0,
+        unrealized_pnl_abs=0.0,
+        timestamp=int(ticker.get("timestamp", 0) or 0),
+    )
+
+
+def _get_swap_position(self, symbol: str) -> "Position | None":
+    """Swap 持仓 — 通过 ccxt fetch_positions 查询。"""
+    try:
+        positions = self.exchange.fetch_positions([symbol])
+        for pos in positions:
+            amount = float(pos.get("contracts", 0) or 0)
+            if amount > 0:
+                return Position.from_ccxt(pos)
+    except Exception:
+        pass
+    return None
+
+
+def wait_for_fill(self, order_id: str, symbol: str, timeout: int = 30) -> Order:
+    """等待订单成交。
+
+    Args:
+        order_id: 订单 ID
+        symbol: 交易对
+        timeout: 超时秒数
+
+    Returns:
+        已成交的 Order
+
+    Raises:
+        ExecutionError: 超时或订单被拒绝
+    """
+    import time
+    start = time.time()
+
+    while time.time() - start < timeout:
+        order = self.fetch_order(order_id, symbol)
+        if order.is_filled:
+            return order
+        if order.status in (OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
+            raise OrderRejectedError(f"Order {order_id} {order.status.value}")
+        time.sleep(1)
+
+    raise ExecutionError(f"Order {order_id} not filled within {timeout}s")
+
+
+def fetch_order(self, order_id: str, symbol: str) -> Order:
+    """查询订单状态。"""
+    try:
+        raw = self.exchange.fetch_order(order_id, symbol)
+        return Order.from_ccxt(raw, exchange=self.exchange_name)
+    except Exception as e:
+        self._handle_ccxt_error(e, f"fetch_order({order_id})")
+        raise
+
+
+def reconnect(self) -> None:
+    """断线重连。重新加载市场信息。"""
+    logger.warning(f"Reconnecting to {self.exchange_name}...")
+    try:
+        self.exchange.load_markets(reload=True)
+        logger.info(f"Reconnected to {self.exchange_name}")
+    except Exception as e:
+        logger.error(f"Reconnect failed: {e}")
+        raise ExecutionError(f"Reconnect failed: {e}") from e
 ```
 
 ### 2.4 OKX spot 特殊处理
@@ -291,6 +421,7 @@ from enum import Enum
 
 class OrderStatus(str, Enum):
     OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
     CLOSED = "closed"
     CANCELED = "canceled"
     EXPIRED = "expired"
@@ -353,6 +484,79 @@ class Order:
     @property
     def is_open(self) -> bool:
         return self.status == OrderStatus.OPEN
+
+    @property
+    def is_partially_filled(self) -> bool:
+        return self.status == OrderStatus.PARTIALLY_FILLED
+
+    @property
+    def fill_pct(self) -> float:
+        """成交百分比。"""
+        if self.amount <= 0:
+            return 0.0
+        return self.filled / self.amount * 100
+```
+
+### 3.3 订单状态机
+
+```
+                    create_order()
+                         │
+                         ▼
+                    ┌─────────┐
+                    │  OPEN   │
+                    └────┬────┘
+                         │
+              ┌──────────┼──────────┐
+              │          │          │
+        部分成交     全部成交     取消/拒绝/过期
+              │          │          │
+              ▼          ▼          ▼
+    ┌──────────────┐ ┌────────┐ ┌──────────┐
+    │ PARTIALLY_   │ │ CLOSED │ │ CANCELED │
+    │ FILLED       │ │        │ │ REJECTED │
+    └──────┬───────┘ └────────┘ │ EXPIRED  │
+           │                    └──────────┘
+     ┌─────┼─────┐
+     │           │
+  继续成交    取消剩余
+     │           │
+     ▼           ▼
+  ┌────────┐ ┌──────────┐
+  │ CLOSED │ │ CANCELED │
+  └────────┘ └──────────┘
+```
+
+**PARTIALLY_FILLED 处理策略：**
+
+```python
+def _handle_partial_fill(self, order: Order) -> Order:
+    """处理部分成交订单。
+
+    策略：
+    1. 成交比例 > 90%：视为完全成交，记录实际成交金额
+    2. 成交比例 > 0% 且 < 90%：取消剩余，记录部分成交
+    3. 超时未继续成交：自动取消
+    """
+    if not order.is_partially_filled:
+        return order
+
+    if order.fill_pct >= 90:
+        logger.info(
+            f"Order {order.id} partially filled {order.fill_pct:.1f}%, "
+            f"treating as filled. filled={order.filled}/{order.amount}"
+        )
+        order.status = OrderStatus.CLOSED
+        order.amount = order.filled
+        return order
+
+    logger.warning(
+        f"Order {order.id} partially filled {order.fill_pct:.1f}%, "
+        f"cancelling remaining {order.remaining}"
+    )
+    self.cancel_order(order.id, order.symbol)
+    order.amount = order.filled
+    return order
 ```
 
 ### 3.2 Position
@@ -453,6 +657,7 @@ class StateManager:
 
     使用 JSON 文件 — 简单、人类可读、易于调试。
     每次 tick 后原子写入，崩溃恢复只需读回文件。
+    写入时附带 SHA-256 checksum，读取时校验防止文件损坏。
     """
 
     def __init__(self, state_dir: str = "state"):
@@ -464,24 +669,53 @@ class StateManager:
         return self.state_dir / f"state_{strategy_name}_{safe_symbol}.json"
 
     def save(self, state: EngineState):
-        """保存状态到 JSON 文件。"""
+        """保存状态到 JSON 文件（原子写入 + checksum）。"""
         path = self._state_path(state.strategy_name, state.symbol)
-        # 先写临时文件，再 rename（原子操作）
         tmp_path = path.with_suffix(".tmp")
         data = asdict(state)
         data["saved_at"] = datetime.utcnow().isoformat()
+
+        json_str = json.dumps(data, indent=2)
+        data["checksum"] = _sha256(json_str)
+
         with open(tmp_path, "w") as f:
             json.dump(data, f, indent=2)
         tmp_path.rename(path)
 
     def load(self, strategy_name: str, symbol: str) -> EngineState | None:
-        """加载上次保存的状态。"""
+        """加载上次保存的状态（含 checksum 校验）。
+
+        Returns:
+            EngineState 或 None（文件不存在 / checksum 不匹配）
+        """
         path = self._state_path(strategy_name, symbol)
         if not path.exists():
             return None
         with open(path) as f:
             data = json.load(f)
-        return EngineState(**{k: v for k, v in data.items() if k != "saved_at"})
+
+        stored_checksum = data.pop("checksum", None)
+        if stored_checksum:
+            payload = {k: v for k, v in data.items() if k != "saved_at"}
+            expected_json = json.dumps(payload, indent=2)
+            if _sha256(expected_json) != stored_checksum:
+                logger.error(
+                    f"State file checksum mismatch for {strategy_name}/{symbol}, "
+                    f"file may be corrupted. Starting fresh."
+                )
+                return None
+
+        try:
+            return EngineState(**{k: v for k, v in data.items() if k != "saved_at"})
+        except (TypeError, ValueError) as e:
+            logger.error(f"State file parse error: {e}. Starting fresh.")
+            return None
+
+
+def _sha256(s: str) -> str:
+    """计算字符串 SHA-256。"""
+    import hashlib
+    return hashlib.sha256(s.encode()).hexdigest()
 ```
 
 ---
@@ -555,7 +789,10 @@ class LiveEngine:
         state_dir: str = "state",
         symbol: str = "",
         min_order_usdt: float = 10.0,
+        max_order_usdt: float = 1000.0,  # 单笔最大下单金额（硬限制）
         cooldown_bars: int = 0,       # 平仓后冷却 K 线数
+        initial_capital: float = 10000.0,
+        order_timeout: int = 30,      # 订单超时秒数
     ):
         self.broker = broker
         self.strategy = strategy
@@ -564,18 +801,22 @@ class LiveEngine:
         self.state_mgr = StateManager(state_dir)
         self.symbol = symbol
         self.min_order_usdt = min_order_usdt
+        self.max_order_usdt = max_order_usdt
         self.cooldown_bars = cooldown_bars
+        self._initial_capital = initial_capital
+        self.order_timeout = order_timeout
 
         self._running = False
         self._cooldown_remaining = 0
+        self._trades_count = 0
+        self._total_pnl_pct = 0.0
 
-        # 尝试恢复状态
         saved = self.state_mgr.load(strategy.name, symbol)
         if saved:
             logger.info(f"Restored state for {strategy.name} on {symbol}")
             self._trades_count = saved.total_trades
-        else:
-            self._trades_count = 0
+            self._total_pnl_pct = saved.total_pnl_pct
+            self._initial_capital = saved.initial_capital
 
     def tick(self) -> TickResult:
         """执行一次决策循环。
@@ -632,7 +873,7 @@ class LiveEngine:
                 timestamp=timestamp,
             )
 
-        # === 3. 检查当前持仓 ===
+        # === 3. 检查当前持仓（broker 为准，state 文件做校验）===
         try:
             position = self.broker.get_position(self.symbol)
         except Exception:
@@ -640,11 +881,17 @@ class LiveEngine:
 
         has_position = position is not None and position.amount > 0
 
+        # 一致性校验：broker 持仓 vs state 文件
+        self._verify_position_consistency(has_position, timestamp)
+
         # === 4. 决策 ===
+        balance = self._get_balance()
+        current_positions = 1 if has_position else 0
+
         if has_position:
             # 平仓条件：反向信号
-            if (position.side == "long" and signal == -1) or \
-               (position.side == "short" and signal == 1):
+            # Spot 下只有 long 持仓，-1 信号触发平仓
+            if position.side == "long" and signal == -1:
                 return self._exit_position(position, signal, timestamp)
             else:
                 return TickResult(
@@ -652,42 +899,54 @@ class LiveEngine:
                     signal=signal,
                     reason=f"holding {position.side}",
                     order=None,
-                    balance=self._get_balance(),
+                    balance=balance,
                     timestamp=timestamp,
                 )
         else:
             # 入场条件
-            if signal in (1, -1):
-                # 风控检查（Phase 5 完善）
-                if self.risk_manager and not self.risk_manager.can_enter(
-                    self.symbol, signal
-                ):
-                    return TickResult(
-                        action=TickAction.SKIP,
-                        signal=signal,
-                        reason="risk manager rejected entry",
-                        order=None,
-                        balance=self._get_balance(),
-                        timestamp=timestamp,
+            # Spot 模式: 只响应 signal=1 (做多)
+            # Swap 模式: 响应 signal=1 (做多) 和 signal=-1 (做空)
+            if signal in (1, -1) and (signal == 1 or self.broker.can_short):
+                # 风控检查（签名与 Phase 5 RiskManager 对齐）
+                if self.risk_manager:
+                    allowed, reason = self.risk_manager.can_enter(
+                        self.symbol, signal, balance, current_positions
                     )
-                return self._enter_position(signal, timestamp)
+                    if not allowed:
+                        logger.warning(f"Entry blocked by risk manager: {reason}")
+                        return TickResult(
+                            action=TickAction.SKIP,
+                            signal=signal,
+                            reason=f"risk: {reason}",
+                            order=None,
+                            balance=balance,
+                            timestamp=timestamp,
+                        )
+                return self._enter_position(signal, timestamp, df)
             else:
                 return TickResult(
                     action=TickAction.NOOP,
-                    signal=0,
-                    reason="no signal",
+                    signal=signal if signal == -1 else 0,
+                    reason="no signal" if signal == 0 else "spot mode: short ignored",
                     order=None,
-                    balance=self._get_balance(),
+                    balance=balance,
                     timestamp=timestamp,
                 )
 
-    def _enter_position(self, signal: int, timestamp: int) -> TickResult:
+    def _enter_position(self, signal: int, timestamp: int, df: pd.DataFrame | None = None) -> TickResult:
         """开仓。"""
         side = "long" if signal == 1 else "short"
         balance = self._get_balance()
 
-        # 计算仓位大小
-        order_amount = self._calculate_position_size(balance)
+        order_amount = self._calculate_position_size(balance, df)
+
+        # 硬限制：单笔金额上限（防止程序错误导致大额下单）
+        if order_amount > self.max_order_usdt:
+            logger.warning(
+                f"Order {order_amount:.1f} USDT exceeds max {self.max_order_usdt}, "
+                f"clamped to max"
+            )
+            order_amount = self.max_order_usdt
 
         if order_amount < self.min_order_usdt:
             return TickResult(
@@ -705,7 +964,11 @@ class LiveEngine:
             else:
                 order = self.broker.market_sell(self.symbol, order_amount)
 
-            logger.info(f"ENTER {side.upper()}: {order.amount} @ ~{order.price}")
+            # 等待订单成交确认（含超时自动取消）
+            if order.is_open or order.is_partially_filled:
+                order = self._wait_and_handle_fill(order)
+
+            logger.info(f"ENTER {side.upper()}: {order.filled} @ {order.price}")
 
             return TickResult(
                 action=TickAction.ENTRY_LONG if signal == 1 else TickAction.ENTRY_SHORT,
@@ -726,6 +989,49 @@ class LiveEngine:
                 timestamp=timestamp,
             )
 
+    def _wait_and_handle_fill(self, order: Order) -> Order:
+        """等待订单成交，处理部分成交和超时。
+
+        流程：
+        1. 等待订单成交（超时自动取消）
+        2. 若部分成交：成交 > 90% 视为完全成交，否则取消剩余
+        3. 超时未成交：取消订单并抛出异常
+        """
+        try:
+            order = self.broker.wait_for_fill(
+                order.id, self.symbol, timeout=self.order_timeout
+            )
+        except ExecutionError:
+            # 超时 → 自动取消
+            logger.warning(
+                f"Order {order.id} timeout after {self.order_timeout}s, cancelling"
+            )
+            self.broker.cancel_order(order.id, self.symbol)
+            raise
+
+        # 处理部分成交
+        if order.is_partially_filled:
+            order = self._handle_partial_fill(order)
+
+        return order
+
+    def _handle_partial_fill(self, order: Order) -> Order:
+        """处理部分成交。"""
+        if order.fill_pct >= 90:
+            logger.info(
+                f"Order {order.id} {order.fill_pct:.1f}% filled, treating as complete"
+            )
+            order.status = OrderStatus.CLOSED
+            order.amount = order.filled
+        else:
+            logger.warning(
+                f"Order {order.id} {order.fill_pct:.1f}% filled, "
+                f"cancelling remaining {order.remaining}"
+            )
+            self.broker.cancel_order(order.id, order.symbol)
+            order.amount = order.filled
+        return order
+
     def _exit_position(
         self, position: Position, signal: int, timestamp: int
     ) -> TickResult:
@@ -737,6 +1043,10 @@ class LiveEngine:
                 order = self.broker.market_sell(self.symbol, position.amount)
             else:
                 order = self.broker.market_buy(self.symbol, position.amount)
+
+            # 等待订单成交确认（含超时自动取消 + 部分成交处理）
+            if order.is_open or order.is_partially_filled:
+                order = self._wait_and_handle_fill(order)
 
             self._trades_count += 1
             self._cooldown_remaining = self.cooldown_bars
@@ -767,13 +1077,48 @@ class LiveEngine:
         except Exception:
             return 0.0
 
-    def _calculate_position_size(self, balance: float) -> float:
+    def _calculate_position_size(self, balance: float, df: pd.DataFrame | None = None) -> float:
         """计算下单金额。
 
-        Phase 4 简化：满仓交易。
-        Phase 5 改为 sizer 模块管理。
+        优先使用 RiskManager 的 Sizer（Phase 5），否则默认 50% 仓位。
         """
-        return balance * 0.98  # 预留 2% 手续费
+        if self.risk_manager:
+            amount = self.risk_manager.position_size(
+                balance,
+                df["close"].iloc[-1] if df is not None else 0,
+                df=df,
+            )
+        else:
+            amount = balance * 0.50
+
+        # 硬限制：不超过 max_order_usdt
+        return min(amount, self.max_order_usdt)
+
+    def _verify_position_consistency(self, has_position: bool, timestamp: int):
+        """校验 broker 持仓与 state 文件的一致性。
+
+        不一致时以 broker 为准（交易所是 source of truth），
+        记录告警并更新内部状态。
+        """
+        saved = self.state_mgr.load(self.strategy.name, self.symbol)
+        if saved is None:
+            return
+
+        state_has_position = saved.has_position
+
+        if has_position and not state_has_position:
+            logger.warning(
+                f"Position consistency: broker has position but state file doesn't. "
+                f"Possible state file corruption or manual trade. "
+                f"Trusting broker."
+            )
+        elif not has_position and state_has_position:
+            logger.warning(
+                f"Position consistency: state file has position but broker doesn't. "
+                f"Possible liquidation or manual close. "
+                f"Resetting internal state."
+            )
+            self._cooldown_remaining = 0
 ```
 
 ### 5.3 `run()` — 循环入口
@@ -792,68 +1137,84 @@ def run(self, interval: int = 60):
     self._running = True
     logger.info(
         f"LiveEngine started: {self.strategy.name} on {self.symbol}, "
-        f"interval={interval}s, testnet={self.broker.testnet}"
+        f"interval={interval}s, testnet={self.broker.testnet}, "
+        f"account={self.broker.account_type}"
     )
 
-    # 注册优雅退出
     os_signal.signal(os_signal.SIGINT, self._handle_shutdown)
     os_signal.signal(os_signal.SIGTERM, self._handle_shutdown)
+
+    consecutive_errors = 0
 
     try:
         while self._running:
             try:
                 result = self.tick()
                 self._save_state()
+                consecutive_errors = 0
 
                 if result.action != TickAction.NOOP:
                     logger.info(f"Tick: {result.action.value} | {result.reason}")
 
-            except Exception as e:
-                logger.error(f"Tick failed: {e}")
-                # 异常后继续，不退出
+            except (ExecutionError, ConnectionError) as e:
+                consecutive_errors += 1
+                logger.error(f"Tick failed ({consecutive_errors}x): {e}")
 
-            # 休眠到下一个整点 K 线
+                if consecutive_errors >= 3:
+                    logger.warning("Multiple consecutive errors, attempting reconnect...")
+                    try:
+                        self.broker.reconnect()
+                        consecutive_errors = 0
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                logger.error(f"Unexpected tick error: {e}")
+
             time.sleep(interval)
 
     finally:
         self._save_state()
         logger.info("LiveEngine stopped")
 
-    def _handle_shutdown(self, signum, frame):
-        """处理 SIGINT/SIGTERM，优雅退出。"""
-        logger.info(f"Received signal {signum}, shutting down...")
-        self._running = False
 
-    def stop(self):
-        """手动停止引擎。"""
-        self._running = False
+def _handle_shutdown(self, signum, frame):
+    """处理 SIGINT/SIGTERM，优雅退出。"""
+    logger.info(f"Received signal {signum}, shutting down...")
+    self._running = False
 
-    def _save_state(self):
-        """保存当前状态到文件。"""
-        try:
-            balance = self._get_balance()
-            position = self.broker.get_position(self.symbol)
 
-            state = EngineState(
-                timestamp=int(datetime.utcnow().timestamp() * 1000),
-                strategy_name=self.strategy.name,
-                symbol=self.symbol,
-                balance=balance,
-                initial_capital=10000,  # TODO: 从配置读取
-                has_position=position is not None and position.amount > 0,
-                position_side=position.side if position else "",
-                position_entry_price=position.entry_price if position else 0,
-                position_amount=position.amount if position else 0,
-                position_entry_time=position.timestamp if position else 0,
-                active_order_ids=[],
-                total_trades=self._trades_count,
-                total_pnl_pct=0.0,     # TODO: 累积计算
-                last_signal=0,
-                last_tick_time=0,
-            )
-            self.state_mgr.save(state)
-        except Exception as e:
-            logger.warning(f"Failed to save state: {e}")
+def stop(self):
+    """手动停止引擎。"""
+    self._running = False
+
+
+def _save_state(self):
+    """保存当前状态到文件。"""
+    try:
+        balance = self._get_balance()
+        position = self.broker.get_position(self.symbol)
+
+        state = EngineState(
+            timestamp=int(datetime.utcnow().timestamp() * 1000),
+            strategy_name=self.strategy.name,
+            symbol=self.symbol,
+            balance=balance,
+            initial_capital=self._initial_capital,
+            has_position=position is not None and position.amount > 0,
+            position_side=position.side if position else "",
+            position_entry_price=position.entry_price if position else 0,
+            position_amount=position.amount if position else 0,
+            position_entry_time=position.timestamp if position else 0,
+            active_order_ids=[],
+            total_trades=self._trades_count,
+            total_pnl_pct=self._total_pnl_pct,
+            last_signal=0,
+            last_tick_time=int(datetime.utcnow().timestamp() * 1000),
+        )
+        self.state_mgr.save(state)
+    except Exception as e:
+        logger.warning(f"Failed to save state: {e}")
 ```
 
 ---
@@ -867,9 +1228,14 @@ def run(self, interval: int = 60):
 
 live:
   testnet: true                              # 实盘前必须为 true
+  account_type: spot                         # "spot" | "swap" (spot 不支持做空)
   interval_seconds: 60                       # tick 间隔
   cooldown_bars: 3                           # 平仓后冷却 bar 数
   min_order_usdt: 10.0                       # 最小下单金额
+  max_order_usdt: 1000.0                     # 单笔最大下单金额（硬限制，防程序错误）
+  order_timeout: 30                          # 订单超时秒数（超时自动取消）
+  initial_capital: 10000.0                   # 初始资金
+  position_pct: 50.0                         # 默认仓位比例（%）
 
 state:
   dir: state/                                # 状态文件目录
@@ -896,33 +1262,73 @@ OKX_PASSWORD=your_passphrase
 | ERROR | 下单失败（余额不足） | 日志 + 告警 + 停止该策略 |
 | CRITICAL | 认证失败 | 日志 + 立即停止 |
 
-### 7.2 网络重试
+### 7.2 网络重试（指数退避 + 抖动）
 
-ccxt 的 `enableRateLimit: True` 已处理限速。额外的网络抖动：
+ccxt 的 `enableRateLimit: True` 已处理限速。额外的网络抖动使用指数退避 + 随机抖动：
 
 ```python
-# 可选：在 Broker 层加装饰器
 import functools
+import random
 import time
 
-def retry_on_network(max_retries=3, delay=2):
-    """网络异常自动重试装饰器。"""
+def retry_on_network(
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+    jitter: float = 0.1,
+):
+    """网络异常自动重试装饰器（指数退避 + 抖动）。
+
+    退避公式: delay = min(base_delay * 2^attempt, max_delay) * (1 + random jitter)
+
+    示例 (base_delay=1.0, max_delay=30.0):
+      attempt 0: ~1.0s
+      attempt 1: ~2.0s
+      attempt 2: ~4.0s
+      attempt 3: ~8.0s (超过 max_retries 则放弃)
+
+    Args:
+        max_retries: 最大重试次数
+        base_delay: 基础延迟（秒）
+        max_delay: 最大延迟上限（秒）
+        jitter: 抖动比例 (0.0-1.0)，避免多策略同时重试造成惊群效应
+    """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             last_error = None
-            for attempt in range(max_retries):
+            for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except (ccxt.NetworkError, ConnectionError) as e:
+                except (ccxt.NetworkError, ConnectionError, TimeoutError) as e:
                     last_error = e
-                    logger.warning(
-                        f"Retry {attempt+1}/{max_retries} for {func.__name__}: {e}"
-                    )
-                    time.sleep(delay * (attempt + 1))  # 递增延迟
+                    if attempt < max_retries:
+                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        delay *= (1 + random.uniform(-jitter, jitter))
+                        logger.warning(
+                            f"Retry {attempt+1}/{max_retries} for "
+                            f"{func.__name__} in {delay:.1f}s: {e}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"All {max_retries} retries exhausted for "
+                            f"{func.__name__}: {e}"
+                        )
             raise last_error
         return wrapper
     return decorator
+
+
+# 使用示例
+class Broker:
+    @retry_on_network(max_retries=3, base_delay=1.0)
+    def market_buy(self, symbol: str, amount: float) -> Order:
+        ...
+
+    @retry_on_network(max_retries=3, base_delay=1.0)
+    def get_balance(self, quote: str = "USDT") -> float:
+        ...
 ```
 
 ---
@@ -1003,14 +1409,14 @@ def test_broker_get_balance_testnet():
 | 文件 | 行数估算 | 职责 |
 |------|---------|------|
 | `cryptoquant/execution/__init__.py` | ~5 | 导出 Broker |
-| `cryptoquant/execution/broker.py` | ~180 | 交易所抽象 + ccxt 封装 |
-| `cryptoquant/execution/order.py` | ~100 | Order, Position 数据类 |
+| `cryptoquant/execution/broker.py` | ~200 | 交易所抽象 + ccxt 封装 + 指数退避重试 |
+| `cryptoquant/execution/order.py` | ~130 | Order, Position 数据类 + 订单状态机 |
 | `cryptoquant/engine/__init__.py` | ~5 | 导出 |
-| `cryptoquant/engine/live.py` | ~300 | LiveEngine 实盘循环 |
-| `cryptoquant/engine/state.py` | ~80 | StateManager 持久化 |
-| `tests/test_broker.py` | ~120 | Broker 测试（mock + integration） |
-| `tests/test_live_engine.py` | ~150 | LiveEngine 测试（mock broker） |
-| `tests/test_state.py` | ~50 | 状态持久化测试 |
+| `cryptoquant/engine/live.py` | ~350 | LiveEngine 实盘循环 + 部分成交处理 + 金额硬限制 |
+| `cryptoquant/engine/state.py` | ~100 | StateManager 持久化 + checksum 校验 |
+| `tests/test_broker.py` | ~140 | Broker 测试（mock + integration + 重试） |
+| `tests/test_live_engine.py` | ~180 | LiveEngine 测试（mock broker + 部分成交） |
+| `tests/test_state.py` | ~70 | 状态持久化测试（含 checksum 验证） |
 
 ---
 

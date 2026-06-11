@@ -66,8 +66,9 @@ Phase 1 (Data) 输出                  Phase 2 消耗
 ├─────────────────────────────────────────────────────────┤
 │ + params: dict                                          │
 │ + name: str (property, abstract)                        │
-│ + timeframes: list[str] (class var, default ["1h"])     │
+│ + timeframe: str (class var, default "1h")              │
 │ + min_bars: int (class var, default 100)                │
+│ + version: str (class var, default "1.0.0")             │
 ├─────────────────────────────────────────────────────────┤
 │ + generate_signal(df) → pd.Series     (abstract)        │
 │ + validate_params() → bool                               │
@@ -86,6 +87,8 @@ from typing import Any
 
 import pandas as pd
 
+from cryptoquant.exceptions import StrategyError
+
 
 class Strategy(ABC):
     """量化策略基类。
@@ -94,10 +97,8 @@ class Strategy(ABC):
 
     信号约定:
         1  → 做多 (long entry)
-       -1  → 做空 (short entry)
+       -1  → 做空 (short entry) — 仅合约模式可用，spot 下忽略
         0  → 无操作 (hold / flat)
-        2  → 平多 (exit long)    — 可选，Phase 3+使用
-       -2  → 平空 (exit short)   — 可选，Phase 3+使用
 
     子类通过 params dict 注入参数，避免硬编码。
     """
@@ -106,6 +107,8 @@ class Strategy(ABC):
     timeframe: str = "1h"       # 默认 K 线周期
     min_bars: int = 100          # 生成信号所需最少 K 线数
     version: str = "1.0.0"       # 策略版本号
+
+    DEFAULT_PARAMS: dict[str, Any] = {}
 
     def __init__(self, params: dict[str, Any] | None = None):
         """初始化策略。
@@ -122,11 +125,6 @@ class Strategy(ABC):
     def name(self) -> str:
         """策略名称，用于日志、报告、持久化。必须唯一。"""
         ...
-
-    @property
-    def DEFAULT_PARAMS(self) -> dict[str, Any]:
-        """子类覆写此属性提供默认参数。"""
-        return {}
 
     @abstractmethod
     def generate_signal(self, df: pd.DataFrame) -> pd.Series:
@@ -153,7 +151,7 @@ class Strategy(ABC):
             True 表示验证通过
 
         Raises:
-            ValueError: 参数不合法时
+            StrategyError: 参数不合法时
         """
         return True
 
@@ -174,10 +172,10 @@ class Strategy(ABC):
         required = ["open", "high", "low", "close", "volume"]
         missing = [c for c in required if c not in df.columns]
         if missing:
-            raise KeyError(f"DataFrame missing required columns: {missing}")
+            raise StrategyError(f"DataFrame missing required columns: {missing}")
 
         if len(df) < self.min_bars:
-            raise ValueError(
+            raise StrategyError(
                 f"Need at least {self.min_bars} bars, got {len(df)}"
             )
 
@@ -196,15 +194,17 @@ class Strategy(ABC):
 信号值约定:
 ┌──────┬──────────────────────────────────────────┐
 │  1   │ 开多 (buy to open)                       │
-│ -1   │ 开空 (sell to open)                      │
+│ -1   │ 开空 (sell to open) — 仅合约模式          │
 │  0   │ 无操作 (no action)                       │
-│  2   │ 平多 (sell to close long)  — Phase 3+    │
-│ -2   │ 平空 (buy to close short)  — Phase 3+    │
 └──────┴──────────────────────────────────────────┘
 
+注意: Spot 模式下 -1 信号被引擎忽略（OKX spot 不支持裸卖空）。
+      平仓由反向信号或引擎止损/止盈逻辑触发，策略无需显式发出平仓信号。
+
 信号连续性规则（回测引擎负责校验）:
-  - 连续两个 1 之间如果没有 -2，第二个 1 被忽略（已经是多头）
-  - 连续两个 -1 之间如果没有 2，第二个 -1 被忽略（已经是空头）
+  - 已是多头时收到 1 → 忽略（不能重复开多）
+  - 已是多头时收到 -1 → 平多（spot 下仅平仓，不开空）
+  - 已是空头时收到 -1 → 忽略（不能重复开空）
   - 策略本身不保证信号连续性，这是引擎的职责
 ```
 
@@ -438,11 +438,12 @@ def crossunder(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
     """Detect when series_a crosses BELOW series_b.
 
     Returns:
-        pd.Series: 1 at crossunder points, 0 elsewhere
+        pd.Series: -1 at crossunder points, 0 elsewhere
+        (与 crossover 返回值对称：上穿=1, 下穿=-1)
     """
     below = series_a < series_b
     cross = below & (~below.shift(1))
-    return cross.astype(int)
+    return (-cross).astype(int)
 ```
 
 ### 4.5 公共约定
@@ -496,14 +497,11 @@ class MACrossover(Strategy):
 
     timeframe = "1h"
     min_bars = 100
+    DEFAULT_PARAMS = {"fast": 12, "slow": 26, "signal_type": "both"}
 
     @property
     def name(self) -> str:
         return "MACrossover"
-
-    @property
-    def DEFAULT_PARAMS(self) -> dict:
-        return {"fast": 12, "slow": 26, "signal_type": "both"}
 
     def generate_signal(self, df: pd.DataFrame) -> pd.Series:
         df = self.preprocess(df)
@@ -520,7 +518,7 @@ class MACrossover(Strategy):
             signal[crossover(fast_ema, slow_ema) == 1] = 1
 
         if signal_type in ("short_only", "both"):
-            signal[crossunder(fast_ema, slow_ema) == 1] = -1
+            signal[crossunder(fast_ema, slow_ema) == -1] = -1
 
         return signal
 ```
@@ -606,21 +604,16 @@ def test_long_only_no_short_signals():
 
 ```python
 class MyStrategy(Strategy):
-    # 类变量：框架级元信息
     timeframe = "4h"
     min_bars = 200
     version = "2.1.0"
-
-    # DEFAULT_PARAMS：可调参数 + 默认值
-    @property
-    def DEFAULT_PARAMS(self) -> dict:
-        return {
-            "fast": 12,
-            "slow": 26,
-            "stop_loss_pct": 3.0,
-            "take_profit_pct": 5.0,
-            "max_hold_bars": 24,
-        }
+    DEFAULT_PARAMS = {
+        "fast": 12,
+        "slow": 26,
+        "stop_loss_pct": 3.0,
+        "take_profit_pct": 5.0,
+        "max_hold_bars": 24,
+    }
 ```
 
 ### 6.2 参数扫掠友好
@@ -644,34 +637,176 @@ for fast in [8, 12, 21]:
 def validate_params(self) -> bool:
     """覆写以添加自定义校验。"""
     if self.params["fast"] >= self.params["slow"]:
-        raise ValueError(
+        raise StrategyError(
             f"fast ({self.params['fast']}) must be < slow ({self.params['slow']})"
         )
     if self.params["stop_loss_pct"] <= 0:
-        raise ValueError("stop_loss_pct must be positive")
+        raise StrategyError("stop_loss_pct must be positive")
     return True
 ```
 
 ---
 
-## 7. 策略注册与发现（Phase 3+）
+## 7. 策略注册与发现
 
-Phase 2 不做自动注册。策略通过直接 import 使用。
+### 7.1 策略注册表（显式注册，避免导入时副作用）
 
-Phase 3 回测引擎可以通过约定路径扫描策略：
+```python
+# cryptoquant/strategy/registry.py
+from cryptoquant.strategy.base import Strategy
+from cryptoquant.exceptions import StrategyError
+
+_REGISTRY: dict[str, type[Strategy]] = {}
+
+
+def register(cls: type[Strategy]) -> type[Strategy]:
+    """显式注册策略类。
+
+    与装饰器注册不同，显式注册在模块加载后由调用方主动触发，
+    避免 import 时的隐式副作用和循环依赖问题。
+
+    Usage:
+        from strategies.example.ma_cross import MACrossover
+        register(MACrossover)
+    """
+    instance = cls()
+    name = instance.name
+    if name in _REGISTRY:
+        existing_version = _REGISTRY[name].version
+        new_version = cls.version
+        if new_version > existing_version:
+            _REGISTRY[name] = cls  # 高版本覆盖低版本
+        else:
+            raise StrategyError(
+                f"Duplicate strategy name: {name} "
+                f"(existing v{existing_version}, new v{new_version})"
+            )
+    else:
+        _REGISTRY[name] = cls
+    return cls
+
+
+def register_all(*classes: type[Strategy]) -> None:
+    """批量注册多个策略。"""
+    for cls in classes:
+        register(cls)
+
+
+def auto_discover(strategy_dirs: list[str] | None = None) -> None:
+    """自动发现并注册策略。
+
+    扫描指定目录下的所有 .py 文件，导入并注册其中的 Strategy 子类。
+    使用 importlib 动态加载，避免在 __init__.py 中手动 import。
+
+    Args:
+        strategy_dirs: 策略目录列表，默认 ["strategies/"]
+    """
+    import importlib.util
+    from pathlib import Path
+
+    if strategy_dirs is None:
+        strategy_dirs = ["strategies"]
+
+    for dir_path in strategy_dirs:
+        for py_file in Path(dir_path).rglob("*.py"):
+            if py_file.name.startswith("_"):
+                continue
+            module_name = py_file.stem
+            spec = importlib.util.spec_from_file_location(module_name, py_file)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (
+                        isinstance(attr, type)
+                        and issubclass(attr, Strategy)
+                        and attr is not Strategy
+                    ):
+                        register(attr)
+
+
+def get_strategy(name: str) -> type[Strategy]:
+    """按名称获取策略类。"""
+    if name not in _REGISTRY:
+        raise StrategyError(f"Unknown strategy: {name}. Available: {list(_REGISTRY.keys())}")
+    return _REGISTRY[name]
+
+
+def list_strategies() -> list[dict]:
+    """列出所有已注册策略名称及版本。"""
+    return [
+        {"name": name, "version": cls.version, "timeframe": cls.timeframe}
+        for name, cls in _REGISTRY.items()
+    ]
+
+
+def clear_registry() -> None:
+    """清空注册表。用于测试隔离。"""
+    _REGISTRY.clear()
+```
+
+### 7.2 使用方式
+
+**方式 A：显式注册（推荐，无隐式副作用）**
+
+```python
+# 回测引擎或 CLI 中
+from cryptoquant.strategy.registry import register, auto_discover
+from strategies.example.ma_cross import MACrossover
+
+register(MACrossover)
+strategy_cls = get_strategy("MACrossover")
+strategy = strategy_cls({"fast": 8, "slow": 21})
+```
+
+**方式 B：自动发现（适合策略数量多的场景）**
+
+```python
+from cryptoquant.strategy.registry import auto_discover, get_strategy
+
+auto_discover(["strategies/"])
+strategy_cls = get_strategy("MACrossover")
+```
+
+**方式 C：装饰器注册（保持向后兼容，但需注意导入顺序）**
+
+```python
+# strategies/example/ma_cross.py
+from cryptoquant.strategy.registry import register
+
+@register
+class MACrossover(Strategy):
+    ...
+```
+
+### 7.3 策略版本管理
+
+每个策略通过 `version` 类变量声明版本，注册时自动处理版本冲突：
+
+```python
+class MACrossover(Strategy):
+    version = "1.2.0"
+    # ...
+```
+
+**版本规则：**
+- 注册同名策略时，高版本自动覆盖低版本
+- 版本相同时抛出 `StrategyError`，防止意外重复注册
+- 回测结果中记录 `strategy_version`，确保可追溯
+
+### 7.4 目录约定
 
 ```
 strategies/
 ├── example/
 │   ├── __init__.py
-│   └── ma_cross.py    ← MACrossover
+│   └── ma_cross.py    ← MACrossover v1.2.0
 ├── trend/
-│   └── turtle.py      ← TurtleTrading
+│   └── turtle.py      ← TurtleTrading v1.0.0
 └── mean_reversion/
-    └── wick.py        ← WickInversion
+    └── wick.py        ← WickInversion v0.9.0
 ```
-
-约定：每个 `.py` 文件暴露一个 `Strategy` 子类，类名与文件名对应（PascalCase）。
 
 ---
 
@@ -796,10 +931,12 @@ def ohlcv_synthetic():
 | `cryptoquant/strategy/__init__.py` | ~5 | 导出 Strategy |
 | `cryptoquant/strategy/base.py` | ~80 | 策略抽象基类 |
 | `cryptoquant/strategy/signals.py` | ~250 | 技术指标函数库 (15+ 指标) |
+| `cryptoquant/strategy/registry.py` | ~80 | 策略注册表 + 显式注册 + 自动发现 + 版本管理 |
 | `strategies/example/ma_cross.py` | ~50 | 双均线示例策略 |
 | `tests/test_signals.py` | ~200 | 指标单元测试 |
 | `tests/test_strategy_base.py` | ~40 | 基类行为测试 |
 | `tests/test_ma_cross.py` | ~50 | 示例策略测试 |
+| `tests/test_registry.py` | ~60 | 注册表测试（含版本冲突、自动发现） |
 | `tests/conftest.py` | ~30 | 共享 fixtures |
 
 ---

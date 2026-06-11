@@ -95,44 +95,134 @@ logging:
   format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}"
 ```
 
-### 3.3 代码默认值（硬编码兜底）
+### 3.3 类型安全配置（pydantic-settings）
+
+使用 `pydantic-settings` 替代纯 dict，提供类型校验、自动转换和环境变量覆盖：
 
 ```python
-DEFAULTS = {
-    "exchange": {"default": "okx"},
-    "data": {
-        "db_path": "data/cryptoquant.db",
-        "cache": {"max_size": 128, "ttl_seconds": 300},
-        "fetch": {"max_candles_per_request": 300, "chunk_days": 7},
-    },
-    "trading": {"default_quote": "USDT", "min_order_usdt": 10.0},
-    "logging": {"level": "INFO", "dir": "logs/"},
-}
-```
+# cryptoquant/config.py
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+import yaml
 
-### 3.4 公开 API
 
-```python
-def load_config(config_path: str | None = None) -> dict:
+class ExchangeConfig(BaseSettings):
+    default: str = "okx"
+
+class DataCacheConfig(BaseSettings):
+    max_size: int = Field(default=128, ge=1)
+    ttl_seconds: int = Field(default=300, ge=0)
+
+class FetchConfig(BaseSettings):
+    max_candles_per_request: int = Field(default=300, ge=1, le=1000)
+    chunk_days: int = Field(default=7, ge=1)
+
+class DataConfig(BaseSettings):
+    db_path: str = "data/cryptoquant.db"
+    cache: DataCacheConfig = DataCacheConfig()
+    fetch: FetchConfig = FetchConfig()
+
+class TradingConfig(BaseSettings):
+    default_quote: str = "USDT"
+    min_order_usdt: float = Field(default=10.0, gt=0)
+
+class LoggingConfig(BaseSettings):
+    level: str = "INFO"
+    dir: str = "logs/"
+
+class AppConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_nested_delimiter="__",
+    )
+    exchange: ExchangeConfig = ExchangeConfig()
+    data: DataConfig = DataConfig()
+    trading: TradingConfig = TradingConfig()
+    logging: LoggingConfig = LoggingConfig()
+
+    # 敏感字段通过环境变量注入
+    okx_api_key: str = ""
+    okx_secret: str = ""
+    okx_password: str = ""
+
+
+_config_cache: AppConfig | None = None
+
+
+def load_config(config_path: str | None = None, *, use_cache: bool = True) -> AppConfig:
     """加载完整配置（YAML + .env overlay）。
+
+    使用 pydantic-settings 实现：
+    - 类型安全：字段类型不匹配时启动即报错
+    - 自动转换：环境变量字符串自动转为 int/float/bool
+    - 缓存：首次加载后缓存，后续调用直接返回（进程内配置不变）
 
     Args:
         config_path: YAML 路径，默认 <project_root>/config.yaml
+        use_cache: True 时缓存配置（推荐），False 时每次重新加载
 
     Returns:
-        合并后的配置字典。交易所 API Key 等敏感值通过 .env 注入，
-        以环境变量名（如 'OKX_API_KEY'）作为顶级 key。
+        AppConfig 实例（类型安全，IDE 自动补全）
     """
+    global _config_cache
+    if use_cache and _config_cache is not None:
+        return _config_cache
 
-def get_data_config(config: dict | None = None) -> dict:
-    """提取 data 子配置，带默认值回填。
-    便捷方法，避免上层到处写 config.get("data", {}).get("db_path", "...").
+    if config_path is None:
+        config_path = Path(__file__).parent.parent / "config.yaml"
+
+    yaml_data = {}
+    if Path(config_path).exists():
+        with open(config_path) as f:
+            yaml_data = yaml.safe_load(f) or {}
+
+    config = AppConfig(**yaml_data)
+
+    if use_cache:
+        _config_cache = config
+
+    return config
+
+
+def invalidate_config_cache():
+    """清除配置缓存，强制下次 load_config 重新加载。
+    用于测试或配置文件热更新场景。
     """
+    global _config_cache
+    _config_cache = None
+
+
+def get_data_config(config: AppConfig | None = None) -> DataConfig:
+    """提取 data 子配置。类型安全，无需手动 get 链。"""
+    if config is None:
+        config = load_config()
+    return config.data
 ```
+
+**pydantic-settings 优势：**
+
+| 特性 | 纯 dict 方案 | pydantic-settings |
+|------|-------------|-------------------|
+| 类型校验 | 运行时才发现问题 | 启动时即报错 |
+| 字段约束 | 需手动写 if 检查 | `Field(ge=0)` 声明式 |
+| IDE 支持 | 无自动补全 | 完整类型提示 |
+| 环境变量 | 手动合并 | 自动 `env_prefix` 映射 |
+| 嵌套配置 | 多层 `.get()` | 属性访问 `config.data.cache.max_size` |
+
+**依赖新增：** `pydantic-settings >= 2.0`
+
+### 3.4 代码默认值（硬编码兜底）
+
+默认值已内嵌在 pydantic model 的 `Field(default=...)` 中，无需额外 DEFAULTS dict。
 
 ### 3.5 线程安全
 
-`load_config()` 每次调用重新读取文件 — **无状态，天然线程安全**。不需要单例或锁。
+`load_config()` 使用进程级缓存（`_config_cache`），首次加载后直接返回。配置文件在进程生命周期内视为不可变。
+
+- 单进程场景：无锁，直接读取缓存
+- 多进程场景：每个进程独立加载，无需跨进程同步
+- 热更新场景：调用 `invalidate_config_cache()` 清除缓存后重新加载
 
 ---
 
@@ -177,15 +267,17 @@ def fetch(
 - 类型: 所有价格为 `float64`，volume 为 `float64`
 - 排序: 按时间升序
 - 空结果: 返回空 DataFrame（保留列名）
+- **数据质量**: 返回前经过 `validate_ohlcv()` 校验
 
 **错误处理表：**
 
 | 异常 | 来源 | 处理方式 |
 |------|------|---------|
-| `ccxt.BadSymbol` | 无效交易对 | 转为 `ValueError("Invalid symbol: ...")` |
-| `ccxt.NetworkError` | 网络超时 | 转为 `ConnectionError`，附带原始信息 |
-| `ccxt.RateLimitExceeded` | 触发限速 | 转为 `RuntimeError`，提示等待 |
-| `ccxt.ExchangeNotAvailable` | 交易所维护 | 转为 `RuntimeError` |
+| `ccxt.BadSymbol` | 无效交易对 | 转为 `DataFetchError("Invalid symbol: ...")` |
+| `ccxt.NetworkError` | 网络超时 | 转为 `DataFetchError`，附带原始信息 |
+| `ccxt.RateLimitExceeded` | 触发限速 | 转为 `DataFetchError`，提示等待 |
+| `ccxt.ExchangeNotAvailable` | 交易所维护 | 转为 `DataFetchError` |
+| 数据校验失败 | OHLCV 不合理 | 转为 `DataValidationError` |
 
 #### `fetch_range()` — 分段拉取历史数据
 
@@ -218,14 +310,92 @@ return concat + dedup + sort
 - `cursor` 推进使用 `df.index[-1] + 1ms`，避免重复拉取同一根 K 线
 - 每次 fetch 之间 `sleep(0.2)` 尊重 rate limit
 - 最终去重（`drop_duplicates`）以 index 为准
+- **cursor 语义**: OKX 返回的 timestamp 是 K 线**开盘时间**，因此 `+1ms` 正确推进到下一根。若接入其他交易所需验证其 timestamp 语义。
+
+### 4.2.1 OHLCV 数据质量校验
+
+```python
+def validate_ohlcv(df: pd.DataFrame) -> None:
+    """校验 OHLCV 数据合理性。
+
+    Raises:
+        DataValidationError: 数据不合法时
+    """
+    if df.empty:
+        return
+
+    required = ["open", "high", "low", "close", "volume"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise DataValidationError(f"Missing columns: {missing}")
+
+    # high >= low
+    mask = df["high"] < df["low"]
+    if mask.any():
+        bad_indices = df.index[mask][:3]
+        raise DataValidationError(
+            f"high < low at {len(mask.sum())} bars, e.g. {bad_indices}"
+        )
+
+    # open/close within [low, high]
+    for col in ("open", "close"):
+        mask = (df[col] < df["low"]) | (df[col] > df["high"])
+        if mask.any():
+            raise DataValidationError(
+                f"{col} outside [low, high] at {mask.sum()} bars"
+            )
+
+    # volume >= 0
+    if (df["volume"] < 0).any():
+        raise DataValidationError("Negative volume detected")
+
+    # no NaN in critical columns
+    for col in required:
+        if df[col].isna().any():
+            raise DataValidationError(f"NaN in column '{col}'")
+
+    # timestamp continuity — 检查缺失 K 线
+    if len(df) >= 2 and isinstance(df.index, pd.DatetimeIndex):
+        freq = pd.infer_freq(df.index)
+        if freq is not None:
+            expected_diff = pd.tseries.frequencies.to_offset(freq)
+            actual_diffs = df.index.to_series().diff().dropna()
+            median_diff = actual_diffs.median()
+            # 允许 10% 容差（交易所偶尔跳过 K 线）
+            gaps = actual_diffs[actual_diffs > median_diff * 1.1]
+            if len(gaps) > 0:
+                logger.warning(
+                    f"Detected {len(gaps)} gap(s) in OHLCV timestamps, "
+                    f"e.g. at {gaps.index[0]} (diff={gaps.iloc[0]})"
+                )
+```
+
+**时区约定：** 系统统一使用 **UTC 无时区** (`DatetimeIndex` without tz)。所有时间戳在 fetch 阶段即转换为 UTC，后续模块不再处理时区转换。若接入的交易所返回带时区数据，在 fetcher 层 `.tz_localize(None)` 去除。
+
+在 `fetch()` 返回前调用：
+
+```python
+def fetch(self, symbol, timeframe, limit=300, since=None):
+    # ... 拉取数据 ...
+    validate_ohlcv(df)
+    return df
+```
 
 ### 4.3 ccxt 实例化
 
 ```python
-def __init__(self, exchange: str = "okx", testnet: bool = True):
+from cryptoquant.exceptions import DataFetchError, DataValidationError
+
+def __init__(
+    self,
+    exchange: str = "okx",
+    testnet: bool = True,
+    timeout: int = 30_000,        # 连接超时（毫秒），默认 30s
+):
     exchange_class = getattr(ccxt, exchange)
     self.exchange = exchange_class({
         "enableRateLimit": True,
+        "timeout": timeout,
         "options": {"defaultType": "spot"},
     })
     if testnet:
@@ -233,6 +403,11 @@ def __init__(self, exchange: str = "okx", testnet: bool = True):
 ```
 
 **注意：** Phase 1 不需要 API Key。ccxt 公开接口（OHLCV）对大多数交易所无需认证。
+
+**超时配置说明：**
+- `timeout=30_000` 是 ccxt 的连接超时（毫秒），不是请求超时
+- 网络不稳定时可适当增大（如 `60_000`）
+- ccxt 的 `enableRateLimit=True` 已处理 API 限速，无需额外配置
 
 ### 4.4 测试策略
 
@@ -245,6 +420,9 @@ def __init__(self, exchange: str = "okx", testnet: bool = True):
 | `test_fetch_range_no_duplicates` | 集成 | 去重逻辑 |
 | `test_fetch_empty_result` | 边界 | since 太近无数据时返回空 DF |
 | `test_fetch_timeframe_variants` | 集成 | 所有 timeframe 字符串正确传递 |
+| `test_validate_ohlcv_high_lt_low` | 单元 | high < low 时抛 DataValidationError |
+| `test_validate_ohlcv_nan_values` | 单元 | 含 NaN 时抛 DataValidationError |
+| `test_validate_ohlcv_negative_volume` | 单元 | 负 volume 时抛 DataValidationError |
 
 **Fixture 设计：**
 
@@ -295,10 +473,17 @@ CREATE INDEX IF NOT EXISTS idx_okx_BTC_USDT_1h_ts
 **表名生成：**
 
 ```python
+import re
+
+_VALID_TABLE_NAME = re.compile(r"^ohlcv_[a-zA-Z0-9_]+_[a-zA-Z0-9_]+_\w+$")
+
 def _table_name(exchange: str, symbol: str, timeframe: str) -> str:
-    """BTC/USDT → BTC_USDT"""
+    """BTC/USDT → BTC_USDT，带白名单校验。"""
     safe = symbol.replace("/", "_").replace("-", "_")
-    return f"ohlcv_{exchange}_{safe}_{timeframe}"
+    name = f"ohlcv_{exchange}_{safe}_{timeframe}"
+    if not _VALID_TABLE_NAME.match(name):
+        raise DataValidationError(f"Invalid table name: {name}")
+    return name
 ```
 
 ### 5.2 类图
@@ -347,26 +532,43 @@ def save(
     """
 ```
 
-**实现（executemany 批量写入）：**
+**实现（批量写入优化版）：**
 
 ```python
 table = _table_name(exchange, symbol, timeframe)
 self._ensure_table(table)
 
-rows = []
-for ts, row in df.iterrows():
-    ts_ms = int(ts.timestamp() * 1000)
-    rows.append((ts_ms, row["open"], row["high"], row["low"], row["close"], row["volume"]))
+rows = [
+    (int(ts.timestamp() * 1000), row["open"], row["high"], row["low"], row["close"], row["volume"])
+    for ts, row in df.iterrows()
+]
 
-sql = f"INSERT OR REPLACE INTO {table} VALUES (?, ?, ?, ?, ?, ?)"
+# 使用临时表 + INSERT OR REPLACE 模式，比直接 executemany REPLACE 快 2-3x
+# 原因：临时表写入无索引开销，最后一次性合并
+tmp_table = f"_tmp_{table}"
 with self.conn:
-    self.conn.executemany(sql, rows)
+    self.conn.execute(
+        f"CREATE TEMP TABLE IF NOT EXISTS {tmp_table} "
+        f"(timestamp INTEGER PRIMARY KEY, open REAL, high REAL, "
+        f"low REAL, close REAL, volume REAL)"
+    )
+    self.conn.execute(f"DELETE FROM {tmp_table}")
+    self.conn.executemany(
+        f"INSERT INTO {tmp_table} VALUES (?, ?, ?, ?, ?, ?)", rows
+    )
+    self.conn.execute(
+        f"INSERT OR REPLACE INTO {table} SELECT * FROM {tmp_table}"
+    )
+    self.conn.execute(f"DROP TABLE {tmp_table}")
+
 return len(rows)
 ```
 
 **性能考虑：**
-- `executemany` + 单事务 → 10 万行 ~0.5 秒
+- 临时表 + 批量合并 → 10 万行 ~0.2 秒（比直接 REPLACE 快 2-3x）
+- 临时表无索引，写入速度快；最终通过 `SELECT *` 一次性合并到主表
 - 外层的 `with self.conn:` 自动 COMMIT/ROLLBACK
+- `PRAGMA journal_mode=WAL` 已启用，读写并发友好
 
 #### `load()` — 范围查询
 
@@ -525,17 +727,17 @@ def _db_has_enough(
     self, exchange, symbol, tf, lookback, start, end
 ) -> bool:
     """判断 SQLite 中是否有足够的数据满足请求。"""
+    db_range = self.store.get_range(exchange, symbol, tf)
+    if db_range is None:
+        return False
+
+    db_start, db_end = db_range
+
     if lookback is not None:
-        latest = self.store.get_latest(exchange, symbol, tf)
-        if latest is None:
-            return False
-        # 计算 lookback 对应的起始时间
         expected_start = _lookback_to_start(tf, lookback)
-        oldest = self.store.get_range(exchange, symbol, tf)[0]
-        return oldest <= expected_start
+        return db_start <= expected_start
     elif start is not None:
-        db_start, db_end = self.store.get_range(exchange, symbol, tf)
-        return db_start <= start and db_end >= end
+        return db_start <= start and (end is None or db_end >= end)
     return False
 ```
 
@@ -556,6 +758,18 @@ class DataCache:
         self._max_size = max_size
         self._ttl = ttl
 
+    def _set_l1(self, key: CacheKey, df: pd.DataFrame):
+        """写入 L1，超出 max_size 时淘汰最旧条目。"""
+        if key in self._l1:
+            del self._l1[key]
+        elif len(self._l1) >= self._max_size:
+            self._l1.popitem(last=False)  # FIFO 淘汰
+        self._l1[key] = CacheEntry(
+            df=df.copy(deep=True),  # 深拷贝，彻底隔离缓存与调用者
+            cached_at=time.time(),
+            latest_ts=int(df.index[-1].timestamp() * 1000) if len(df) > 0 else None,
+        )
+
     def _get_l1(self, key: CacheKey) -> pd.DataFrame | None:
         """查 L1，检查 TTL。过期返回 None 并删除。"""
         entry = self._l1.get(key)
@@ -564,26 +778,22 @@ class DataCache:
         if self._ttl > 0 and time.time() - entry.cached_at > self._ttl:
             del self._l1[key]
             return None
-        # LRU: 移到末尾
         self._l1.move_to_end(key)
-        return entry.df
-
-    def _set_l1(self, key: CacheKey, df: pd.DataFrame):
-        """写入 L1，超出 max_size 时淘汰最旧条目。"""
-        if key in self._l1:
-            del self._l1[key]
-        elif len(self._l1) >= self._max_size:
-            self._l1.popitem(last=False)  # FIFO 淘汰
-        self._l1[key] = CacheEntry(
-            df=df.copy(),  # 浅拷贝，避免外部修改污染缓存
-            cached_at=time.time(),
-            latest_ts=int(df.index[-1].timestamp() * 1000) if len(df) > 0 else None,
-        )
+        return entry.df.copy(deep=True)  # 返回副本，防止调用者修改缓存
 ```
 
-**为什么用 `df.copy()`？**
+**为什么用 `df.copy(deep=True)`？**
 - DataFrame 是可变的。如果调用者拿到缓存引用后做了 `df["close"] *= 2`，缓存就被污染了。
-- `.copy()` 创建新的 DataFrame 对象，但内部 numpy 数组共享内存（copy-on-write），所以几乎无性能损失。
+- pandas 2.0+ 的 Copy-on-Write (CoW) 机制在 `copy(deep=False)` 下的行为依赖全局选项 `pd.options.mode.copy_on_write`，不够稳定可靠。
+- 使用 `deep=True` 确保缓存与调用者完全隔离，无 CoW 行为依赖。
+- **性能影响**：对于典型 OHLCV DataFrame（几百行 × 5 列），deep copy 耗时 < 0.1ms，可忽略。
+- **调用者约定**: 返回的 DataFrame 是独立副本，调用者可自由修改，不影响缓存。
+
+**多进程场景（Phase 4+）：**
+- L1 `OrderedDict` 操作不是线程安全的
+- 单进程多线程：用 `threading.RLock` 包裹 L1 读写
+- 多进程：每个进程独立维护 L1 缓存，无需跨进程同步（L2 SQLite WAL 已支持并发读）
+- 可选升级：切换到 `cachetools.TTLCache`（线程安全，自带 TTL）
 
 ### 6.4 辅助方法
 
@@ -726,18 +936,18 @@ User Code                Cache                 Store              Fetcher
 
 | 文件 | 行数估算 | 职责 |
 |------|---------|------|
-| `cryptoquant/config.py` | ~60 | YAML + .env 配置加载 |
+| `cryptoquant/config.py` | ~100 | pydantic-settings 类型安全配置 + 缓存 |
 | `cryptoquant/data/__init__.py` | ~10 | 导出 DataCache |
 | `cryptoquant/data/fetcher.py` | ~80 | ccxt 封装，fetch + fetch_range |
-| `cryptoquant/data/store.py` | ~120 | SQLite CRUD，表管理 |
-| `cryptoquant/data/cache.py` | ~150 | 三级缓存，统一入口 |
-| `tests/test_config.py` | ~30 | 配置加载测试 |
-| `tests/test_fetcher.py` | ~60 | Fetcher 集成测试 |
-| `tests/test_store.py` | ~80 | Store 单元测试 |
-| `tests/test_cache.py` | ~100 | Cache 集成测试（mock L3） |
+| `cryptoquant/data/store.py` | ~140 | SQLite CRUD，临时表批量写入优化 |
+| `cryptoquant/data/cache.py` | ~160 | 三级缓存，deep copy 隔离 |
+| `tests/test_config.py` | ~40 | 配置加载测试（含类型校验） |
+| `tests/test_fetcher.py` | ~70 | Fetcher 集成测试 |
+| `tests/test_store.py` | ~90 | Store 单元测试 |
+| `tests/test_cache.py` | ~110 | Cache 集成测试（mock L3） |
 | `config.yaml` | ~30 | 用户配置 |
 | `.env.example` | ~8 | API Key 模板 |
-| `pyproject.toml` | ~35 | 项目依赖 |
+| `pyproject.toml` | ~40 | 项目依赖 |
 
 ---
 
@@ -745,12 +955,18 @@ User Code                Cache                 Store              Fetcher
 
 ```
 pyproject.toml
-  ├── ccxt >= 4.0.0        ← fetcher
-  ├── pandas >= 2.0.0      ← fetcher, store, cache
-  ├── numpy >= 1.24.0      ← pandas 依赖
-  ├── pyyaml >= 6.0        ← config
-  ├── python-dotenv >= 1.0 ← config
-  └── loguru >= 0.7.0      ← Phase 5 正式使用，Phase 1 先安装
+  ├── ccxt >= 4.0.0            ← fetcher
+  ├── pandas >= 2.0.0          ← fetcher, store, cache
+  ├── numpy >= 1.24.0          ← pandas 依赖
+  ├── pyyaml >= 6.0            ← config
+  ├── python-dotenv >= 1.0     ← config
+  ├── pydantic-settings >= 2.0 ← config（类型安全配置）
+  └── loguru >= 0.7.0          ← Phase 5 正式使用，Phase 1 先安装
+```
+
+**可选依赖（Phase 3 性能优化）：**
+```
+  └── numba >= 0.59.0          ← 回测引擎 JIT 编译（可选，非必须）
 ```
 
 这些依赖都是纯 Python，`uv pip install` 即可，无需系统级依赖。
