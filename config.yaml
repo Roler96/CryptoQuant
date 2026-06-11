@@ -1,0 +1,25 @@
+exchange:
+  default: okx
+  okx:
+    testnet: true
+    rate_limit: true
+  binance:
+    testnet: true
+
+data:
+  db_path: data/cryptoquant.db
+  cache:
+    max_size: 128
+    ttl_seconds: 300
+  fetch:
+    max_candles_per_request: 300
+    chunk_days: 7
+
+trading:
+  default_quote: USDT
+  min_order_usdt: 10.0
+
+logging:
+  level: INFO
+  dir: logs/
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {message}"
