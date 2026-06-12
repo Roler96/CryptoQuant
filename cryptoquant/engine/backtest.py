@@ -126,7 +126,14 @@ class BacktestEngine:
         highs = df["high"].values
         lows = df["low"].values
         closes = df["close"].values
-        timestamps_ms = (df.index.astype("int64") // 1_000_000).values
+        # Convert DatetimeIndex to milliseconds based on dtype
+        dtype_unit = str(df.index.dtype)
+        if dtype_unit == "datetime64[ms]":
+            timestamps_ms = df.index.astype("int64")
+        elif dtype_unit == "datetime64[us]":
+            timestamps_ms = df.index.astype("int64") // 1_000
+        else:  # datetime64[ns] or other
+            timestamps_ms = df.index.astype("int64") // 1_000_000
 
         n = len(df)
 
