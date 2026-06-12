@@ -85,57 +85,73 @@
 
 ## 4. 回测结果
 
-### BTC/USDT（全周期 2018-2026, target=1.5%）
+> **重要说明**：原始研究文档中的回测数据（Sharpe 3.25等）存在严重的look-ahead bug。
+> 原始代码使用`np.convolve(mode='same')`进行滚动求和，这是一个centered卷积，
+> 在bar `i`处使用了`i-2`到`i+3`的数据——偷看了未来3根K线。
+> 修正后（使用trailing rolling sum），Sharpe从3.07降至0.10。
+> 以下数据为修正后的真实回测结果。
+
+### BTC/USDT — OKX数据（2019-2026, 初始资金10,000 USDT）
 
 ```
-Trades:        2,825
-Linear sum:    +401.6%
-Annualized:    +47.8%
-Sharpe:        3.25
-Max DD:        -18.6%
-Win rate:      59%
+Trades:        2,574
+Compound return: +77.8%
+Annualized:    +8.1%
+Sharpe:        0.41
+Sortino:       0.53
+Max DD:        -48.8%
+Win rate:      55.4%
 Avg win:       +1.14%
-Avg loss:      -1.29%
-Profit factor: 1.27
+Avg loss:      -1.34%
+Profit factor: 1.06
+Max consecutive losses: 7
 
-Walk-forward (7 splits): 7/7 OOS positive
+Exit breakdown:
+  take_profit:  1,023 (39.7%)  avg=+1.45%  total=+1482.6%
+  stop_loss:      311 (12.1%)  avg=-3.05%  total=-948.1%
+  time_exit:    1,239 (48.1%)  avg=-0.36%  total=-446.8%
 ```
 
-### ETH/USDT（全周期 2018-2026, target=1.5%）
+### BTC/USDT — Binance数据（2019-2026, 初始资金10,000 USDT）
 
 ```
-Trades: 3,092  |  Sum: +459.4%  |  Sharpe: 2.96  |  DD: -14.5%
-Win rate: 62%  |  Walk-forward: 6/7 OOS positive
+Trades:        2,429
+Compound return: +19.2%
+Annualized:    +2.4%
+Sharpe:        0.23
+Sortino:       0.27
+Max DD:        -50.0%
+Win rate:      55.2%
+Profit factor: 1.03
+Max consecutive losses: 12
 ```
 
-### TON/USDT（全周期 2022-2026, target=2.0%）
+### 年度表现（OKX数据）
 
 ```
-Trades: 1,400  |  Sum: +238.1%  |  Sharpe: 2.94  |  DD: -17.9%
-Win rate: 59%  |  Walk-forward: 5/7 OOS positive
-
-注意：target=5%时TON几乎不赚钱（sum=-2.1%, Sharpe=-0.02）。
-降到2.0%后策略在TON上也有效——信号从未失效，是止盈目标不匹配。
+年份   交易数   线性收益   胜率   备注
+2019    394    -26.7%    52%    差
+2020    303    +40.4%    59%    好（牛市）
+2021    345    +32.4%    62%    好（牛市）
+2022    391     -6.7%    55%    差（熊市）
+2023    348    +57.9%    55%    最佳年份
+2024    338     -3.0%    55%    平
+2025    316     -0.5%    53%    平
+2026    139     -7.0%    47%    差
 ```
 
-### DOGE/USDT（全周期 2019-2026, target=1.5%）
+### 参数优化结果（OKX数据，2019-2026）
 
-```
-Trades: 2,802  |  Sum: +918.5%  |  Sharpe: 6.39  |  DD: -11.3%
-Win rate: 69%  |  Walk-forward: 7/7 OOS positive
-```
+| 参数组合 | Sharpe | 收益 | Max DD | 交易数 | PF |
+|---------|--------|------|--------|--------|-----|
+| Baseline (imb=0.25, hold=12, sl=3.0) | 0.41 | +77.8% | -48.8% | 2,574 | 1.06 |
+| imb=0.35 | **0.54** | +104.7% | -35.8% | 1,653 | 1.09 |
+| sl=2.0% | 0.50 | +106.3% | -40.0% | 2,625 | 1.06 |
+| SMA(200) | 0.48 | +83.9% | -34.1% | 1,563 | 1.09 |
+| **SMA200 + hold=6 + sl=2.5** | **0.57** | **+93.9%** | **-27.2%** | 1,791 | **1.10** |
 
-### v4.2 → v4.3 改善对比（target 5.0% → 1.5%/2.0%）
-
-```
-         v4.2 (target=5%)          v4.3 (target=1.5%)
-品种      Sharpe   DD      WR        Sharpe   DD      WR
-────────────────────────────────────────────────────────
-BTC       2.29   -28.9%   51%        3.25   -18.6%   59%
-ETH       1.45   -50.6%   48%        2.96   -14.5%   62%
-TON      -0.02   -46.8%   47%        2.94   -17.9%   59%
-DOGE      1.86   -32.6%   47%        6.39   -11.3%   69%
-```
+**结论**：策略在BTC/USDT上不具备实盘价值。Sharpe < 0.6，利润因子 ≤ 1.10，
+最大回撤约-50%。收益高度集中在2023年（+57.9%），其余年份多数持平或亏损。
 
 ---
 
@@ -149,12 +165,12 @@ DOGE      1.86   -32.6%   47%        6.39   -11.3%   69%
 2. 影线压力指标在下跌过程中持续高位
 3. 反弹幅度不足以覆盖交易成本就回吐
 
-### 回撤特征
+### 回撤特征（修正后数据）
 
-- 盈利是分散的（每个月都有几笔小盈利）
-- 亏损是集中的（趋势下跌月份连续亏损）
-- v4.3降低止盈目标后最大回撤大幅改善（BTC -29%→-19%）
-- 回撤恢复快（反弹月通常有大幅正收益）
+- **最大回撤-48.8%**，持续588天（近1.6年）
+- 盈利高度集中在少数年份（2023年贡献+57.9%，其余年份多数持平或亏损）
+- 48%的交易是超时退出，平均亏损-0.36%——信号缺乏时效性
+- 利润因子仅1.06，边际优势极其微弱
 
 ### 与其他策略的关系
 
@@ -163,38 +179,52 @@ Wick Inversion 与趋势跟踪策略（如 SMA 均线交叉）**正交**：
 - Wick Inversion 在震荡和温和趋势中赚钱，单边暴跌亏钱
 - 两者同时运行可以互补
 
+### 数据源敏感性
+
+OKX和Binance数据跑出的结果差异明显：
+- OKX Sharpe 0.41，收益 +77.8%
+- Binance Sharpe 0.23，收益 +19.2%
+
+策略对成交量数据敏感，不同交易所的微观结构差异导致信号不同。
+两个交易所的结果一致地差，说明问题在策略本身而非数据源。
+
 ---
 
 ## 6. 改进方向
 
-### A. 添加趋势过滤器
+### A. 提高imbalance阈值（推荐）
 
-```python
-# SMA200 filter as a strategy parameter
-class WickInversion(Strategy):
-    DEFAULT_PARAMS = {
-        ...
-        "use_sma_filter": False,
-        "sma_period": 200,
-    }
+将`imbalance_threshold`从0.25提高到0.35，是最有效的单一改动：
+- Sharpe从0.41提升到0.54（+32%）
+- 收益从+77.8%提升到+104.7%
+- 最大回撤从-48.8%降至-35.8%
+- 交易数从2,574降至1,653（过滤弱信号）
 
-    def generate_signal(self, df):
-        if self.params["use_sma_filter"]:
-            sma = df["close"].rolling(self.params["sma_period"]).mean()
-            if df["close"].iloc[-1] < sma.iloc[-1]:
-                return pd.Series(0, index=df.index)  # skip signal
-        ...
-```
+### B. 添加SMA趋势过滤器
 
-预期效果：砍掉熊市中的假信号。但全周期回测显示SMA200过滤在2021-2022期间反而帮倒忙——需要仔细评估。
+SMA(200)过滤可以显著降低回撤：
+- Baseline: Max DD -48.8%
+- SMA(200): Max DD -34.1%
+- SMA(150): Max DD -30.4%
 
-### B. 动态持有时间（v4.3探索过，未采用）
+最佳组合 `SMA200 + hold=6h + sl=2.5%`：
+- Sharpe 0.57, 收益 +93.9%, Max DD **-27.2%**, PF 1.10
 
-根据波动率调整持有时间——低波动时延长，高波动时缩短。全周期walk-forward有改善（6/6 OOS vs 5/6），但在2026年压力测试中表现不如固定持有+低止盈。
+### C. 更紧的止损
 
-### C. 多币种分散
+止损从3.0%收紧到2.0%：
+- Sharpe从0.41提升到0.50
+- 虽然止损次数增加（311→565），但单笔亏损深度减少
 
-同时在 BTC、ETH、DOGE 等低相关性币种上运行，用分散降低单币种暴跌风险。在框架中，这通过运行多个 LiveEngine 实例实现——每个实例管理一个品种的独立状态。
+### D. 多币种分散
+
+同时在 BTC、ETH、DOGE 等低相关性币种上运行，用分散降低单币种暴跌风险。
+在框架中，这通过运行多个 LiveEngine 实例实现——每个实例管理一个品种的独立状态。
+
+### E. 缩短时间框架探索
+
+当前信号基于1小时K线。微观结构信号在15分钟或5分钟级别可能更有效——
+信号衰减更快，但信噪比可能更高。需要进一步验证。
 
 ---
 
@@ -262,16 +292,32 @@ Current price is `df["close"].iloc[-1]` (last bar close), consistent with backte
 
 ## 8. 诚实边界
 
-1. **这不是圣杯。** 策略有明确的失败模式（单边下跌），回撤可能达到-20%。
-2. **止盈参数在样本外验证过。** 1.5% target在BTC/ETH/DOGE上7/7 OOS全正，TON上5/7 OOS正。
-3. **多币种推广需要谨慎。** 高波动币种（TON/SOL）需要更高的止盈目标（2.0%）。
-4. **成交量数据的可靠性。** 本策略依赖成交量。如果交易所的成交量数据有虚假成分（wash trading），信号质量会下降。
-5. **滑点假设可能偏乐观。** 假设5bps滑点对BTC/ETH合理，对小币种可能不足。1.5%的止盈目标下，滑点占比更高（~3.3% of gross profit），需要用限价单而非市价单。
+1. **原始回测数据存在严重bug。** 原始代码使用`np.convolve(mode='same')`进行滚动求和，
+   这是一个centered卷积，在bar `i`处使用了`i-2`到`i+3`的数据——偷看了未来3根K线。
+   这导致原始回测声称的Sharpe 3.25是虚假的，修正后真实Sharpe约为0.41（OKX）或0.23（Binance）。
+
+2. **策略在BTC上不具备实盘价值。** Sharpe < 0.6，利润因子 ≤ 1.10，最大回撤约-50%。
+   收益高度集中在2023年，其余年份多数持平或亏损。
+
+3. **参数优化有上限。** 最佳参数组合（SMA200+hold=6+sl=2.5）可以将Sharpe提升到0.57，
+   但这仍然是一个边际优势微薄的策略。从0.4到0.6的改善不等于从"不能用"到"能用"。
+
+4. **成交量数据的可靠性。** 本策略依赖成交量。如果交易所的成交量数据有虚假成分（wash trading），
+   信号质量会下降。不同交易所的数据跑出不同结果，说明策略对数据源敏感。
+
+5. **滑点假设可能偏乐观。** 假设5bps滑点对BTC/ETH合理，对小币种可能不足。
+   1.5%的止盈目标下，滑点占比更高（~3.3% of gross profit），需要用限价单而非市价单。
+
+6. **48%的交易是超时退出且平均亏损。** 这说明信号缺乏时效性——入场后价格在12小时内
+   没有朝预期方向运动。这是策略的核心问题，不是参数能解决的。
 
 ---
 
 v4.3.0 — Ported to CryptoQuant framework.
+v4.3.1 — Fixed look-ahead bug in signal calculation (np.convolve → rolling sum).
+         Corrected backtest results: Sharpe 3.25 → 0.41 (OKX), 0.23 (Binance).
 
 *"The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry."*
 
 — Written 2026-06-08, updated v4.3 2026-06-08, ~/VibeCoding
+— Updated 2026-06-12: Corrected backtest results after discovering look-ahead bug.
