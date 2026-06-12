@@ -82,6 +82,7 @@ data:
   fetch:
     max_candles_per_request: 300  # 单次请求最大 K 线数（OKX 限 300）
     chunk_days: 7                 # 历史补数据时每段拉取天数
+    timeout_ms: 30000             # 连接超时（毫秒）
 
 # === 交易配置 ===
 trading:
@@ -117,6 +118,7 @@ class DataCacheConfig(BaseSettings):
 class FetchConfig(BaseSettings):
     max_candles_per_request: int = Field(default=300, ge=1, le=1000)
     chunk_days: int = Field(default=7, ge=1)
+    timeout_ms: int = Field(default=30_000, ge=1000)
 
 class DataConfig(BaseSettings):
     db_path: str = "data/cryptoquant.db"
@@ -231,32 +233,45 @@ def get_data_config(config: AppConfig | None = None) -> DataConfig:
 ### 4.1 类图
 
 ```
-┌─────────────────────────────────────────┐
-│            OHLCVFetcher                  │
-├─────────────────────────────────────────┤
-│ - exchange: ccxt.Exchange               │
-│ - exchange_name: str                    │
-│ - max_candles: int                      │
-├─────────────────────────────────────────┤
-│ + fetch(symbol, timeframe, limit, since)│
-│   → pd.DataFrame                        │
-│ + fetch_range(symbol, tf, start, end)   │
-│   → pd.DataFrame                        │
-│ + available_timeframes() → list[str]    │
-│ + available_symbols() → list[str]       │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│            OHLCVFetcher                          │
+├─────────────────────────────────────────────────┤
+│ - exchange: ccxt.Exchange                       │
+│ - exchange_name: str                            │
+│ - timeout: int                                  │
+│ - max_candles: int                              │
+├─────────────────────────────────────────────────┤
+│ + __init__(exchange, testnet, timeout,          │
+│            max_candles)                         │
+│ + fetch(symbol, timeframe, limit, since)        │
+│   → pd.DataFrame  @retry_on_network             │
+│ + fetch_range(symbol, tf, start, end)           │
+│   → pd.DataFrame                                │
+│ + available_timeframes() → list[str]            │
+└─────────────────────────────────────────────────┘
 ```
+
+**关键设计决策：**
+
+| 决策 | 理由 |
+|------|------|
+| `@retry_on_network` 装饰器 | 瞬态网络错误自动重试（3次，指数退避） |
+| `limit` clamp 到 `[1, max_candles]` | 防止调用者传入超限值，静默截断比报错更友好 |
+| `fetch_range()` all-or-nothing | 部分失败时丢弃全部，避免下游使用残缺数据 |
+| 无 `sleep()` | 信任 ccxt 的 `enableRateLimit` 自动限速 |
+| warn-only gap 检测 | 交易所数据质量问题不应阻断流程，但需可见 |
 
 ### 4.2 核心方法详细设计
 
 #### `fetch()` — 单次拉取
 
 ```python
+@retry_on_network(max_retries=3, base_delay=1.0)
 def fetch(
     self,
     symbol: str,           # "BTC/USDT"
     timeframe: str,        # "1m"|"5m"|"15m"|"30m"|"1h"|"4h"|"1d"|"1w"
-    limit: int = 300,      # 1-300
+    limit: int = 300,      # clamped to [1, max_candles]
     since: int | None = None,  # Unix ms
 ) -> pd.DataFrame:
 ```
@@ -297,26 +312,37 @@ def fetch_range(
 cursor = start
 chunks = []
 while cursor < end:
-    df = fetch(symbol, timeframe, limit=max_candles, since=cursor)
+    try:
+        df = fetch(symbol, timeframe, limit=max_candles, since=cursor)
+    except DataFetchError as e:
+        raise DataFetchError(f"failed after {len(chunks)} chunk(s): {e}")
     if df.empty:
         break
     chunks.append(df)
     cursor = df.index[-1].timestamp() * 1000 + 1  # ms, next candle
-    sleep(rate_limit_pause)  # 避免触发限速
 return concat + dedup + sort
 ```
 
 **关键细节：**
 - `cursor` 推进使用 `df.index[-1] + 1ms`，避免重复拉取同一根 K 线
-- 每次 fetch 之间 `sleep(0.2)` 尊重 rate limit
+- **无 `sleep()`**：信任 ccxt 的 `enableRateLimit` 自动限速
 - 最终去重（`drop_duplicates`）以 index 为准
-- **cursor 语义**: OKX 返回的 timestamp 是 K 线**开盘时间**，因此 `+1ms` 正确推进到下一根。若接入其他交易所需验证其 timestamp 语义。
+- **cursor 语义**: OKX/Binance 返回的 timestamp 是 K 线**开盘时间**，因此 `+1ms` 正确推进到下一根。若接入其他交易所需验证其 timestamp 语义。
+- **错误处理**: all-or-nothing 策略。任何 chunk 失败后，异常信息包含已成功的 chunk 数量，便于诊断。
 
 ### 4.2.1 OHLCV 数据质量校验
 
 ```python
 def validate_ohlcv(df: pd.DataFrame) -> None:
     """校验 OHLCV 数据合理性。
+
+    Checks:
+    - Required columns present
+    - high >= low for all bars
+    - open/close within [low, high]
+    - volume >= 0
+    - no NaN in critical columns
+    - timestamp continuity (warn only, does not raise)
 
     Raises:
         DataValidationError: 数据不合法时
@@ -332,18 +358,13 @@ def validate_ohlcv(df: pd.DataFrame) -> None:
     # high >= low
     mask = df["high"] < df["low"]
     if mask.any():
-        bad_indices = df.index[mask][:3]
-        raise DataValidationError(
-            f"high < low at {len(mask.sum())} bars, e.g. {bad_indices}"
-        )
+        raise DataValidationError(f"high < low at {mask.sum()} bars")
 
     # open/close within [low, high]
     for col in ("open", "close"):
         mask = (df[col] < df["low"]) | (df[col] > df["high"])
         if mask.any():
-            raise DataValidationError(
-                f"{col} outside [low, high] at {mask.sum()} bars"
-            )
+            raise DataValidationError(f"{col} outside [low, high] at {mask.sum()} bars")
 
     # volume >= 0
     if (df["volume"] < 0).any():
@@ -354,15 +375,13 @@ def validate_ohlcv(df: pd.DataFrame) -> None:
         if df[col].isna().any():
             raise DataValidationError(f"NaN in column '{col}'")
 
-    # timestamp continuity — 检查缺失 K 线
+    # Timestamp continuity check (warn only — gaps are usually exchange data issues)
     if len(df) >= 2 and isinstance(df.index, pd.DatetimeIndex):
-        freq = pd.infer_freq(df.index)
-        if freq is not None:
-            expected_diff = pd.tseries.frequencies.to_offset(freq)
-            actual_diffs = df.index.to_series().diff().dropna()
-            median_diff = actual_diffs.median()
-            # 允许 10% 容差（交易所偶尔跳过 K 线）
-            gaps = actual_diffs[actual_diffs > median_diff * 1.1]
+        diffs = df.index.to_series().diff().dropna()
+        if len(diffs) > 0:
+            median_diff = diffs.median()
+            # Allow 10% tolerance for minor timing variations
+            gaps = diffs[diffs > median_diff * 1.1]
             if len(gaps) > 0:
                 logger.warning(
                     f"Detected {len(gaps)} gap(s) in OHLCV timestamps, "

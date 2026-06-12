@@ -34,6 +34,7 @@ class FetchConfig(BaseSettings):
     """Data fetch configuration."""
     max_candles_per_request: int = Field(default=300, ge=1, le=1000)
     chunk_days: int = Field(default=7, ge=1)
+    timeout_ms: int = Field(default=30_000, ge=1000)
 
 
 class DataConfig(BaseSettings):
