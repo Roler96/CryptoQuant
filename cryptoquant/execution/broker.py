@@ -1,5 +1,6 @@
 """Exchange broker abstraction — ccxt wrapper with retry logic."""
 import functools
+import os
 import random
 import time
 
@@ -12,6 +13,16 @@ from cryptoquant.exceptions import (
     OrderRejectedError,
 )
 from cryptoquant.execution.order import Order, OrderStatus, Position
+
+
+def _get_proxy_from_env() -> str | None:
+    """Get proxy URL from environment variables."""
+    return (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+    )
 
 
 def retry_on_network(
@@ -65,6 +76,7 @@ class Broker:
         password: str = "",
         testnet: bool = True,
         account_type: str = "spot",
+        proxy: str | None = None,
     ):
         exchange_class = getattr(ccxt, exchange)
         self.exchange = exchange_class(
@@ -85,6 +97,15 @@ class Broker:
             logger.info(f"Broker initialized: {exchange} TESTNET ({account_type})")
         else:
             logger.warning(f"Broker initialized: {exchange} LIVE ({account_type})")
+
+        # Configure proxy - ccxt sets trust_env=False, so we must set proxies manually
+        proxy_url = proxy or _get_proxy_from_env()
+        if proxy_url:
+            self.exchange.session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+            logger.debug(f"Broker using proxy: {proxy_url}")
 
     @property
     def can_short(self) -> bool:

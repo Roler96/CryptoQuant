@@ -1,11 +1,23 @@
 """OHLCV data fetcher — ccxt wrapper for exchange data."""
 
+import os
+
 import ccxt
 import pandas as pd
 from loguru import logger
 
 from cryptoquant.exceptions import DataFetchError, DataValidationError
 from cryptoquant.execution.broker import retry_on_network
+
+
+def _get_proxy_from_env() -> str | None:
+    """Get proxy URL from environment variables."""
+    return (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+    )
 
 
 def validate_ohlcv(df: pd.DataFrame) -> None:
@@ -74,6 +86,7 @@ class OHLCVFetcher:
         testnet: Use sandbox/testnet mode
         timeout: Connection timeout in milliseconds
         max_candles: Max candles per single request (exchange limit)
+        proxy: Proxy URL (e.g. 'http://127.0.0.1:7890'). If None, reads from env.
     """
 
     def __init__(
@@ -82,6 +95,7 @@ class OHLCVFetcher:
         testnet: bool = True,
         timeout: int = 30_000,
         max_candles: int = 300,
+        proxy: str | None = None,
     ):
         exchange_class = getattr(ccxt, exchange)
         self.exchange: ccxt.Exchange = exchange_class(
@@ -96,6 +110,15 @@ class OHLCVFetcher:
         self.max_candles = max(1, max_candles)
         if testnet:
             self.exchange.set_sandbox_mode(True)
+
+        # Configure proxy - ccxt sets trust_env=False, so we must set proxies manually
+        proxy_url = proxy or _get_proxy_from_env()
+        if proxy_url:
+            self.exchange.session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+            logger.debug(f"OHLCVFetcher using proxy: {proxy_url}")
 
     def available_timeframes(self) -> list[str]:
         """Return list of timeframes supported by this exchange.
