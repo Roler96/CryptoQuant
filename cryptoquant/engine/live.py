@@ -56,6 +56,9 @@ class LiveEngine:
         cooldown_bars: int = 0,
         initial_capital: float = 10000.0,
         order_timeout: int = 30,
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
+        max_hold_hours: float | None = None,
     ):
         self.broker = broker
         self.strategy = strategy
@@ -68,6 +71,9 @@ class LiveEngine:
         self.cooldown_bars = cooldown_bars
         self._initial_capital = initial_capital
         self.order_timeout = order_timeout
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        self.max_hold_hours = max_hold_hours
 
         self._running = False
         self._cooldown_remaining = 0
@@ -152,9 +158,19 @@ class LiveEngine:
         current_positions = 1 if has_position else 0
 
         if has_position:
+            # Check threshold exits (priority: stop > target > time > signal)
+            should_exit, exit_reason = self._check_position_exits(position, df)
+            if should_exit:
+                return self._exit_position(
+                    position, signal, timestamp, exit_reason=exit_reason
+                )
+
             # Exit condition: reverse signal
             if position.side == "long" and signal == -1:
-                return self._exit_position(position, signal, timestamp)
+                return self._exit_position(
+                    position, signal, timestamp, exit_reason="signal_reverse"
+                )
+
             return TickResult(
                 action=TickAction.NOOP,
                 signal=signal,
@@ -305,11 +321,43 @@ class LiveEngine:
             order.amount = order.filled
         return order
 
+    def _check_position_exits(
+        self, position, df
+    ) -> tuple[bool, str]:
+        """Check stop/target/time exit thresholds.
+
+        Returns (should_exit, reason). Priority: stop > target > time.
+        """
+        current_price = df["close"].iloc[-1]
+
+        if position.side == "long":
+            pnl_pct = (current_price / position.entry_price - 1) * 100
+        else:
+            pnl_pct = (1 - current_price / position.entry_price) * 100
+
+        now_ms = int(datetime.utcnow().timestamp() * 1000)
+        hold_hours = (now_ms - position.timestamp) / 3_600_000
+
+        if self.stop_loss_pct is not None and pnl_pct <= -self.stop_loss_pct:
+            return True, "stop_loss"
+
+        if self.take_profit_pct is not None and pnl_pct >= self.take_profit_pct:
+            return True, "take_profit"
+
+        if self.max_hold_hours is not None and hold_hours >= self.max_hold_hours:
+            return True, "time_exit"
+
+        return False, ""
+
     def _exit_position(
-        self, position: Position, signal: int, timestamp: int
+        self,
+        position: Position,
+        signal: int,
+        timestamp: int,
+        exit_reason: str = "signal_reverse",
     ) -> TickResult:
         """Close position."""
-        logger.info(f"EXIT {position.side.upper()}: signal={signal}")
+        logger.info(f"EXIT {position.side.upper()}: {exit_reason}")
 
         try:
             if position.side == "long":
@@ -331,7 +379,7 @@ class LiveEngine:
             return TickResult(
                 action=TickAction.EXIT,
                 signal=signal,
-                reason=f"exit {position.side} on signal",
+                reason=f"exit {position.side} ({exit_reason})",
                 order=order,
                 balance=self._get_balance(),
                 timestamp=timestamp,

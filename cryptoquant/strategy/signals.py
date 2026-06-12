@@ -217,6 +217,34 @@ def volume_profile_ratio(df: pd.DataFrame, period: int = 20) -> pd.Series:
     return df["volume"] / avg_vol
 
 
+def wick_imbalance(df: pd.DataFrame, window: int = 6) -> pd.Series:
+    """Wick pressure imbalance ratio (-1 to +1).
+
+    Positive = seller wick pressure dominates.
+    Negative = buyer wick pressure dominates.
+    """
+    high = df["high"]
+    low = df["low"]
+    open_ = df["open"]
+    close = df["close"]
+    volume = df["volume"]
+
+    bar_range = (high - low).clip(lower=1e-8)
+    upper_wick = (high - np.maximum(open_, close)) / bar_range
+    lower_wick = (np.minimum(open_, close) - low) / bar_range
+
+    bear_pressure = upper_wick * np.log1p(volume)
+    bull_pressure = lower_wick * np.log1p(volume)
+
+    bear_roll = bear_pressure.rolling(window).sum()
+    bull_roll = bull_pressure.rolling(window).sum()
+
+    total = bear_roll + bull_roll
+    imbalance = (bear_roll - bull_roll) / total.replace(0, np.nan)
+
+    return imbalance.fillna(0)
+
+
 # === Utility Functions ===
 
 
@@ -255,3 +283,22 @@ def rolling_min(series: pd.Series, period: int) -> pd.Series:
 def pct_change_rolling(series: pd.Series, period: int) -> pd.Series:
     """Rolling percentage change."""
     return series.pct_change(period) * 100
+
+
+def new_low_bullish(df: pd.DataFrame, lookback: int = 30) -> pd.Series:
+    """Failed breakdown reversal signal (Wyckoff Spring).
+
+    Returns 1 where: new N-bar low + bullish close + above-average volume.
+    """
+    low = df["low"]
+    open_ = df["open"]
+    close = df["close"]
+    volume = df["volume"]
+
+    prev_low_min = low.rolling(lookback).min().shift(1)
+    new_low = low < prev_low_min
+    bullish = close > open_
+    vol_mean = volume.rolling(20).mean()
+    high_vol = volume > vol_mean
+
+    return (new_low & bullish & high_vol).astype(int)
