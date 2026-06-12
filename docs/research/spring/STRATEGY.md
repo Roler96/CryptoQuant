@@ -1,5 +1,12 @@
 # Spring — Failed Breakdown Reversal
 
+> ⚠️ **CORRECTION (2026-06-12):** The metrics below (Sharpe 2.72, PF 1.18) were
+> based on **closes-based stop checking**, which understates stop-loss frequency
+> and inflates Sharpe. Independent reproduction with correct **lows-based stops**
+> shows true Sharpe = **-0.65**, Sum = **-67.8%**. No filter (SMA200, ADX, PDI/MDI)
+> recovers profitability. **Strategy is NOT tradeable.**
+> See: `docs/research/spring/research_sma200_filter_v1.md`
+
 > "Sellers break support. Buyers eat everything. Sellers are trapped.
 > Their panic to cover is your profit."
 
