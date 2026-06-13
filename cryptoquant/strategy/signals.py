@@ -285,20 +285,3 @@ def pct_change_rolling(series: pd.Series, period: int) -> pd.Series:
     return series.pct_change(period) * 100
 
 
-def new_low_bullish(df: pd.DataFrame, lookback: int = 30) -> pd.Series:
-    """Failed breakdown reversal signal (Wyckoff Spring).
-
-    Returns 1 where: new N-bar low + bullish close + above-average volume.
-    """
-    low = df["low"]
-    open_ = df["open"]
-    close = df["close"]
-    volume = df["volume"]
-
-    prev_low_min = low.rolling(lookback).min().shift(1)
-    new_low = low < prev_low_min
-    bullish = close > open_
-    vol_mean = volume.rolling(20).mean()
-    high_vol = volume > vol_mean
-
-    return (new_low & bullish & high_vol).astype(int)
