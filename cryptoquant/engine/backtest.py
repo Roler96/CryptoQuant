@@ -343,9 +343,12 @@ class BacktestEngine:
             ) * 100
             mfe_pct = (
                 1
-                - min(lows[position.entry_idx : exit_idx + 1])
+                - min(highs[position.entry_idx : exit_idx + 1])
                 / position.entry_price
             ) * 100
+
+        # Round-trip commission is subtracted from gross trade PnL.
+        pnl_pct -= self.commission * 100
 
         return Trade(
             id=trade_id,
