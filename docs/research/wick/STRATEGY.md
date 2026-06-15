@@ -85,32 +85,60 @@
 
 ## 4. 回测结果
 
-> **重要说明**：原始研究文档中的回测数据（Sharpe 3.25等）存在严重的look-ahead bug。
-> 原始代码使用`np.convolve(mode='same')`进行滚动求和，这是一个centered卷积，
-> 在bar `i`处使用了`i-2`到`i+3`的数据——偷看了未来3根K线。
-> 修正后（使用trailing rolling sum），Sharpe从3.07降至0.10。
-> 以下数据为修正后的真实回测结果。
+> **v4.4.0 更新**：添加波动率门控（ATR ratio > 1.0）和 SMA200 趋势过滤。
+> 基于文献调研（Ślepaczuk 2026, Kang 2025）和5项实验验证。
+> 详见 `docs/research/wick/research_literature_review_v1.md` 和 `research/backtest_wick_vol_gating.py`
 
 ### BTC/USDT — OKX数据（2019-2026, 初始资金10,000 USDT）
 
+**v4.4.0 (Vol Gate + SMA200):**
 ```
-Trades:        2,574
-Compound return: +77.8%
-Annualized:    +8.1%
-Sharpe:        0.41
-Sortino:       0.53
-Max DD:        -48.8%
-Win rate:      55.4%
-Avg win:       +1.14%
-Avg loss:      -1.34%
-Profit factor: 1.06
-Max consecutive losses: 7
+Trades:          821
+Total return:  +167.2%
+Annualized:     +14.2%
+Sharpe:          0.87
+Sortino:         0.68
+Max DD:         -18.3%
+Win rate:        57.2%
+Avg win:         +1.23%
+Avg loss:        -1.34%
+Profit factor:   1.23
 
 Exit breakdown:
-  take_profit:  1,023 (39.7%)  avg=+1.45%  total=+1482.6%
-  stop_loss:      311 (12.1%)  avg=-3.05%  total=-948.1%
-  time_exit:    1,239 (48.1%)  avg=-0.36%  total=-446.8%
+  take_profit:    374 (45.6%)  avg=+1.45%
+  stop_loss:       88 (10.7%)  avg=-3.05%
+  time_exit:      359 (43.7%)  avg=-0.46%
 ```
+
+**v4.3.0 Baseline (no filters):**
+```
+Trades:        2,574
+Total return:   +77.8%
+Annualized:     +8.1%
+Sharpe:         0.41
+Sortino:        0.53
+Max DD:        -48.8%
+Win rate:       55.4%
+Avg win:        +1.14%
+Avg loss:       -1.34%
+Profit factor:  1.06
+
+Exit breakdown:
+  take_profit:  1,023 (39.7%)  avg=+1.45%
+  stop_loss:      311 (12.1%)  avg=-3.05%
+  time_exit:    1,239 (48.1%)  avg=-0.36%
+```
+
+**Improvement Summary:**
+| Metric | v4.3.0 | v4.4.0 | Change |
+|--------|--------|--------|--------|
+| Trades | 2,574 | 821 | -68% |
+| Total Return | +77.8% | +167.2% | +2.2x |
+| Max DD | -48.8% | -18.3% | -62% |
+| Win Rate | 55.4% | 57.2% | +1.8pp |
+| Profit Factor | 1.06 | 1.23 | +16% |
+| Take-profit % | 39.7% | 45.6% | +5.9pp |
+| Time-exit % | 48.1% | 43.7% | -4.4pp |
 
 ### BTC/USDT — Binance数据（2019-2026, 初始资金10,000 USDT）
 
