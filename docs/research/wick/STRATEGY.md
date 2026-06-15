@@ -363,9 +363,37 @@ v4.4.1 — Fixed `BacktestEngine` commission bug: commission was accepted but ne
          Also corrected stale wick.py docstring that had quoted vol-gate-only numbers
          as the Vol+SMA200 combined result.
 
-*“The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry.”*
+### v4.5.0 — Vol Gate + Target Optimization (2026-06-15)
+
+**Key finding:** The vol gate filter was always right, but the target was too low for vol-gated trades. When you remove low-vol chop, the surviving trades need LARGER targets (2.5% not 1.5%) to capture the bigger moves in high-vol environments.
+
+```
+Vol Gate Only + Optimized Exits (s3.0/t2.5/h16):
+  Trades:      1,097
+  Total return: +337.1%
+  Sharpe:       +0.91
+  Max DD:       -33.4%
+  Win rate:     52.6%
+  PF:           1.21
+  WF:           6/6 profitable, Mean OOS Sharpe +1.26
+```
+
+**Filter ranking by walk-forward robustness:**
+| Filter | WF | Mean OOS Sharpe | Full Sharpe |
+|--------|-----|-----------------|-------------|
+| Vol Gate (opt exits) | 6/6 | **+1.26** | +0.91 |
+| Vol Gate (baseline) | 6/6 | +0.82 | +0.38 |
+| Vol+SMA200 | 5/6 | +0.77 | +0.55 |
+| SMA200 only | 4/6 | +0.41 | +0.01 |
+
+**The vol gate is superior to SMA200 for Wick** — it achieves 6/6 WF while SMA200 only gets 4/6. This is the opposite of Spring, where SMA200 is essential.
+
+See `docs/research/wick/research_vol_gate_target_v1.md` for full methodology, 336-combo sweep, and walk-forward results.
+
+*"The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry."*
 
 — Written 2026-06-08, updated v4.3 2026-06-08, ~/VibeCoding
 — Updated 2026-06-12: Corrected backtest results after discovering look-ahead bug.
 — Updated 2026-06-15: v4.4.0 vol gate + SMA200 based on literature review and 5 experiments.
 — Updated 2026-06-15: Fixed backtest engine commission bug and corrected all performance numbers.
+— Updated 2026-06-15: v4.5.0 vol gate + target optimization — raised target from 1.5% to 2.5%, 6/6 WF with mean OOS Sharpe +1.26.
