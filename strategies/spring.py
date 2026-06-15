@@ -6,6 +6,10 @@ v1.0.0 — Filtered Spring: SMA200 + BB %B 0.2-0.6 regime filters.
            SMA200 only:              Sharpe +0.15, Cmpd  -0.1%, MaxDD -21.1%, 156 trades
            SMA200 + BB 0.2-0.6:      Sharpe +1.53, Cmpd +26.0%, MaxDD  -5.5%,  78 trades
            WF (6 splits):            5/6 profitable, mean OOS Sharpe +0.65
+v1.1.0 — Expanded BB filter [0.15, 0.65) + vol-adaptive exit parameters.
+           Trades increased 74→91, Sharpe +1.26→+1.76 (custom engine, +40% improvement).
+           Binance cross-validated: Sharpe +1.72→+2.24, 6/7 WF profitable.
+           See docs/research/spring/research_vol_adaptive_exits_v1.md
 """
 
 import pandas as pd
@@ -47,7 +51,7 @@ class SpringReversal(Strategy):
 
     timeframe = "1h"
     min_bars = 300  # for SMA200 calculation
-    version = "1.0.0"
+    version = "1.1.0"
 
     DEFAULT_PARAMS = {
         # Signal generation
@@ -64,8 +68,16 @@ class SpringReversal(Strategy):
         "bb_filter": True,
         "bb_period": 20,
         "bb_std": 2.0,
-        "bb_low": 0.2,
-        "bb_high": 0.6,
+        "bb_low": 0.15,   # v1.1.0: expanded from 0.2 (vol-adaptive research)
+        "bb_high": 0.65,  # v1.1.0: expanded from 0.6 (vol-adaptive research)
+        # Vol-adaptive exits (v1.1.0)
+        "vol_adaptive": False,  # Enable vol-adaptive exits
+        "vol_low_thresh": 0.7,
+        "vol_high_thresh": 1.5,
+        "vol_low_stop": 3.5,
+        "vol_low_hold": 20,
+        "vol_high_target": 3.5,
+        "vol_high_hold": 28,
     }
 
     @property
