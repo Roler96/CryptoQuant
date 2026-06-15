@@ -285,3 +285,59 @@ def pct_change_rolling(series: pd.Series, period: int) -> pd.Series:
     return series.pct_change(period) * 100
 
 
+# === Pattern Recognition ===
+
+
+def spring_reversal_signal(
+    df: pd.DataFrame,
+    lookback: int = 20,
+    vol_mult: float = 1.5,
+    close_pct: float = 0.5,
+) -> pd.Series:
+    """Detect Wyckoff Spring reversal pattern.
+
+    A Spring forms when price makes a new low below recent support but
+    closes bullish with high volume — this is a "failed breakdown" that
+    traps sellers and signals a reversal.
+
+    Conditions:
+    1. New low: current low < lowest low of previous `lookback` bars
+    2. Bullish close: close > open (buyers stepped in)
+    3. Close near high: close position in upper `close_pct` of bar range
+    4. High volume: volume > `vol_mult` × average volume over lookback
+
+    Args:
+        df: OHLCV DataFrame with columns [open, high, low, close, volume]
+        lookback: Number of bars for support level and volume average
+        vol_mult: Volume multiplier threshold (e.g., 1.5 = 150% of avg)
+        close_pct: Close must be above this fraction of bar range (0.0-1.0)
+
+    Returns:
+        Boolean Series, same index as df. True at Spring signal bars.
+    """
+    opens = df["open"]
+    highs = df["high"]
+    lows = df["low"]
+    closes = df["close"]
+    volumes = df["volume"]
+
+    # Condition 1: New low (breakdown below recent support)
+    rolling_low = lows.rolling(lookback).min().shift(1)
+    new_low = lows < rolling_low
+
+    # Condition 2: Bullish close
+    bullish_close = closes > opens
+
+    # Condition 3: Close in upper portion of bar
+    bar_range = highs - lows
+    close_position = (closes - lows) / bar_range.replace(0, np.nan)
+    close_near_high = close_position > close_pct
+
+    # Condition 4: High volume (confirmation)
+    avg_vol = volumes.rolling(lookback).mean().shift(1)
+    high_volume = volumes > (vol_mult * avg_vol)
+
+    signal = new_low & bullish_close & close_near_high & high_volume
+    return signal
+
+
