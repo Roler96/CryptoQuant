@@ -324,11 +324,12 @@ Current price is `df["close"].iloc[-1]` (last bar close), consistent with backte
    这是一个centered卷积，在bar `i`处使用了`i-2`到`i+3`的数据——偷看了未来3根K线。
    这导致原始回测声称的Sharpe 3.25是虚假的，修正后真实Sharpe约为0.41（OKX）或0.23（Binance）。
 
-2. **策略在BTC上不具备实盘价值。** Sharpe < 0.6，利润因子 ≤ 1.10，最大回撤约-50%。
-   收益高度集中在2023年，其余年份多数持平或亏损。
+2. **v4.4.0 大幅改善但仍有局限。** 波动率门控 + SMA200 将 Sharpe 从 0.41 提升到 0.87，
+   最大回撤从 -48.8% 降至 -18.3%，收益从 +77.8% 提升至 +167.2%。但交易数从 2,574 降至 821，
+   信号密度大幅降低。Walk-forward 5/6 splits 正收益，一个 split 在 2022 熊市为负。
 
-3. **参数优化有上限。** 最佳参数组合（SMA200+hold=6+sl=2.5）可以将Sharpe提升到0.57，
-   但这仍然是一个边际优势微薄的策略。从0.4到0.6的改善不等于从"不能用"到"能用"。
+3. **波动率门控可能在低波动牛市失效。** 当市场长期处于低波动上涨时（如2023年下半年），
+   门控会过滤掉大部分信号，错过趋势行情。vol_ratio > 1.0 偏向高波动环境。
 
 4. **成交量数据的可靠性。** 本策略依赖成交量。如果交易所的成交量数据有虚假成分（wash trading），
    信号质量会下降。不同交易所的数据跑出不同结果，说明策略对数据源敏感。
@@ -336,16 +337,21 @@ Current price is `df["close"].iloc[-1]` (last bar close), consistent with backte
 5. **滑点假设可能偏乐观。** 假设5bps滑点对BTC/ETH合理，对小币种可能不足。
    1.5%的止盈目标下，滑点占比更高（~3.3% of gross profit），需要用限价单而非市价单。
 
-6. **48%的交易是超时退出且平均亏损。** 这说明信号缺乏时效性——入场后价格在12小时内
-   没有朝预期方向运动。这是策略的核心问题，不是参数能解决的。
+6. **49% vs 44% 时间退出。** v4.4.0 的时间退出比例从 48.1% 降至 43.7%，但仍然是最大的退出类别。
+   信号时效性问题部分改善但未根本解决。
 
 ---
 
 v4.3.0 — Ported to CryptoQuant framework.
 v4.3.1 — Fixed look-ahead bug in signal calculation (np.convolve → rolling sum).
          Corrected backtest results: Sharpe 3.25 → 0.41 (OKX), 0.23 (Binance).
+v4.4.0 — Added volatility gating (ATR ratio > 1.0 median) and SMA200 trend filter.
+         Literature-driven: Ślepaczuk (2606.00060, 2606.09478), Kang (2512.18648).
+         Backtest: 821 trades, +167.2%, Sharpe 0.87, MaxDD -18.3%.
+         Walk-forward: 5/6 splits profitable, mean OOS Sharpe +1.15.
 
 *"The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry."*
 
 — Written 2026-06-08, updated v4.3 2026-06-08, ~/VibeCoding
 — Updated 2026-06-12: Corrected backtest results after discovering look-ahead bug.
+— Updated 2026-06-15: v4.4.0 vol gate + SMA200 based on literature review and 5 experiments.
