@@ -89,56 +89,60 @@
 > 基于文献调研（Ślepaczuk 2026, Kang 2025）和5项实验验证。
 > 详见 `docs/research/wick/research_literature_review_v1.md` 和 `research/backtest_wick_vol_gating.py`
 
-### BTC/USDT — OKX数据（2019-2026, 初始资金10,000 USDT）
+### BTC/USDT — OKX数据（2019-2026, 初始资金10,000 USDT，commission=5bps，slippage=5bps）
+
+> ⚠️ **2026-06-15 修正**：回测引擎此前未实际扣除 `commission` 参数，导致所有结果高估。以下数字已按策略文档假设的 5 bps 双边手续费重新计算。旧版无手续费结果见脚注。
 
 **v4.4.0 (Vol Gate + SMA200):**
 ```
 Trades:          821
-Total return:  +167.2%
-Annualized:     +14.2%
-Sharpe:          0.87
-Sortino:         0.68
-Max DD:         -18.3%
-Win rate:        57.2%
-Avg win:         +1.23%
-Avg loss:        -1.34%
-Profit factor:   1.23
+Total return:   +77.3%
+Annualized:      +8.0%
+Sharpe:          0.55
+Sortino:         0.42
+Max DD:         -23.3%
+Win rate:        56.3%
+Avg win:         +1.20%
+Avg loss:        -1.36%
+Profit factor:   1.14
 
 Exit breakdown:
-  take_profit:    374 (45.6%)  avg=+1.45%
-  stop_loss:       88 (10.7%)  avg=-3.05%
-  time_exit:      359 (43.7%)  avg=-0.46%
+  take_profit:    374 (45.6%)  avg=+1.40%
+  stop_loss:       88 (10.7%)  avg=-3.10%
+  time_exit:      359 (43.7%)  avg=-0.51%
 ```
 
 **v4.3.0 Baseline (no filters):**
 ```
 Trades:        2,574
-Total return:   +77.8%
-Annualized:     +8.1%
-Sharpe:         0.41
-Sortino:        0.53
-Max DD:        -48.8%
-Win rate:       55.4%
-Avg win:        +1.14%
-Avg loss:       -1.34%
-Profit factor:  1.06
+Total return:   -50.9%
+Annualized:     -4.4%
+Sharpe:         -0.19
+Sortino:         0.00
+Max DD:         -60.6%
+Win rate:        53.7%
+Avg win:         +1.11%
+Avg loss:        -1.34%
+Profit factor:   0.97
 
 Exit breakdown:
-  take_profit:  1,023 (39.7%)  avg=+1.45%
-  stop_loss:      311 (12.1%)  avg=-3.05%
-  time_exit:    1,239 (48.1%)  avg=-0.36%
+  take_profit:  1,023 (39.7%)  avg=+1.40%
+  stop_loss:      311 (12.1%)  avg=-3.10%
+  time_exit:    1,239 (48.1%)  avg=-0.41%
 ```
 
 **Improvement Summary:**
 | Metric | v4.3.0 | v4.4.0 | Change |
 |--------|--------|--------|--------|
 | Trades | 2,574 | 821 | -68% |
-| Total Return | +77.8% | +167.2% | +2.2x |
-| Max DD | -48.8% | -18.3% | -62% |
-| Win Rate | 55.4% | 57.2% | +1.8pp |
-| Profit Factor | 1.06 | 1.23 | +16% |
+| Total Return | -50.9% | +77.3% | 从亏损转正 |
+| Max DD | -60.6% | -23.3% | -62% |
+| Win Rate | 53.7% | 56.3% | +2.6pp |
+| Profit Factor | 0.97 | 1.14 | +18% |
 | Take-profit % | 39.7% | 45.6% | +5.9pp |
 | Time-exit % | 48.1% | 43.7% | -4.4pp |
+
+*“未扣手续费旧版”（引擎 bug 期间）参考：v4.4.0 为 +167.2% / Sharpe 0.87 / MaxDD -18.3%；v4.3.0 为 +77.8% / Sharpe 0.41 / MaxDD -48.8%。*
 
 ### BTC/USDT — Binance数据（2019-2026, 初始资金10,000 USDT）
 
@@ -324,20 +328,26 @@ Current price is `df["close"].iloc[-1]` (last bar close), consistent with backte
    这是一个centered卷积，在bar `i`处使用了`i-2`到`i+3`的数据——偷看了未来3根K线。
    这导致原始回测声称的Sharpe 3.25是虚假的，修正后真实Sharpe约为0.41（OKX）或0.23（Binance）。
 
-2. **v4.4.0 大幅改善但仍有局限。** 波动率门控 + SMA200 将 Sharpe 从 0.41 提升到 0.87，
-   最大回撤从 -48.8% 降至 -18.3%，收益从 +77.8% 提升至 +167.2%。但交易数从 2,574 降至 821，
+2. **回测引擎长期未扣除commission。** `BacktestEngine` 接受 `commission` 参数并写入配置，
+   但实际计算 `pnl_pct` 时从未扣除。这导致所有历史回测结果（包括本策略）高估。
+   按策略文档假设的 5 bps 双边手续费修正后，v4.4.0 OKX BTC/USDT 1h 的真实表现约为
+   **Sharpe +0.55、总收益 +77.3%、最大回撤 -23.3%**，而非此前报告的 Sharpe +0.87 / +167.2%。
+
+3. **v4.4.0 大幅改善但仍有局限。** 波动率门控 + SMA200 将 Sharpe 从 -0.19 提升到 0.55，
+   最大回撤从 -60.6% 降至 -23.3%，收益从 -50.9% 提升至 +77.3%。但交易数从 2,574 降至 821，
    信号密度大幅降低。Walk-forward 5/6 splits 正收益，一个 split 在 2022 熊市为负。
 
-3. **波动率门控可能在低波动牛市失效。** 当市场长期处于低波动上涨时（如2023年下半年），
+4. **波动率门控可能在低波动牛市失效。** 当市场长期处于低波动上涨时（如2023年下半年），
    门控会过滤掉大部分信号，错过趋势行情。vol_ratio > 1.0 偏向高波动环境。
 
-4. **成交量数据的可靠性。** 本策略依赖成交量。如果交易所的成交量数据有虚假成分（wash trading），
+5. **成交量数据的可靠性。** 本策略依赖成交量。如果交易所的成交量数据有虚假成分（wash trading），
    信号质量会下降。不同交易所的数据跑出不同结果，说明策略对数据源敏感。
 
-5. **滑点假设可能偏乐观。** 假设5bps滑点对BTC/ETH合理，对小币种可能不足。
-   1.5%的止盈目标下，滑点占比更高（~3.3% of gross profit），需要用限价单而非市价单。
+6. **滑点与手续费假设。** 假设5bps滑点+5bps双边手续费对BTC/ETH合理，对小币种可能不足。
+   1.5%的止盈目标下，摩擦成本占比很高，需要用限价单（maker fee）而非市价单（taker fee）
+   才能接近文档假设。
 
-6. **49% vs 44% 时间退出。** v4.4.0 的时间退出比例从 48.1% 降至 43.7%，但仍然是最大的退出类别。
+7. **49% vs 44% 时间退出。** v4.4.0 的时间退出比例从 48.1% 降至 43.7%，但仍然是最大的退出类别。
    信号时效性问题部分改善但未根本解决。
 
 ---
@@ -347,11 +357,15 @@ v4.3.1 — Fixed look-ahead bug in signal calculation (np.convolve → rolling s
          Corrected backtest results: Sharpe 3.25 → 0.41 (OKX), 0.23 (Binance).
 v4.4.0 — Added volatility gating (ATR ratio > 1.0 median) and SMA200 trend filter.
          Literature-driven: Ślepaczuk (2606.00060, 2606.09478), Kang (2512.18648).
-         Backtest: 821 trades, +167.2%, Sharpe 0.87, MaxDD -18.3%.
-         Walk-forward: 5/6 splits profitable, mean OOS Sharpe +1.15.
+v4.4.1 — Fixed `BacktestEngine` commission bug: commission was accepted but never applied to
+         trade PnL. Wick v4.4.0 OKX BTC/USDT 1h corrected results:
+         821 trades, +77.3%, Sharpe 0.55, MaxDD -23.3% (commission=5bps, slippage=5bps).
+         Also corrected stale wick.py docstring that had quoted vol-gate-only numbers
+         as the Vol+SMA200 combined result.
 
-*"The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry."*
+*“The signal was never wrong. The exit was. Don't add complexity. Don't add filters. Change one number. I'm sorry.”*
 
 — Written 2026-06-08, updated v4.3 2026-06-08, ~/VibeCoding
 — Updated 2026-06-12: Corrected backtest results after discovering look-ahead bug.
 — Updated 2026-06-15: v4.4.0 vol gate + SMA200 based on literature review and 5 experiments.
+— Updated 2026-06-15: Fixed backtest engine commission bug and corrected all performance numbers.

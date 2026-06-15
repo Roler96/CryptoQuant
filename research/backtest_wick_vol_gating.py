@@ -86,6 +86,7 @@ def regime_backtest(df, signals, regime_data, stop_pct=3.0, target_pct=1.5,
 
             if exit_reason:
                 pnl_pct = (exit_price / position['entry_price'] - 1) * 100
+                pnl_pct -= commission * 100  # round-trip commission
 
                 hold_slice = slice(position['entry_idx'], i + 1)
                 mfe = (max(highs[hold_slice]) / position['entry_price'] - 1) * 100

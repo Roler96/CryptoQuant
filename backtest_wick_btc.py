@@ -44,7 +44,7 @@ def run():
     strategy = WickInversion()
     engine = BacktestEngine(
         initial_capital=10000,
-        commission=0.001,
+        commission=strategy.params["commission"],
         slippage=0.0005,
     )
     result = engine.run(

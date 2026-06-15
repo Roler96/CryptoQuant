@@ -141,7 +141,7 @@ class TestBacktestEngine:
     def test_commission_reduces_pnl(self):
         df = _make_df(50, trend="up")
         engine_no_fee = BacktestEngine(commission=0.0, slippage=0.0)
-        engine_with_fee = BacktestEngine(commission=0.01, slippage=0.01)
+        engine_with_fee = BacktestEngine(commission=0.01, slippage=0.0)
 
         result_no_fee = engine_no_fee.run(
             df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
@@ -150,11 +150,29 @@ class TestBacktestEngine:
             df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
         )
 
-        if result_no_fee.trades and result_with_fee.trades:
-            assert (
-                abs(result_with_fee.trades[0].pnl_pct)
-                <= abs(result_no_fee.trades[0].pnl_pct) + 0.1
-            )
+        assert result_no_fee.trades and result_with_fee.trades
+        # Round-trip commission of 1% should reduce net PnL by exactly 1%.
+        assert (
+            result_with_fee.trades[0].pnl_pct
+            == pytest.approx(result_no_fee.trades[0].pnl_pct - 1.0, abs=1e-6)
+        )
+        assert result_with_fee.trades[0].pnl_pct < result_no_fee.trades[0].pnl_pct
+
+    def test_commission_zero_same_as_no_commission(self):
+        df = _make_df(50, trend="up")
+        engine_default = BacktestEngine()
+        engine_zero = BacktestEngine(commission=0.0)
+
+        result_default = engine_default.run(
+            df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
+        )
+        result_zero = engine_zero.run(
+            df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
+        )
+
+        assert result_default.trades and result_zero.trades
+        # Default commission should now be applied, so results differ.
+        assert result_default.trades[0].pnl_pct < result_zero.trades[0].pnl_pct
 
     def test_result_structure(self, engine):
         df = _make_df(50, trend="up")

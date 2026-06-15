@@ -1,10 +1,13 @@
 """Wick Inversion — buy when sellers try hard and fail.
 
 v4.4.0 — Added volatility gating (ATR ratio > 1.0 median) and SMA200 trend filter.
-         Backtest (OKX BTC/USDT 1h, 2019-2026):
-           Baseline:      Sharpe +1.14, Cmpd +77.6%, MaxDD -48.8%, 2574 trades
-           Vol+SMA200:    Sharpe +2.22, Cmpd +199.4%, MaxDD -36.3%, 1318 trades
-           WF mean OOS:   Sharpe +1.15 (5/6 splits positive)
+         Backtest (OKX BTC/USDT 1h, 2019-2026, commission=5bps round-trip, slippage=5bps):
+           Baseline (no filters):  Sharpe -0.19, Cmpd -50.9%, MaxDD -60.6%, 2574 trades
+           Vol gate only:          Sharpe +0.38, Cmpd +55.0%, MaxDD -40.5%, 1318 trades
+           SMA200 only:            Sharpe +0.01, Cmpd -15.8%, MaxDD -51.0%, 1563 trades
+           Vol+SMA200:             Sharpe +0.55, Cmpd +77.3%, MaxDD -23.3%, 821 trades
+           WF mean OOS:            Sharpe +0.77 (5/6 splits positive)
+         Note: earlier docstring quoted vol-gate-only numbers as Vol+SMA200; corrected.
 """
 
 import pandas as pd
@@ -41,7 +44,7 @@ class WickInversion(Strategy):
 
     timeframe = "1h"
     min_bars = 300  # increased from 100 for SMA200 calculation
-    version = "4.4.0"
+    version = "4.4.1"
 
     DEFAULT_PARAMS = {
         "imbalance_window": 6,
