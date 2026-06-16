@@ -2,8 +2,6 @@
 import numpy as np
 import pandas as pd
 
-from cryptoquant.data.cache import DataCache
-
 
 class CorrelationCheck:
     """Checks correlation between candidate symbol and existing positions.
@@ -13,52 +11,41 @@ class CorrelationCheck:
 
     def __init__(
         self,
-        cache: DataCache,
         threshold: float = 0.7,
         lookback: int = 100,
-        exchange: str = "okx",
-        timeframe: str = "1h",
     ):
-        self.cache = cache
         self.threshold = threshold
         self.lookback = lookback
-        self.exchange = exchange
-        self.timeframe = timeframe
 
     def should_enter(
-        self, candidate_symbol: str, existing_symbols: list[str]
+        self, df_candidate: pd.DataFrame, existing_dfs: list[pd.DataFrame]
     ) -> tuple[bool, str]:
         """Check if candidate symbol is allowed given existing positions.
 
         Returns:
             (allowed, reason)
         """
-        if not existing_symbols:
+        if not existing_dfs:
             return True, "no existing positions"
 
-        for existing in existing_symbols:
-            corr = self.compute_correlation(candidate_symbol, existing)
+        for existing in existing_dfs:
+            corr = self.compute_correlation(df_candidate, existing)
             if corr > self.threshold:
                 return (
                     False,
-                    f"correlation {corr:.2f} > {self.threshold} with {existing}",
+                    f"correlation {corr:.2f} > {self.threshold}",
                 )
 
         return True, "correlation check passed"
 
-    def compute_correlation(self, symbol_a: str, symbol_b: str) -> float:
-        """Compute Pearson correlation between two symbols' returns.
+    def compute_correlation(
+        self, df_a: pd.DataFrame, df_b: pd.DataFrame
+    ) -> float:
+        """Compute Pearson correlation between two DataFrames' returns.
 
         Returns:
             Correlation coefficient (-1.0 to 1.0). Returns 0.0 on insufficient data.
         """
-        df_a = self.cache.get_ohlcv(
-            self.exchange, symbol_a, self.timeframe, lookback=self.lookback
-        )
-        df_b = self.cache.get_ohlcv(
-            self.exchange, symbol_b, self.timeframe, lookback=self.lookback
-        )
-
         if df_a.empty or df_b.empty:
             return 0.0
 

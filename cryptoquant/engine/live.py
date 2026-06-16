@@ -7,7 +7,7 @@ from enum import Enum
 
 from loguru import logger
 
-from cryptoquant.data.cache import DataCache
+from cryptoquant.data.live_feed import LiveDataFeed
 from cryptoquant.engine.exit_logic import (
     ExitCheck,
     check_signal_reverse,
@@ -55,7 +55,7 @@ class LiveEngine:
         self,
         broker: Broker,
         strategy: Strategy,
-        cache: DataCache,
+        data_feed: LiveDataFeed,
         risk_manager=None,
         state_dir: str = "state",
         symbol: str = "",
@@ -71,7 +71,7 @@ class LiveEngine:
     ):
         self.broker = broker
         self.strategy = strategy
-        self.cache = cache
+        self.data_feed = data_feed
         self.risk_manager = risk_manager
         self.state_mgr = StateManager(state_dir)
         self.symbol = symbol
@@ -120,12 +120,7 @@ class LiveEngine:
 
         # 1. Fetch data
         lookback = max(self.strategy.min_bars, 200)
-        df = self.cache.get_ohlcv(
-            self.broker.exchange_name,
-            self.symbol,
-            self.strategy.timeframe,
-            lookback=lookback,
-        )
+        df = self.data_feed.fetch(lookback)
 
         if len(df) < self.strategy.min_bars:
             logger.warning(

@@ -7,7 +7,6 @@ from cryptoquant.config import (
     invalidate_config_cache,
     get_data_config,
     DataConfig,
-    DataCacheConfig,
     FetchConfig,
     TradingConfig,
     PaperTradingConfig,
@@ -34,8 +33,6 @@ class TestLoadConfig:
     def test_data_config_defaults(self):
         config = load_config()
         assert config.data.db_path == "data/cryptoquant.db"
-        assert config.data.cache.max_size == 128
-        assert config.data.cache.ttl_seconds == 300
         assert config.data.fetch.max_candles_per_request == 300
         assert config.data.fetch.chunk_days == 7
 
@@ -83,14 +80,6 @@ class TestGetDataConfig:
 
 
 class TestFieldConstraints:
-    def test_cache_max_size_must_be_positive(self):
-        with pytest.raises(Exception):
-            DataCacheConfig(max_size=0)
-
-    def test_cache_ttl_must_be_non_negative(self):
-        with pytest.raises(Exception):
-            DataCacheConfig(ttl_seconds=-1)
-
     def test_fetch_max_candles_range(self):
         with pytest.raises(Exception):
             FetchConfig(max_candles_per_request=0)

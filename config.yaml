@@ -8,9 +8,6 @@ exchange:
 
 data:
   db_path: data/cryptoquant.db
-  cache:
-    max_size: 128
-    ttl_seconds: 300
   fetch:
     max_candles_per_request: 300
     chunk_days: 7

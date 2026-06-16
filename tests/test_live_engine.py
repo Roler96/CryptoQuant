@@ -59,8 +59,8 @@ def mock_broker():
 
 
 @pytest.fixture
-def mock_cache():
-    cache = MagicMock()
+def mock_data_feed():
+    data_feed = MagicMock()
     dates = pd.date_range("2024-01-01", periods=100, freq="1h")
     close = np.linspace(100, 110, 100)
     df = pd.DataFrame(
@@ -73,8 +73,8 @@ def mock_cache():
         },
         index=dates,
     )
-    cache.get_ohlcv.return_value = df
-    return cache
+    data_feed.fetch.return_value = df
+    return data_feed
 
 
 @pytest.fixture
@@ -85,11 +85,11 @@ def mock_state_mgr(tmp_path):
 
 
 @pytest.fixture
-def engine(mock_broker, mock_cache, mock_state_mgr):
+def engine(mock_broker, mock_data_feed, mock_state_mgr):
     return LiveEngine(
         broker=mock_broker,
         strategy=MockStrategy(),
-        cache=mock_cache,
+        data_feed=mock_data_feed,
         state_dir=str(mock_state_mgr.state_dir),
         symbol="BTC/USDT",
         min_order_usdt=10.0,
@@ -116,19 +116,19 @@ def _make_order(status="closed", side="buy", filled=0.1, amount=0.1):
 
 
 class TestLiveEngineTick:
-    def test_no_signal_is_noop(self, engine, mock_broker, mock_cache):
+    def test_no_signal_is_noop(self, engine, mock_broker, mock_data_feed):
         mock_broker.get_position.return_value = None
         result = engine.tick()
         assert result.action == TickAction.NOOP
         assert result.signal == 0
 
     def test_entry_on_buy_signal(
-        self, mock_broker, mock_cache, mock_state_mgr
+        self, mock_broker, mock_data_feed, mock_state_mgr
     ):
         engine = LiveEngine(
             broker=mock_broker,
             strategy=BuySignalStrategy(),
-            cache=mock_cache,
+            data_feed=mock_data_feed,
             state_dir=str(mock_state_mgr.state_dir),
             symbol="BTC/USDT",
             max_order_usdt=10000.0,
@@ -141,12 +141,12 @@ class TestLiveEngineTick:
         mock_broker.market_buy.assert_called_once()
 
     def test_exit_on_reverse_signal(
-        self, mock_broker, mock_cache, mock_state_mgr
+        self, mock_broker, mock_data_feed, mock_state_mgr
     ):
         engine = LiveEngine(
             broker=mock_broker,
             strategy=SellSignalStrategy(),
-            cache=mock_cache,
+            data_feed=mock_data_feed,
             state_dir=str(mock_state_mgr.state_dir),
             symbol="BTC/USDT",
         )
@@ -167,7 +167,7 @@ class TestLiveEngineTick:
         assert result.action == TickAction.EXIT
         mock_broker.market_sell.assert_called_once()
 
-    def test_skip_on_insufficient_data(self, engine, mock_cache):
+    def test_skip_on_insufficient_data(self, engine, mock_data_feed):
         dates = pd.date_range("2024-01-01", periods=10, freq="1h")
         df = pd.DataFrame(
             {
@@ -179,7 +179,7 @@ class TestLiveEngineTick:
             },
             index=dates,
         )
-        mock_cache.get_ohlcv.return_value = df
+        mock_data_feed.fetch.return_value = df
 
         result = engine.tick()
         assert result.action == TickAction.SKIP
@@ -195,7 +195,7 @@ class TestLiveEngineTick:
 
 class TestPositionSizing:
     def test_calculate_with_risk_manager(
-        self, mock_broker, mock_cache, mock_state_mgr
+        self, mock_broker, mock_data_feed, mock_state_mgr
     ):
         from cryptoquant.risk.manager import RiskManager
         from cryptoquant.risk.sizer import FixedSizer
@@ -204,7 +204,7 @@ class TestPositionSizing:
         engine = LiveEngine(
             broker=mock_broker,
             strategy=BuySignalStrategy(),
-            cache=mock_cache,
+            data_feed=mock_data_feed,
             risk_manager=risk_mgr,
             state_dir=str(mock_state_mgr.state_dir),
             symbol="BTC/USDT",
@@ -243,7 +243,7 @@ class TestStatePersistence:
         engine._save_state()
 
     def test_restore_state(
-        self, mock_broker, mock_cache, mock_state_mgr
+        self, mock_broker, mock_data_feed, mock_state_mgr
     ):
         from cryptoquant.engine.state import EngineState
 
@@ -269,7 +269,7 @@ class TestStatePersistence:
         engine = LiveEngine(
             broker=mock_broker,
             strategy=MockStrategy(),
-            cache=mock_cache,
+            data_feed=mock_data_feed,
             state_dir=str(mock_state_mgr.state_dir),
             symbol="BTC/USDT",
         )

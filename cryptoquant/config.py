@@ -24,12 +24,6 @@ class ExchangeConfig(BaseSettings):
     binance: BinanceConfig = BinanceConfig()
 
 
-class DataCacheConfig(BaseSettings):
-    """L1 memory cache configuration."""
-    max_size: int = Field(default=128, ge=1)
-    ttl_seconds: int = Field(default=300, ge=0)
-
-
 class FetchConfig(BaseSettings):
     """Data fetch configuration."""
     max_candles_per_request: int = Field(default=300, ge=1, le=1000)
@@ -40,7 +34,6 @@ class FetchConfig(BaseSettings):
 class DataConfig(BaseSettings):
     """Data layer configuration."""
     db_path: str = "data/cryptoquant.db"
-    cache: DataCacheConfig = DataCacheConfig()
     fetch: FetchConfig = FetchConfig()
 
 

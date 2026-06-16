@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from cryptoquant.data.live_feed import LiveDataFeed
+
 
 @dataclass
 class HealthStatus:
@@ -28,12 +30,14 @@ class HealthChecker:
         self.max_data_staleness_ms = max_data_staleness_ms
         self.min_balance_threshold = min_balance_threshold
 
-    def check(self, broker, cache, risk_manager) -> HealthStatus:
+    def check(
+        self, broker, data_feed: LiveDataFeed, risk_manager
+    ) -> HealthStatus:
         """Run all health checks and return aggregated status.
 
         Args:
             broker: Broker instance for exchange/balance checks.
-            cache: DataCache instance for data freshness checks.
+            data_feed: LiveDataFeed instance for data freshness checks.
             risk_manager: RiskManager instance for risk state checks.
 
         Returns:
@@ -45,7 +49,7 @@ class HealthChecker:
         exchange_ok, exchange_detail = self._check_exchange(broker)
         details["exchange"] = exchange_detail
 
-        data_fresh, data_detail = self._check_data_freshness(cache)
+        data_fresh, data_detail = self._check_data_freshness(data_feed)
         details["data"] = data_detail
 
         balance_sane, balance_detail = self._check_balance_sanity(broker)
@@ -77,13 +81,14 @@ class HealthChecker:
         except Exception as e:
             return False, f"error: {e}"
 
-    def _check_data_freshness(self, cache) -> tuple[bool, str]:
+    def _check_data_freshness(
+        self, data_feed: LiveDataFeed
+    ) -> tuple[bool, str]:
         try:
-            stats = cache.stats()
-            l1_entries = stats.get("l1_entries", 0)
-            if l1_entries > 0:
-                return True, f"{l1_entries} L1 entries"
-            return False, "no L1 cache entries"
+            last_fetch = data_feed.last_fetch_ts
+            if time.time() * 1000 - last_fetch < self.max_data_staleness_ms:
+                return True, f"last fetch {last_fetch}"
+            return False, "data stale"
         except Exception as e:
             return False, f"error: {e}"
 

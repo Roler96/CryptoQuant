@@ -268,9 +268,9 @@ class TestAdaptive:
 
     def test_neutral_win_rate_resets_limit(self, rm):
         rm.set_adaptive(True, lookback=10)
-        rm.feed_trades([{"pnl_pct": 1.0}] * 9)
+        rm.feed_trades([{"pnl_pct": 1.0}] * 10)
         assert rm.max_daily_trades > rm._base_max_daily_trades
-        rm.feed_trades([{"pnl_pct": -1.0}] * 5)
+        rm.feed_trades([{"pnl_pct": -1.0}] * 6)
         assert rm.max_daily_trades == rm._base_max_daily_trades
 
     def test_insufficient_trades_no_adjust(self, rm):
