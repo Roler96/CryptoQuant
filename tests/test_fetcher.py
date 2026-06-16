@@ -321,3 +321,70 @@ class TestGapDetection:
             assert "gap" not in log_content.lower()
         finally:
             logger.remove(handler_id)
+
+
+class TestStrictMode:
+    def test_strict_false_warns(self):
+        """strict=False should warn on gaps without raising."""
+        import io
+        from loguru import logger
+
+        output = io.StringIO()
+        handler_id = logger.add(output, level="WARNING")
+
+        try:
+            dates = pd.DatetimeIndex(
+                [
+                    "2024-01-01 00:00",
+                    "2024-01-01 01:00",
+                    "2024-01-01 03:00",
+                ]
+            )
+            df = pd.DataFrame(
+                {
+                    "open": [100, 101, 103],
+                    "high": [101, 102, 104],
+                    "low": [99, 100, 102],
+                    "close": [101, 102, 104],
+                    "volume": [1000, 1000, 1000],
+                },
+                index=dates,
+            )
+            validate_ohlcv(df, strict=False)
+
+            log_content = output.getvalue()
+            assert "gap" in log_content.lower()
+        finally:
+            logger.remove(handler_id)
+
+    def test_strict_true_raises_on_gap(self):
+        """strict=True should raise DataValidationError on gaps."""
+        dates = pd.DatetimeIndex(
+            [
+                "2024-01-01 00:00",
+                "2024-01-01 01:00",
+                "2024-01-01 03:00",
+            ]
+        )
+        df = pd.DataFrame(
+            {
+                "open": [100, 101, 103],
+                "high": [101, 102, 104],
+                "low": [99, 100, 102],
+                "close": [101, 102, 104],
+                "volume": [1000, 1000, 1000],
+            },
+            index=dates,
+        )
+        with pytest.raises(DataValidationError, match="gap"):
+            validate_ohlcv(df, strict=True)
+
+    def test_strict_true_no_gap_passes(self):
+        """strict=True should not raise on continuous data."""
+        df = _make_ohlcv(10)
+        validate_ohlcv(df, strict=True)
+
+    def test_strict_true_empty_passes(self):
+        """strict=True should not raise on empty DataFrame."""
+        df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        validate_ohlcv(df, strict=True)

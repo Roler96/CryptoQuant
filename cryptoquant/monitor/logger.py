@@ -11,6 +11,7 @@ def setup_logging(
     rotation: str = "10 MB",
     retention: str = "30 days",
     json_format: bool = False,
+    alert_handler=None,
 ):
     """Configure loguru logging system."""
     log_path = Path(log_dir)
@@ -61,6 +62,13 @@ def setup_logging(
         rotation=rotation,
         retention=retention,
     )
+
+    if alert_handler is not None:
+        logger.add(
+            alert_handler,
+            level="ERROR",
+            format="{message}",
+        )
 
     logger.info(f"Logging configured: level={level}, dir={log_dir}")
     return logger

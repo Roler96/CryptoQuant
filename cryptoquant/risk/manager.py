@@ -2,10 +2,19 @@
 import time
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum
 
+import numpy as np
 from loguru import logger
 
 
+class DrawdownTier(Enum):
+    """Graduated drawdown circuit breaker tiers."""
+
+    NORMAL = "normal"
+    REDUCE_HALF = "reduce_half"
+    REDUCE_QUARTER = "reduce_quarter"
+    HALT = "halt"
 
 
 @dataclass
@@ -54,6 +63,10 @@ class RiskManager:
         sizer=None,
         initial_balance: float = 0.0,
         emergency_cooldown_minutes: int = 60,
+        drawdown_tier1_pct: float = 10.0,
+        drawdown_tier2_pct: float = 15.0,
+        drawdown_tier3_pct: float = 20.0,
+        tier_cooldown_minutes: int = 30,
     ):
         self.max_positions = max_positions
         self.max_daily_trades = max_daily_trades
@@ -64,6 +77,10 @@ class RiskManager:
         self.min_balance = min_balance
         self.sizer = sizer
         self.emergency_cooldown_minutes = emergency_cooldown_minutes
+        self.drawdown_tier1_pct = drawdown_tier1_pct
+        self.drawdown_tier2_pct = drawdown_tier2_pct
+        self.drawdown_tier3_pct = drawdown_tier3_pct
+        self.tier_cooldown_minutes = tier_cooldown_minutes
 
         today = date.today().isoformat()
         self._daily_stats = DailyStats(
@@ -75,6 +92,17 @@ class RiskManager:
         self._emergency_stop = False
         self._emergency_triggered_at: float | None = None
         self._peak_balance = initial_balance
+
+        self._current_drawdown_tier = DrawdownTier.NORMAL
+        self._tier_triggered_at: float | None = None
+        self._rolling_returns: list[float] = []
+        self.cvar_threshold_pct: float = 5.0
+
+        self._adaptive = False
+        self._adaptive_lookback = 50
+        self._base_max_daily_trades = max_daily_trades
+        self._trade_history: list[dict] = []
+        self._adaptive_last_adjusted: float | None = None
 
     def can_enter(
         self,
@@ -121,6 +149,24 @@ class RiskManager:
                 )
                 return False, f"max drawdown exceeded ({current_drawdown:.1f}%)"
 
+        tier = self.current_tier(current_balance)
+        multiplier = self.position_size_multiplier(current_balance)
+
+        if tier == DrawdownTier.HALT:
+            return False, f"drawdown halt ({abs(current_drawdown):.1f}%) — trading blocked"
+
+        if multiplier < 1.0:
+            return True, f"ok (tier={tier.value}, multiplier={multiplier})"
+
+        if self._rolling_returns:
+            from cryptoquant.risk.cvar import CVaRCalculator
+
+            cvar = CVaRCalculator.calculate(
+                np.array(self._rolling_returns), confidence=0.95
+            )
+            if cvar < -self.cvar_threshold_pct:
+                return False, f"CVaR limit exceeded ({cvar:.2f}% < -{self.cvar_threshold_pct}%)"
+
         return True, "ok"
 
     def can_exit(self, symbol: str, side: str) -> tuple[bool, str]:
@@ -149,6 +195,7 @@ class RiskManager:
 
         self._daily_stats.total_pnl_pct += pnl_pct
         self._daily_stats.total_pnl_abs += pnl_abs
+        self._rolling_returns.append(pnl_pct)
 
     def update_balance(self, balance: float, calibrate: bool = False) -> None:
         if calibrate:
@@ -157,8 +204,12 @@ class RiskManager:
                 logger.debug(f"Balance calibrated: drift={drift:+.2f} USDT")
 
         self._daily_stats.current_balance = balance
-        if balance > self._peak_balance:
+        if balance >= self._peak_balance:
             self._peak_balance = balance
+            if self._current_drawdown_tier != DrawdownTier.NORMAL:
+                logger.info("Balance recovered to peak, resetting drawdown tier to normal")
+                self._current_drawdown_tier = DrawdownTier.NORMAL
+                self._tier_triggered_at = None
 
     def reset_daily(self, new_balance: float) -> None:
         self._daily_stats = DailyStats(
@@ -167,6 +218,73 @@ class RiskManager:
             current_balance=new_balance,
         )
         logger.info(f"Daily stats reset. Balance: {new_balance:.1f} USDT")
+
+    def current_tier(self, current_balance: float | None = None) -> DrawdownTier:
+        """Return current drawdown tier based on peak balance."""
+        if current_balance is not None:
+            drawdown = self._compute_drawdown_pct(current_balance)
+        else:
+            drawdown = self._compute_drawdown_pct(self._daily_stats.current_balance)
+
+        if drawdown >= self.drawdown_tier3_pct:
+            if self._current_drawdown_tier != DrawdownTier.HALT:
+                self._current_drawdown_tier = DrawdownTier.HALT
+                self._tier_triggered_at = time.time()
+                logger.critical(
+                    f"Drawdown HALT triggered: {drawdown:.1f}% >= {self.drawdown_tier3_pct}%"
+                )
+            return DrawdownTier.HALT
+
+        if drawdown >= self.drawdown_tier2_pct:
+            if self._current_drawdown_tier != DrawdownTier.REDUCE_QUARTER:
+                self._current_drawdown_tier = DrawdownTier.REDUCE_QUARTER
+                self._tier_triggered_at = time.time()
+                logger.warning(
+                    f"Drawdown REDUCE_QUARTER triggered: {drawdown:.1f}% >= {self.drawdown_tier2_pct}%"
+                )
+            return DrawdownTier.REDUCE_QUARTER
+
+        if drawdown >= self.drawdown_tier1_pct:
+            if self._current_drawdown_tier != DrawdownTier.REDUCE_HALF:
+                self._current_drawdown_tier = DrawdownTier.REDUCE_HALF
+                self._tier_triggered_at = time.time()
+                logger.warning(
+                    f"Drawdown REDUCE_HALF triggered: {drawdown:.1f}% >= {self.drawdown_tier1_pct}%"
+                )
+            return DrawdownTier.REDUCE_HALF
+
+        if self._current_drawdown_tier != DrawdownTier.NORMAL:
+            if self._tier_triggered_at is not None:
+                elapsed = time.time() - self._tier_triggered_at
+                if elapsed > self.tier_cooldown_minutes * 60:
+                    logger.info(
+                        f"Drawdown tier cooldown expired ({self.tier_cooldown_minutes}min), "
+                        f"downgrading from {self._current_drawdown_tier.value} to normal"
+                    )
+                    self._current_drawdown_tier = DrawdownTier.NORMAL
+                    self._tier_triggered_at = None
+                else:
+                    return self._current_drawdown_tier
+            else:
+                self._current_drawdown_tier = DrawdownTier.NORMAL
+
+        return DrawdownTier.NORMAL
+
+    def position_size_multiplier(self, current_balance: float | None = None) -> float:
+        """Return position size multiplier based on current drawdown tier."""
+        tier = self.current_tier(current_balance)
+        multipliers = {
+            DrawdownTier.NORMAL: 1.0,
+            DrawdownTier.REDUCE_HALF: 0.5,
+            DrawdownTier.REDUCE_QUARTER: 0.25,
+            DrawdownTier.HALT: 0.0,
+        }
+        return multipliers[tier]
+
+    def _compute_drawdown_pct(self, current_balance: float) -> float:
+        if self._peak_balance <= 0:
+            return 0.0
+        return round(abs((current_balance / self._peak_balance - 1) * 100), 10)
 
     def _trigger_emergency(self, reason: str) -> None:
         if not self._emergency_stop:
@@ -195,6 +313,68 @@ class RiskManager:
         logger.warning("Emergency stop cleared (manual)")
         self._emergency_stop = False
         self._emergency_triggered_at = None
+
+    def set_adaptive(self, enabled: bool, lookback: int = 50) -> None:
+        """Enable or disable adaptive risk management.
+
+        When enabled, max_daily_trades is adjusted based on recent win rate.
+        """
+        self._adaptive = enabled
+        self._adaptive_lookback = lookback
+        if enabled:
+            logger.info(
+                f"Adaptive risk enabled: lookback={lookback}, "
+                f"base_max_daily_trades={self._base_max_daily_trades}"
+            )
+
+    def feed_trades(self, trades: list[dict]) -> None:
+        """Feed recent trade records for adaptive parameter updates.
+
+        Trades should be dicts with at least a 'pnl_pct' key.
+        """
+        self._trade_history.extend(trades)
+        if self._adaptive:
+            self._adjust_limits()
+
+    def _adjust_limits(self) -> None:
+        """Adjust daily limits based on recent performance.
+
+        Win rate > 60% → relax limits by +20%
+        Win rate < 30% → tighten limits by -30%
+        """
+        if not self._trade_history:
+            return
+
+        recent = self._trade_history[-self._adaptive_lookback:]
+        if len(recent) < 10:
+            return
+
+        wins = [t for t in recent if t.get("pnl_pct", 0) > 0]
+        win_rate = len(wins) / len(recent)
+
+        if win_rate > 0.6:
+            new_limit = int(self._base_max_daily_trades * 1.2)
+            if new_limit != self.max_daily_trades:
+                self.max_daily_trades = new_limit
+                logger.info(
+                    f"Adaptive limit UP: win_rate={win_rate:.1%}, "
+                    f"max_daily_trades={self.max_daily_trades}"
+                )
+        elif win_rate < 0.3:
+            new_limit = int(self._base_max_daily_trades * 0.7)
+            if new_limit != self.max_daily_trades:
+                self.max_daily_trades = new_limit
+                logger.info(
+                    f"Adaptive limit DOWN: win_rate={win_rate:.1%}, "
+                    f"max_daily_trades={self.max_daily_trades}"
+                )
+        else:
+            if self.max_daily_trades != self._base_max_daily_trades:
+                self.max_daily_trades = self._base_max_daily_trades
+                logger.info(
+                    f"Adaptive limit RESET: win_rate={win_rate:.1%}, "
+                    f"max_daily_trades={self.max_daily_trades}"
+                )
 
     def get_daily_stats(self) -> DailyStats:
         return self._daily_stats

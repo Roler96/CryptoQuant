@@ -20,6 +20,12 @@ trading:
   default_quote: USDT
   min_order_usdt: 10.0
 
+paper_trading:
+  enabled: false
+  initial_balance: 10000.0
+  slippage_bps: 5.0
+  latency_ms: 500
+
 logging:
   level: INFO
   dir: logs/

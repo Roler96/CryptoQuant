@@ -11,6 +11,7 @@ from cryptoquant.engine.backtest import (
     trades_to_dataframe,
 )
 from cryptoquant.engine.types import BacktestResult
+from cryptoquant.risk.sizer import ATRSizer, FixedSizer
 from cryptoquant.strategy.base import Strategy
 
 
@@ -248,6 +249,35 @@ class TestTradesToDataframe:
         result = trades_to_dataframe([])
         assert isinstance(result, pd.DataFrame)
         assert result.empty
+
+
+class TestSizerIntegration:
+    def test_backtest_with_fixed_sizer(self):
+        df = _make_df(100, trend="up")
+        sizer = FixedSizer(risk_pct=50.0)
+        engine = BacktestEngine(initial_capital=10000, sizer=sizer)
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
+        assert result.trades
+        assert result.trades[0].pnl_abs == pytest.approx(
+            result.trades[0].pnl_pct * 50.0, abs=1e-6
+        )
+
+    def test_backtest_with_atr_sizer(self):
+        df = _make_df(100, trend="up")
+        sizer = ATRSizer(base_risk_pct=10.0, atr_period=14)
+        engine = BacktestEngine(initial_capital=10000, sizer=sizer)
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
+        assert result.trades
+        assert result.trades[0].pnl_abs <= 10000
+
+    def test_backtest_without_sizer_uses_full_capital(self):
+        df = _make_df(100, trend="up")
+        engine = BacktestEngine(initial_capital=10000)
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
+        assert result.trades
+        assert result.trades[0].pnl_abs == pytest.approx(
+            result.trades[0].pnl_pct * 100.0, abs=1e-6
+        )
 
 
 class TestKnownScenarios:

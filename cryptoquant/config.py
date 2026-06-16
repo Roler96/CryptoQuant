@@ -48,6 +48,28 @@ class TradingConfig(BaseSettings):
     """Trading configuration."""
     default_quote: str = "USDT"
     min_order_usdt: float = Field(default=10.0, gt=0)
+    sizer_method: str = "atr"
+    sizer_config: dict = Field(default_factory=lambda: {
+        "base_risk_pct": 10.0,
+        "atr_period": 14,
+        "multiplier": 1.0,
+        "min_order": 10.0,
+        "max_pct": 100.0,
+    })
+
+
+class PaperTradingConfig(BaseSettings):
+    """Paper trading simulation configuration."""
+    enabled: bool = False
+    initial_balance: float = 10000.0
+    slippage_bps: float = 5.0
+    latency_ms: int = 500
+
+
+class AlertConfig(BaseSettings):
+    """Alert configuration."""
+    webhook_url: str = ""
+    alert_levels: tuple[str, ...] = ("CRITICAL",)
 
 
 class LoggingConfig(BaseSettings):
@@ -66,7 +88,9 @@ class AppConfig(BaseSettings):
     exchange: ExchangeConfig = ExchangeConfig()
     data: DataConfig = DataConfig()
     trading: TradingConfig = TradingConfig()
+    paper_trading: PaperTradingConfig = PaperTradingConfig()
     logging: LoggingConfig = LoggingConfig()
+    alert: AlertConfig = AlertConfig()
 
     # Sensitive fields via environment variables
     okx_api_key: str = ""

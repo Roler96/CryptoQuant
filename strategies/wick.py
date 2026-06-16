@@ -13,9 +13,7 @@ v4.4.0 — Added volatility gating (ATR ratio > 1.0 median) and SMA200 trend fil
 import pandas as pd
 
 from cryptoquant.strategy.base import Strategy
-from cryptoquant.strategy.signals import (
-    pct_change_rolling, wick_imbalance, sma, atr as atr_func
-)
+from cryptoquant.strategy.signals import wick_inversion_signal
 
 
 class WickInversion(Strategy):
@@ -28,6 +26,21 @@ class WickInversion(Strategy):
     v4.4.0 filters:
       - Volatility gating: only trade when ATR(14) > 200-bar median ATR
       - Trend filter: only trade when price > SMA(200)
+
+    Filter Rationale:
+        Each filter exists for a specific empirical reason documented in
+        ``docs/research/filter_rationale.md``.
+
+        - **Volatility gating (ATR ratio > 1.0 median):** Removes low-vol
+          chop where wicks are meaningless. Without it: Sharpe -0.19.
+          With it: Sharpe +0.38. Never disable in standard deployment.
+        - **SMA200 trend filter (price > SMA200):** Removes toxic entries
+          during macro bear markets. Below SMA200 Sharpe -1.13; above
+          SMA200 Sharpe +2.50. Optional to disable if running a short-biased
+          variant (not implemented).
+
+        See ``docs/research/filter_rationale.md`` for full backtest evidence,
+        research sources, and disable guidance.
 
     Parameters:
         imbalance_window: int = 6     Rolling sum window for wick pressure
@@ -65,37 +78,4 @@ class WickInversion(Strategy):
 
     def generate_signal(self, df: pd.DataFrame) -> pd.Series:
         df = self.preprocess(df)
-
-        imb = wick_imbalance(df, window=self.params["imbalance_window"])
-        price_chg = pct_change_rolling(
-            df["close"], self.params["price_lookback"]
-        )
-
-        signal = (imb > self.params["imbalance_threshold"]) & (
-            price_chg > self.params["price_floor"]
-        )
-
-        # v4.4.0: Volatility gating — only trade above-median volatility
-        # Research shows: Very Low vol (<0.6x median) Sharpe -0.76
-        #                 Low vol (0.6-0.8x)     Sharpe +0.37
-        #                 Normal vol (0.8-1.2x)   Sharpe +1.44
-        #                 High vol (1.2-1.5x)     Sharpe +1.62
-        #                 Very High (>1.5x)       also positive
-        # Best filter: vol_ratio > 1.0 keeps 41.6% of signals,
-        #   Sharpe +2.22, MaxDD -36.3%, compound +199.4%
-        if self.params.get("vol_gate_enabled", True):
-            atr14 = atr_func(df, 14)
-            median_atr = atr14.rolling(200).median()
-            vol_ratio = atr14 / median_atr
-            vol_ok = vol_ratio > 1.0  # above-median ATR
-            signal = signal & vol_ok
-
-        # v4.4.0: SMA200 trend filter — only trade above SMA200
-        # Research shows: Above SMA200: Sharpe +2.50, PF 1.17
-        #                 Below SMA200: Sharpe -1.13, PF 0.89
-        if self.params.get("trend_filter_enabled", True):
-            sma200 = sma(df["close"], 200)
-            trend_ok = df["close"] > sma200
-            signal = signal & trend_ok
-
-        return signal.astype(int)
+        return wick_inversion_signal(df, **self.params)

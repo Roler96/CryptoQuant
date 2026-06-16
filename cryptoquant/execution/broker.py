@@ -12,6 +12,7 @@ from cryptoquant.exceptions import (
     InsufficientFundsError,
     OrderRejectedError,
 )
+from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus, Position
 
 
@@ -62,7 +63,7 @@ def retry_on_network(
     return decorator
 
 
-class Broker:
+class Broker(BrokerABC):
     """Exchange abstraction layer.
 
     Wraps ccxt with unified interface, error handling, and retry logic.

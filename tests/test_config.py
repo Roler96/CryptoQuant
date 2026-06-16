@@ -10,6 +10,7 @@ from cryptoquant.config import (
     DataCacheConfig,
     FetchConfig,
     TradingConfig,
+    PaperTradingConfig,
 )
 
 
@@ -101,3 +102,43 @@ class TestFieldConstraints:
             TradingConfig(min_order_usdt=0)
         with pytest.raises(Exception):
             TradingConfig(min_order_usdt=-1)
+
+
+class TestPaperTradingConfig:
+    def test_default_values(self):
+        config = PaperTradingConfig()
+        assert config.enabled is False
+        assert config.initial_balance == 10000.0
+        assert config.slippage_bps == 5.0
+        assert config.latency_ms == 500
+
+    def test_custom_values(self):
+        config = PaperTradingConfig(
+            enabled=True, initial_balance=5000.0, slippage_bps=10.0, latency_ms=1000
+        )
+        assert config.enabled is True
+        assert config.initial_balance == 5000.0
+        assert config.slippage_bps == 10.0
+        assert config.latency_ms == 1000
+
+    def test_app_config_includes_paper_trading(self):
+        config = load_config()
+        assert isinstance(config.paper_trading, PaperTradingConfig)
+        assert config.paper_trading.enabled is False
+        assert config.paper_trading.initial_balance == 10000.0
+
+    def test_yaml_override(self, tmp_path):
+        yaml_content = """
+paper_trading:
+  enabled: true
+  initial_balance: 25000.0
+  slippage_bps: 2.0
+  latency_ms: 200
+"""
+        config_path = tmp_path / "test_config.yaml"
+        config_path.write_text(yaml_content)
+        config = load_config(str(config_path), use_cache=False)
+        assert config.paper_trading.enabled is True
+        assert config.paper_trading.initial_balance == 25000.0
+        assert config.paper_trading.slippage_bps == 2.0
+        assert config.paper_trading.latency_ms == 200

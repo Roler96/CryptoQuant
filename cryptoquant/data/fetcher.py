@@ -20,7 +20,7 @@ def _get_proxy_from_env() -> str | None:
     )
 
 
-def validate_ohlcv(df: pd.DataFrame) -> None:
+def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
     """Validate OHLCV data integrity.
 
     Checks:
@@ -29,7 +29,12 @@ def validate_ohlcv(df: pd.DataFrame) -> None:
     - open/close within [low, high]
     - volume >= 0
     - no NaN in critical columns
-    - timestamp continuity (warn only, does not raise)
+    - timestamp continuity (warn by default, raise when strict=True)
+
+    Args:
+        df: OHLCV DataFrame to validate.
+        strict: If True, timestamp gaps raise DataValidationError.
+            If False, gaps are logged as warnings only.
 
     Raises:
         DataValidationError: If data fails validation checks.
@@ -42,38 +47,35 @@ def validate_ohlcv(df: pd.DataFrame) -> None:
     if missing:
         raise DataValidationError(f"Missing columns: {missing}")
 
-    # high >= low
     mask = df["high"] < df["low"]
     if mask.any():
         raise DataValidationError(f"high < low at {mask.sum()} bars")
 
-    # open/close within [low, high]
     for col in ("open", "close"):
         mask = (df[col] < df["low"]) | (df[col] > df["high"])
         if mask.any():
             raise DataValidationError(f"{col} outside [low, high] at {mask.sum()} bars")
 
-    # volume >= 0
     if (df["volume"] < 0).any():
         raise DataValidationError("Negative volume detected")
 
-    # no NaN in critical columns
     for col in required:
         if df[col].isna().any():
             raise DataValidationError(f"NaN in column '{col}'")
 
-    # Timestamp continuity check (warn only — gaps are usually exchange data issues)
     if len(df) >= 2 and isinstance(df.index, pd.DatetimeIndex):
         diffs = df.index.to_series().diff().dropna()
         if len(diffs) > 0:
             median_diff = diffs.median()
-            # Allow 10% tolerance for minor timing variations
             gaps = diffs[diffs > median_diff * 1.1]
             if len(gaps) > 0:
-                logger.warning(
+                msg = (
                     f"Detected {len(gaps)} gap(s) in OHLCV timestamps, "
                     f"e.g. at {gaps.index[0]} (diff={gaps.iloc[0]})"
                 )
+                if strict:
+                    raise DataValidationError(msg)
+                logger.warning(msg)
 
 
 class OHLCVFetcher:

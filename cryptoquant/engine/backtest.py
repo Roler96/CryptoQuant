@@ -5,6 +5,16 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from cryptoquant.engine.commission import CommissionModel, FlatCommission
+from cryptoquant.engine.exit_logic import (
+    check_signal_reverse,
+    check_stop_loss,
+    check_take_profit,
+    check_time_exit,
+    determine_exit,
+)
+from cryptoquant.engine.latency import LatencyModel, ZeroLatency
+from cryptoquant.engine.slippage import FixedSlippage, SlippageModel
 from cryptoquant.engine.types import BacktestResult, PerformanceMetrics, Trade
 from cryptoquant.strategy.base import Strategy
 
@@ -51,11 +61,19 @@ class BacktestEngine:
         commission: float = 0.001,
         slippage: float = 0.0005,
         use_lows_for_stops: bool = True,
+        sizer=None,
+        slippage_model: SlippageModel | None = None,
+        latency_model: LatencyModel | None = None,
+        commission_model: CommissionModel | None = None,
     ):
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
         self.use_lows_for_stops = use_lows_for_stops
+        self.sizer = sizer
+        self.slippage_model = slippage_model or FixedSlippage(slippage)
+        self.latency_model = latency_model or ZeroLatency()
+        self.commission_model = commission_model or FlatCommission(commission)
         self._bars_to_hours: float = 1.0
         self._periods_per_year: int = 365 * 24
 
@@ -77,9 +95,17 @@ class BacktestEngine:
             df, signals, stop_loss_pct, take_profit_pct, max_hold_bars
         )
 
+        current_equity = self.initial_capital
         for trade in trades:
             trade.symbol = symbol
-            trade.pnl_abs = self.initial_capital * trade.pnl_pct / 100
+            if self.sizer is not None:
+                position_size = self.sizer.calculate(
+                    current_equity, trade.entry_price
+                )
+                trade.pnl_abs = position_size * trade.pnl_pct / 100
+            else:
+                trade.pnl_abs = current_equity * trade.pnl_pct / 100
+            current_equity += trade.pnl_abs
 
         equity_curve = self._compute_equity_curve(trades, df)
         metrics = self._calculate_metrics(trades, equity_curve, df)
@@ -106,6 +132,9 @@ class BacktestEngine:
                 "stop_loss_pct": stop_loss_pct,
                 "take_profit_pct": take_profit_pct,
                 "max_hold_bars": max_hold_bars,
+                "slippage_model": self.slippage_model.__class__.__name__,
+                "latency_model": self.latency_model.__class__.__name__,
+                "commission_model": self.commission_model.__class__.__name__,
             },
         )
 
@@ -121,6 +150,7 @@ class BacktestEngine:
         position: _Position | None = None
         trade_id = 0
         pending_signal: int = 0
+        pending_delay: int = 0
 
         opens = df["open"].values
         highs = df["high"].values
@@ -139,59 +169,74 @@ class BacktestEngine:
 
         for i in range(n):
             if position is None and pending_signal != 0:
-                entry_price = opens[i]
-                sl_price = (
-                    entry_price * (1 - stop_loss_pct / 100)
-                    if stop_loss_pct
-                    else None
-                )
-                tp_price = (
-                    entry_price * (1 + take_profit_pct / 100)
-                    if take_profit_pct
-                    else None
-                )
-                position = _Position(
-                    side="long" if pending_signal == 1 else "short",
-                    entry_time=timestamps_ms[i],
-                    entry_price=entry_price,
-                    entry_signal=pending_signal,
-                    entry_idx=i,
-                    stop_loss_price=sl_price,
-                    take_profit_price=tp_price,
-                    max_hold_bars=max_hold_bars,
-                    high_since_entry=highs[i],
-                    low_since_entry=lows[i],
-                )
-                pending_signal = 0
+                if pending_delay > 0:
+                    pending_delay -= 1
+                else:
+                    entry_price = opens[i]
+                    sl_price = (
+                        entry_price * (1 - stop_loss_pct / 100)
+                        if stop_loss_pct
+                        else None
+                    )
+                    tp_price = (
+                        entry_price * (1 + take_profit_pct / 100)
+                        if take_profit_pct
+                        else None
+                    )
+                    position = _Position(
+                        side="long" if pending_signal == 1 else "short",
+                        entry_time=timestamps_ms[i],
+                        entry_price=entry_price,
+                        entry_signal=pending_signal,
+                        entry_idx=i,
+                        stop_loss_price=sl_price,
+                        take_profit_price=tp_price,
+                        max_hold_bars=max_hold_bars,
+                        high_since_entry=highs[i],
+                        low_since_entry=lows[i],
+                    )
+                    pending_signal = 0
 
             if position is not None:
                 exit_triggered = False
                 exit_reason = ""
 
-                if self._check_stop_loss(
-                    highs[i], lows[i], position, stop_loss_pct
-                ):
+                sl_check = check_stop_loss(
+                    position.side,
+                    highs[i],
+                    lows[i],
+                    position.stop_loss_price,
+                    self.use_lows_for_stops,
+                )
+                tp_check = check_take_profit(
+                    position.side,
+                    highs[i],
+                    lows[i],
+                    position.take_profit_price,
+                )
+                time_check = check_time_exit(
+                    position.entry_idx, i, max_hold_bars
+                )
+                signal_check = check_signal_reverse(
+                    int(signals.iloc[i]), position.entry_signal
+                )
+                exit_check = determine_exit(
+                    sl_check, tp_check, time_check, signal_check
+                )
+                if exit_check.should_exit:
                     exit_triggered = True
-                    exit_reason = "stop_loss"
-                elif self._check_take_profit(
-                    highs[i], lows[i], position, take_profit_pct
-                ):
-                    exit_triggered = True
-                    exit_reason = "take_profit"
-                elif self._check_time_exit(position, i, max_hold_bars):
-                    exit_triggered = True
-                    exit_reason = "time_exit"
-                elif (
-                    int(signals.iloc[i]) != 0
-                    and int(signals.iloc[i]) != position.entry_signal
-                ):
-                    exit_triggered = True
-                    exit_reason = "signal_reverse"
+                    exit_reason = exit_check.reason
 
                 if exit_triggered:
                     trade_id += 1
+                    bar = pd.Series({
+                        "open": opens[i],
+                        "high": highs[i],
+                        "low": lows[i],
+                        "close": closes[i],
+                    })
                     exit_price = self._get_exit_price(
-                        opens[i], exit_reason, position
+                        bar, exit_reason, position
                     )
                     trade = self._create_trade(
                         trade_id,
@@ -208,11 +253,13 @@ class BacktestEngine:
 
                     if exit_reason == "signal_reverse":
                         pending_signal = int(signals.iloc[i])
+                        pending_delay = self.latency_model.bars_delay()
 
             if position is None and pending_signal == 0:
                 sig = int(signals.iloc[i])
                 if sig in (1, -1):
                     pending_signal = sig
+                    pending_delay = self.latency_model.bars_delay()
 
             if position is not None:
                 position.high_since_entry = max(
@@ -224,12 +271,19 @@ class BacktestEngine:
 
         if position is not None:
             trade_id += 1
+            bar = pd.Series({
+                "open": opens[n - 1],
+                "high": highs[n - 1],
+                "low": lows[n - 1],
+                "close": closes[n - 1],
+            })
+            exit_price = self._get_exit_price(bar, "end_of_data", position)
             trade = self._create_trade(
                 trade_id,
                 position,
                 n - 1,
                 timestamps_ms[n - 1],
-                closes[n - 1],
+                exit_price,
                 "end_of_data",
                 highs,
                 lows,
@@ -238,75 +292,34 @@ class BacktestEngine:
 
         return trades
 
-    def _check_stop_loss(
-        self,
-        bar_high: float,
-        bar_low: float,
-        position: _Position,
-        stop_loss_pct: float | None,
-    ) -> bool:
-        if stop_loss_pct is None or position.stop_loss_price is None:
-            return False
-
-        if position.side == "long":
-            if self.use_lows_for_stops:
-                return bar_low <= position.stop_loss_price
-        else:
-            if self.use_lows_for_stops:
-                return bar_high >= position.stop_loss_price
-        return False
-
-    def _check_take_profit(
-        self,
-        bar_high: float,
-        bar_low: float,
-        position: _Position,
-        take_profit_pct: float | None,
-    ) -> bool:
-        if take_profit_pct is None or position.take_profit_price is None:
-            return False
-
-        if position.side == "long":
-            return bar_high >= position.take_profit_price
-        else:
-            return bar_low <= position.take_profit_price
-
-    def _check_time_exit(
-        self,
-        position: _Position,
-        current_idx: int,
-        max_hold_bars: int | None,
-    ) -> bool:
-        if max_hold_bars is None:
-            return False
-        return (current_idx - position.entry_idx) >= max_hold_bars
-
     def _get_exit_price(
         self,
-        bar_open: float,
+        bar: pd.Series,
         exit_reason: str,
         position: _Position,
     ) -> float:
+        slippage = self.slippage_model.calculate(bar, position.side)
+
         if exit_reason == "stop_loss":
             price = position.stop_loss_price
             if position.side == "long":
-                price *= 1 - self.slippage
+                price *= 1 - slippage
             else:
-                price *= 1 + self.slippage
+                price *= 1 + slippage
             return price
 
         if exit_reason == "take_profit":
             price = position.take_profit_price
             if position.side == "long":
-                price *= 1 - self.slippage
+                price *= 1 - slippage
             else:
-                price *= 1 + self.slippage
+                price *= 1 + slippage
             return price
 
         if position.side == "long":
-            return bar_open * (1 - self.slippage)
+            return float(bar["open"]) * (1 - slippage)
         else:
-            return bar_open * (1 + self.slippage)
+            return float(bar["open"]) * (1 + slippage)
 
     def _create_trade(
         self,
@@ -348,7 +361,11 @@ class BacktestEngine:
             ) * 100
 
         # Round-trip commission is subtracted from gross trade PnL.
-        pnl_pct -= self.commission * 100
+        commission_value = self.commission_model.calculate(
+            position.entry_price, 1.0, position.side, is_maker=False
+        )
+        commission_pct = commission_value / position.entry_price * 100
+        pnl_pct -= commission_pct
 
         return Trade(
             id=trade_id,
@@ -377,20 +394,21 @@ class BacktestEngine:
             return pd.Series(self.initial_capital, index=df.index, dtype=float)
 
         exit_times = []
-        factors = []
+        equity_values = []
+        current_equity = self.initial_capital
         for trade in trades:
             exit_times.append(pd.Timestamp(trade.exit_time, unit="ms"))
-            factors.append(1 + trade.pnl_pct / 100)
+            current_equity += trade.pnl_abs
+            equity_values.append(current_equity)
 
-        equity_jumps = pd.Series(factors, index=exit_times, dtype=float)
+        equity_jumps = pd.Series(equity_values, index=exit_times, dtype=float)
         equity_jumps.sort_index(inplace=True)
-        cumulative = equity_jumps.cumprod()
 
         curve = pd.Series(self.initial_capital, index=df.index, dtype=float)
-        for ts, factor in cumulative.items():
+        for ts, equity in equity_jumps.items():
             mask = df.index >= ts
             if mask.any():
-                curve[mask] = self.initial_capital * factor
+                curve[mask] = equity
 
         return curve
 

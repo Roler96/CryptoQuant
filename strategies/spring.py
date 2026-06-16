@@ -16,6 +16,12 @@ v1.2.0 — BB filter expanded to [0.12, 0.65), exits optimized to s3.0/t2.75/h32
            The lower bound expansion from 0.20→0.12 is the key driver:
            the [0.12, 0.20) zone adds 15 trades with Sharpe +1.68 & 73% WR.
            See docs/research/spring/research_bb_filter_expansion_v1.md
+v1.3.0 — BB filter tightened to [0.15, 0.60); SMA200 confirmed ESSENTIAL.
+           BacktestEngine (daily Sharpe): 0.47→0.56 (+19%), MaxDD 10.3%→7.4% (-28%),
+           Per-Trade Sharpe 1.30→1.53 (+18%), PF 1.34→1.44 (+7%).
+           6/7 WF on both OKX (Mean OOS +0.61) and Binance (Mean OOS +0.67).
+           SMA200 removal tested and confirmed destructive: Sharpe +0.56→-0.76.
+           See docs/research/spring/research_sma200_essential_v1.md
 """
 
 import pandas as pd
@@ -27,7 +33,7 @@ from cryptoquant.strategy.signals import (
 
 
 class SpringReversal(Strategy):
-    """Spring Reversal strategy with SMA200 + BB %B [0.12, 0.65) regime filters.
+    """Spring Reversal strategy with SMA200 + BB %B [0.15, 0.60) regime filters.
 
     Detects Wyckoff Spring patterns — failed breakdowns where price makes
     a new low below recent support but closes bullish with high volume,
@@ -39,6 +45,23 @@ class SpringReversal(Strategy):
     unfiltered signals) and restrict entries to the BB bounce zone where
     Springs are genuine reversals, not falling knives.
 
+    Filter Rationale:
+        Each filter exists for a specific empirical reason documented in
+        ``docs/research/filter_rationale.md``.
+
+        - **SMA200 trend filter (price > SMA200):** Ensures Springs are
+          traded in the context of a larger uptrend. Below SMA200 Sharpe
+          -0.93; above SMA200 Sharpe +0.15. **Never disable** — without it
+          the strategy is deeply unprofitable (Sharpe +0.56→-0.76).
+        - **BB %B zone filter [0.15, 0.60):** Restricts entries to the
+          Bollinger bounce zone where failed breakdowns are genuine reversals.
+          The [0.12, 0.15) zone was removed in v1.3.0 — it contributed 11
+          marginally profitable trades whose removal improved Sharpe and reduced
+          MaxDD. **Never disable** in production.
+
+        See ``docs/research/filter_rationale.md`` for full backtest evidence,
+        research sources, and disable guidance.
+
     Parameters:
         lookback: int = 20            Bars for support level and volume avg
         vol_mult: float = 1.5         Volume multiplier (1.5 = 150% of avg)
@@ -48,16 +71,16 @@ class SpringReversal(Strategy):
         hold_hours: int = 32          Max position hold time
         commission: float = 0.0005    Round-trip cost estimate
         sma200_filter: bool = True    Enable SMA200 trend filter
-        bb_filter: bool = True        Enable BB %B [0.12, 0.65) zone filter
+        bb_filter: bool = True        Enable BB %B [0.15, 0.60) zone filter
         bb_period: int = 20           Bollinger Band period
         bb_std: float = 2.0           Bollinger Band standard deviations
-        bb_low: float = 0.12          BB %B lower bound (inclusive)
-        bb_high: float = 0.65         BB %B upper bound (exclusive)
+        bb_low: float = 0.15          BB %B lower bound (inclusive)
+        bb_high: float = 0.60         BB %B upper bound (exclusive)
     """
 
     timeframe = "1h"
     min_bars = 300  # for SMA200 calculation
-    version = "1.2.0"
+    version = "1.3.0"
 
     DEFAULT_PARAMS = {
         # Signal generation
@@ -74,8 +97,8 @@ class SpringReversal(Strategy):
         "bb_filter": True,
         "bb_period": 20,
         "bb_std": 2.0,
-        "bb_low": 0.12,   # v1.2.0: expanded from 0.15 (BB filter expansion research)
-        "bb_high": 0.65,  # v1.1.0: expanded from 0.6 (vol-adaptive research)
+        "bb_low": 0.15,   # v1.3.0: tightened from 0.12 (removed marginal [0.12,0.15) zone)
+        "bb_high": 0.60,  # v1.3.0: tightened from 0.65
         # Vol-adaptive exits (v1.1.0)
         "vol_adaptive": False,  # Enable vol-adaptive exits
         "vol_low_thresh": 0.7,
@@ -108,11 +131,11 @@ class SpringReversal(Strategy):
             sma200 = sma(df["close"], 200)
             signal = signal & (df["close"] > sma200)
 
-        # BB %B zone filter: restrict to bounce zone [0.12, 0.65)
-        # v1.2.0: expanded from [0.2, 0.6) — lower bound relaxation adds
-        # 27 profitable trades in [0.12, 0.20) zone (Sharpe +1.68, 73% WR)
-        # With SMA200 filtering, even deeper pullbacks are genuine Springs.
-        # %B > 0.5 is still toxic (Sharpe -1.31) but signals rarely fire there.
+        # BB %B zone filter: restrict to bounce zone [0.15, 0.60)
+        # v1.3.0: tightened from [0.12, 0.65)
+        # The [0.12, 0.15) zone was removed — its 11 trades were marginal.
+        # With SMA200 filtering, Springs in the [0.15, 0.60) bounce zone
+        # are genuine reversals with improved risk-adjusted metrics.
         if self.params.get("bb_filter", True):
             bb = bollinger_bands(
                 df,

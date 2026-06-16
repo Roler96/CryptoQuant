@@ -58,6 +58,7 @@ class KellySizer(PositionSizer):
         min_order: float = 10.0,
         max_pct: float = 100.0,
         lookback_trades: int = 50,
+        adaptive: bool = False,
     ):
         self.win_rate = win_rate
         self.avg_win_pct = avg_win_pct
@@ -66,6 +67,7 @@ class KellySizer(PositionSizer):
         self.min_order = min_order
         self.max_pct = max_pct
         self.lookback_trades = lookback_trades
+        self.adaptive = adaptive
 
     def calculate(self, balance: float, price: float, **kwargs) -> float:
         if self.avg_loss_pct <= 0 or self.avg_win_pct <= 0:
@@ -108,6 +110,14 @@ class KellySizer(PositionSizer):
         ):
             logger.warning("Kelly update produced invalid params, keeping previous values")
             return
+
+    def feed_trades(self, trades: list[dict]) -> None:
+        """Feed trade history to the sizer.
+
+        Calls ``update_from_trades()`` when ``adaptive=True``.
+        """
+        if self.adaptive:
+            self.update_from_trades(trades)
 
 
 class ATRSizer(PositionSizer):

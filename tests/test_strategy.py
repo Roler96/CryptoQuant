@@ -264,3 +264,120 @@ class TestRollingUtils:
         s = pd.Series([100.0, 110, 121, 133.1])
         result = signals.pct_change_rolling(s, 1)
         assert result.iloc[1] == pytest.approx(10.0)  # 10% increase
+
+
+class TestDetectRegime:
+    def _make_regime_df(self, n=300, trend="flat", volatility="low"):
+        """Generate synthetic OHLCV for regime testing."""
+        dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+        np.random.seed(42)
+        if trend == "up":
+            close = np.linspace(100, 200, n) + np.random.randn(n) * 0.5
+        elif trend == "down":
+            close = np.linspace(200, 100, n) + np.random.randn(n) * 0.5
+        else:
+            close = np.full(n, 100.0) + np.random.randn(n) * 0.5
+
+        if volatility == "high":
+            noise = np.random.randn(n) * 5.0
+        elif volatility == "medium":
+            noise = np.random.randn(n) * 1.0
+        else:
+            noise = np.random.randn(n) * 0.1
+
+        close = close + noise
+        df = pd.DataFrame(
+            {
+                "open": close - 0.1,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": np.full(n, 1000.0),
+            },
+            index=dates,
+        )
+        return df
+
+    def test_trending_bull(self):
+        df = self._make_regime_df(n=300, trend="up", volatility="low")
+        result = signals.detect_regime(df)
+        valid = result.dropna().iloc[-50:]
+        assert (valid == "trending_bull").sum() > 0
+
+    def test_trending_bear(self):
+        df = self._make_regime_df(n=300, trend="down", volatility="low")
+        result = signals.detect_regime(df)
+        valid = result.dropna().iloc[-50:]
+        assert (valid == "trending_bear").sum() > 0
+
+    def test_mean_reverting(self):
+        df = self._make_regime_df(n=300, trend="flat", volatility="medium")
+        result = signals.detect_regime(df)
+        valid = result.dropna().iloc[-50:]
+        assert (valid == "mean_reverting").sum() > 0
+
+    def test_volatile(self):
+        df = self._make_regime_df(n=300, trend="flat", volatility="high")
+        result = signals.detect_regime(df)
+        valid = result.dropna().iloc[-50:]
+        assert (valid == "volatile").sum() > 0
+
+    def test_quiet(self):
+        df = self._make_regime_df(n=300, trend="flat", volatility="low")
+        result = signals.detect_regime(df)
+        valid = result.dropna().iloc[-50:]
+        assert (valid == "quiet").sum() > 0
+
+    def test_returns_series_same_length(self):
+        df = self._make_regime_df(n=300)
+        result = signals.detect_regime(df)
+        assert len(result) == len(df)
+        assert (result.index == df.index).all()
+
+    def test_all_labels_present(self):
+        df = self._make_regime_df(n=300, trend="up", volatility="high")
+        result = signals.detect_regime(df)
+        valid = result.dropna()
+        labels = {"trending_bull", "trending_bear", "mean_reverting", "volatile", "quiet"}
+        assert set(valid.unique()).issubset(labels)
+
+
+class TestWickInversionSignal:
+    def _make_df(self, n=300, start_price=100.0):
+        dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+        np.random.seed(42)
+        close = np.linspace(start_price, start_price + n * 0.5, n)
+        close = close + np.random.randn(n) * 0.5
+        return pd.DataFrame(
+            {
+                "open": close - 0.1,
+                "high": close + 0.5,
+                "low": close - 0.5,
+                "close": close,
+                "volume": np.full(n, 1000.0),
+            },
+            index=dates,
+        )
+
+    def test_wick_inversion_signal_equivalence(self):
+        from strategies.wick import WickInversion
+
+        df = self._make_df(300)
+        params = {
+            "imbalance_window": 6,
+            "imbalance_threshold": 0.25,
+            "price_lookback": 6,
+            "price_floor": -0.5,
+            "stop_pct": 3.0,
+            "target_pct": 1.5,
+            "hold_hours": 12,
+            "commission": 0.0005,
+            "vol_gate_enabled": True,
+            "trend_filter_enabled": True,
+        }
+
+        strategy = WickInversion(params)
+        expected = strategy.generate_signal(df)
+        result = signals.wick_inversion_signal(df, **params)
+
+        pd.testing.assert_series_equal(result, expected)

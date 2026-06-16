@@ -8,6 +8,14 @@ from enum import Enum
 from loguru import logger
 
 from cryptoquant.data.cache import DataCache
+from cryptoquant.engine.exit_logic import (
+    ExitCheck,
+    check_signal_reverse,
+    check_stop_loss,
+    check_take_profit,
+    check_time_exit,
+    determine_exit,
+)
 from cryptoquant.engine.state import EngineState, StateManager
 from cryptoquant.execution.broker import Broker
 from cryptoquant.execution.order import Order, OrderStatus, Position
@@ -59,6 +67,7 @@ class LiveEngine:
         stop_loss_pct: float | None = None,
         take_profit_pct: float | None = None,
         max_hold_hours: float | None = None,
+        sizer=None,
     ):
         self.broker = broker
         self.strategy = strategy
@@ -74,6 +83,7 @@ class LiveEngine:
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         self.max_hold_hours = max_hold_hours
+        self.sizer = sizer
 
         self._running = False
         self._cooldown_remaining = 0
@@ -158,17 +168,63 @@ class LiveEngine:
         current_positions = 1 if has_position else 0
 
         if has_position:
-            # Check threshold exits (priority: stop > target > time > signal)
-            should_exit, exit_reason = self._check_position_exits(position, df)
-            if should_exit:
-                return self._exit_position(
-                    position, signal, timestamp, exit_reason=exit_reason
-                )
+            current_price = df["close"].iloc[-1]
 
-            # Exit condition: reverse signal
-            if position.side == "long" and signal == -1:
+            stop_loss_price = None
+            if self.stop_loss_pct is not None:
+                if position.side == "long":
+                    stop_loss_price = position.entry_price * (
+                        1 - self.stop_loss_pct / 100
+                    )
+                else:
+                    stop_loss_price = position.entry_price * (
+                        1 + self.stop_loss_pct / 100
+                    )
+
+            take_profit_price = None
+            if self.take_profit_pct is not None:
+                if position.side == "long":
+                    take_profit_price = position.entry_price * (
+                        1 + self.take_profit_pct / 100
+                    )
+                else:
+                    take_profit_price = position.entry_price * (
+                        1 - self.take_profit_pct / 100
+                    )
+
+            now_ms = int(datetime.utcnow().timestamp() * 1000)
+            max_hold_ms = None
+            if self.max_hold_hours is not None:
+                max_hold_ms = int(self.max_hold_hours * 3_600_000)
+
+            sl_check = check_stop_loss(
+                position.side,
+                current_price,
+                current_price,
+                stop_loss_price,
+                use_lows_for_stops=True,
+            )
+            tp_check = check_take_profit(
+                position.side,
+                current_price,
+                current_price,
+                take_profit_price,
+            )
+            time_check = check_time_exit(
+                position.timestamp, now_ms, max_hold_ms
+            )
+            # Preserve original behavior: only check signal reverse for longs
+            if position.side == "long":
+                signal_check = check_signal_reverse(signal, 1)
+            else:
+                signal_check = ExitCheck(False, "")
+
+            exit_check = determine_exit(
+                sl_check, tp_check, time_check, signal_check
+            )
+            if exit_check.should_exit:
                 return self._exit_position(
-                    position, signal, timestamp, exit_reason="signal_reverse"
+                    position, signal, timestamp, exit_reason=exit_check.reason
                 )
 
             return TickResult(
@@ -321,34 +377,6 @@ class LiveEngine:
             order.amount = order.filled
         return order
 
-    def _check_position_exits(
-        self, position, df
-    ) -> tuple[bool, str]:
-        """Check stop/target/time exit thresholds.
-
-        Returns (should_exit, reason). Priority: stop > target > time.
-        """
-        current_price = df["close"].iloc[-1]
-
-        if position.side == "long":
-            pnl_pct = (current_price / position.entry_price - 1) * 100
-        else:
-            pnl_pct = (1 - current_price / position.entry_price) * 100
-
-        now_ms = int(datetime.utcnow().timestamp() * 1000)
-        hold_hours = (now_ms - position.timestamp) / 3_600_000
-
-        if self.stop_loss_pct is not None and pnl_pct <= -self.stop_loss_pct:
-            return True, "stop_loss"
-
-        if self.take_profit_pct is not None and pnl_pct >= self.take_profit_pct:
-            return True, "take_profit"
-
-        if self.max_hold_hours is not None and hold_hours >= self.max_hold_hours:
-            return True, "time_exit"
-
-        return False, ""
-
     def _exit_position(
         self,
         position: Position,
@@ -406,7 +434,13 @@ class LiveEngine:
         self, balance: float, df=None
     ) -> float:
         """Calculate order amount in USDT."""
-        if self.risk_manager:
+        if self.sizer:
+            amount = self.sizer.calculate(
+                balance,
+                df["close"].iloc[-1] if df is not None else 0,
+                df=df,
+            )
+        elif self.risk_manager:
             amount = self.risk_manager.position_size(
                 balance,
                 df["close"].iloc[-1] if df is not None else 0,

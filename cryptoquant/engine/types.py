@@ -67,3 +67,22 @@ class BacktestResult:
     equity_curve: pd.Series
     drawdown_curve: pd.Series
     config: dict
+
+
+@dataclass
+class PaperTradingResult:
+    """Complete paper trading simulation result."""
+
+    strategy_name: str
+    symbol: str
+    timeframe: str
+    initial_balance: float
+    final_balance: float
+    total_trades: int
+    win_rate_pct: float
+    total_slippage_bps: float
+    total_latency_ms: int
+    sim_start_time: int
+    sim_end_time: int
+    trade_log: list[Trade]
+    balance_curve: pd.Series

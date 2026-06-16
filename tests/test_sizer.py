@@ -48,6 +48,18 @@ class TestKellySizer:
         sizer.update_from_trades(trades)
         assert sizer.win_rate == 0.5  # Unchanged
 
+    def test_feed_trades_when_adaptive(self):
+        sizer = KellySizer(lookback_trades=10, adaptive=True, win_rate=0.5)
+        trades = [{"pnl_pct": 2.0}] * 6 + [{"pnl_pct": -1.0}] * 4
+        sizer.feed_trades(trades)
+        assert sizer.win_rate == 0.6
+
+    def test_feed_trades_when_not_adaptive(self):
+        sizer = KellySizer(lookback_trades=10, adaptive=False, win_rate=0.5)
+        trades = [{"pnl_pct": 2.0}] * 6 + [{"pnl_pct": -1.0}] * 4
+        sizer.feed_trades(trades)
+        assert sizer.win_rate == 0.5  # Unchanged
+
 
 class TestATRSizer:
     def test_high_vol_reduces_size(self):
@@ -87,3 +99,23 @@ class TestCreateSizer:
     def test_atr(self):
         sizer = create_sizer(SizerMethod.ATR)
         assert isinstance(sizer, ATRSizer)
+
+
+class TestATRSizerConfig:
+    def test_default_config_from_trading_config(self):
+        from cryptoquant.config import TradingConfig
+
+        config = TradingConfig()
+        assert config.sizer_method == "atr"
+        assert "base_risk_pct" in config.sizer_config
+        assert "atr_period" in config.sizer_config
+        sizer = create_sizer(
+            SizerMethod.ATR,
+            base_risk_pct=config.sizer_config["base_risk_pct"],
+            atr_period=config.sizer_config["atr_period"],
+            multiplier=config.sizer_config["multiplier"],
+            min_order=config.sizer_config["min_order"],
+            max_pct=config.sizer_config["max_pct"],
+        )
+        assert isinstance(sizer, ATRSizer)
+        assert sizer.base_risk_pct == config.sizer_config["base_risk_pct"]
