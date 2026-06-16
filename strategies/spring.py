@@ -10,6 +10,12 @@ v1.1.0 — Expanded BB filter [0.15, 0.65) + vol-adaptive exit parameters.
            Trades increased 74→91, Sharpe +1.26→+1.76 (custom engine, +40% improvement).
            Binance cross-validated: Sharpe +1.72→+2.24, 6/7 WF profitable.
            See docs/research/spring/research_vol_adaptive_exits_v1.md
+v1.2.0 — BB filter expanded to [0.12, 0.65), exits optimized to s3.0/t2.75/h32.
+           Trades 72→99 (+38%), WF improved 5/7→6/7 on OKX, 6/7 on Binance.
+           Full-period Sharpe +1.38, Mean OOS Sharpe +0.71.
+           The lower bound expansion from 0.20→0.12 is the key driver:
+           the [0.12, 0.20) zone adds 15 trades with Sharpe +1.68 & 73% WR.
+           See docs/research/spring/research_bb_filter_expansion_v1.md
 """
 
 import pandas as pd
@@ -21,7 +27,7 @@ from cryptoquant.strategy.signals import (
 
 
 class SpringReversal(Strategy):
-    """Spring Reversal strategy with SMA200 + BB %B 0.2-0.6 regime filters.
+    """Spring Reversal strategy with SMA200 + BB %B [0.12, 0.65) regime filters.
 
     Detects Wyckoff Spring patterns — failed breakdowns where price makes
     a new low below recent support but closes bullish with high volume,
@@ -38,20 +44,20 @@ class SpringReversal(Strategy):
         vol_mult: float = 1.5         Volume multiplier (1.5 = 150% of avg)
         close_pct: float = 0.5        Close must be above this fraction of bar range
         stop_pct: float = 3.0         Stop loss (%)
-        target_pct: float = 2.5       Take profit (%)
-        hold_hours: int = 24          Max position hold time
+        target_pct: float = 2.75      Take profit (%)
+        hold_hours: int = 32          Max position hold time
         commission: float = 0.0005    Round-trip cost estimate
         sma200_filter: bool = True    Enable SMA200 trend filter
-        bb_filter: bool = True        Enable BB %B 0.2-0.6 zone filter
+        bb_filter: bool = True        Enable BB %B [0.12, 0.65) zone filter
         bb_period: int = 20           Bollinger Band period
         bb_std: float = 2.0           Bollinger Band standard deviations
-        bb_low: float = 0.2           BB %B lower bound (inclusive)
-        bb_high: float = 0.6          BB %B upper bound (exclusive)
+        bb_low: float = 0.12          BB %B lower bound (inclusive)
+        bb_high: float = 0.65         BB %B upper bound (exclusive)
     """
 
     timeframe = "1h"
     min_bars = 300  # for SMA200 calculation
-    version = "1.1.0"
+    version = "1.2.0"
 
     DEFAULT_PARAMS = {
         # Signal generation
@@ -60,15 +66,15 @@ class SpringReversal(Strategy):
         "close_pct": 0.5,
         # Exit parameters
         "stop_pct": 3.0,
-        "target_pct": 2.5,
-        "hold_hours": 24,
+        "target_pct": 2.75,
+        "hold_hours": 32,
         "commission": 0.0005,
         # Regime filters
         "sma200_filter": True,
         "bb_filter": True,
         "bb_period": 20,
         "bb_std": 2.0,
-        "bb_low": 0.15,   # v1.1.0: expanded from 0.2 (vol-adaptive research)
+        "bb_low": 0.12,   # v1.2.0: expanded from 0.15 (BB filter expansion research)
         "bb_high": 0.65,  # v1.1.0: expanded from 0.6 (vol-adaptive research)
         # Vol-adaptive exits (v1.1.0)
         "vol_adaptive": False,  # Enable vol-adaptive exits
@@ -102,10 +108,11 @@ class SpringReversal(Strategy):
             sma200 = sma(df["close"], 200)
             signal = signal & (df["close"] > sma200)
 
-        # BB %B zone filter: restrict to bounce zone [0.2, 0.6)
-        # Research: %B 0.2-0.4 Sharpe +2.18, %B 0.4-0.6 Sharpe +1.68
-        #            %B < 0.2 Sharpe -2.34 (free-fall zone — avoid)
-        #            %B > 0.8 Sharpe near 0 (overextended — no edge)
+        # BB %B zone filter: restrict to bounce zone [0.12, 0.65)
+        # v1.2.0: expanded from [0.2, 0.6) — lower bound relaxation adds
+        # 27 profitable trades in [0.12, 0.20) zone (Sharpe +1.68, 73% WR)
+        # With SMA200 filtering, even deeper pullbacks are genuine Springs.
+        # %B > 0.5 is still toxic (Sharpe -1.31) but signals rarely fire there.
         if self.params.get("bb_filter", True):
             bb = bollinger_bands(
                 df,
