@@ -1,6 +1,5 @@
 """Tests for CVaRCalculator."""
 import numpy as np
-import pytest
 
 from cryptoquant.risk.cvar import CVaRCalculator
 

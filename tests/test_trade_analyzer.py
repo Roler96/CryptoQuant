@@ -1,7 +1,5 @@
 """Tests for TradeAnalyzer."""
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from cryptoquant.analysis.trade_analyzer import TradeAnalyzer, TradeRecord

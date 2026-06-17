@@ -1,7 +1,6 @@
 """Tests for PaperTradingResult dataclass."""
 
 import pandas as pd
-import pytest
 
 from cryptoquant.engine.types import PaperTradingResult, Trade
 

@@ -1,5 +1,4 @@
 """Tests for latency models."""
-import pytest
 
 from cryptoquant.engine.latency import RandomLatency, ZeroLatency
 

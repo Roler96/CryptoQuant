@@ -12,13 +12,14 @@ Cryptocurrency quantitative trading system. Python 3.11+, ccxt for exchange conn
 
 ```
 CryptoQuant/
-├── cryptoquant/          # Core library (6 submodules)
+├── cryptoquant/          # Core library (7 submodules)
 │   ├── engine/           # Backtest + live execution engines
 │   ├── strategy/         # Strategy ABC + technical indicators
 │   ├── execution/        # ccxt broker wrapper + order types
-│   ├── data/             # 3-level cache (memory → SQLite → exchange)
+│   ├── data/             # OHLCV pipeline: SQLite → ccxt fetch + validation
 │   ├── risk/             # Pre-trade checks + position sizing
-│   └── monitor/          # Logging, journaling, PnL reporting, log sanitization
+│   ├── monitor/          # Logging, journaling, PnL reporting, log sanitization
+│   └── analysis/         # Post-trade analysis and trade analytics
 ├── strategies/           # Concrete strategy implementations
 ├── research/             # Standalone backtest scripts (one per experiment)
 ├── tests/                # pytest suite (mirrors cryptoquant/ structure)
@@ -33,13 +34,14 @@ CryptoQuant/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Run backtest | `demo_backtest.py`, `backtest_btc.py` | Fetches OKX data → SQLite → BacktestEngine |
+| Run backtest | `demo_backtest.py` | Fetches OKX data → SQLite → BacktestEngine |
 | Add new strategy | `strategies/` | Subclass `Strategy`, implement `generate_signal()` |
-| Modify backtest logic | `cryptoquant/engine/backtest.py` | Vectorized, 627 lines |
-| Modify live trading | `cryptoquant/engine/live.py` | Tick-based loop, 517 lines |
-| Change data pipeline | `cryptoquant/data/cache.py` | L1/L2/L3 cascade |
+| Modify backtest logic | `cryptoquant/engine/backtest.py` | Vectorized, 645 lines |
+| Modify live trading | `cryptoquant/engine/live.py` | Tick-based loop, 546 lines |
+| Change data pipeline | `cryptoquant/data/backtest_feed.py`, `cryptoquant/data/live_feed.py` | Backtest and live data feeds |
 | Adjust risk rules | `cryptoquant/risk/manager.py` | Pre-trade gatekeeper |
 | Add technical indicator | `cryptoquant/strategy/signals.py` | Pure numpy/pandas, no external deps |
+| Run trade analysis | `cryptoquant/analysis/trade_analyzer.py` | `TradeAnalyzer` — metrics, curves, regime report |
 | Run experiments | `research/` | Each file is standalone, not imported by core |
 | Config reference | `config.yaml` + `cryptoquant/config.py` | pydantic-settings, .env overlay |
 
@@ -50,12 +52,14 @@ CryptoQuant/
 | `Strategy` | ABC | `cryptoquant/strategy/base.py` | Base class: `generate_signal(df) -> Series[1,0,-1]` |
 | `BacktestEngine` | class | `cryptoquant/engine/backtest.py` | Vectorized backtest, compound returns |
 | `LiveEngine` | class | `cryptoquant/engine/live.py` | Real-time tick loop, broker + risk + state |
-| `DataCache` | class | `cryptoquant/data/cache.py` | 3-level cache: LRU → SQLite → ccxt |
+| `BacktestDataFeed` | class | `cryptoquant/data/backtest_feed.py` | Historical OHLCV feed for backtests |
+| `LiveDataFeed` | class | `cryptoquant/data/live_feed.py` | Real-time OHLCV feed for live trading |
 | `OHLCVStore` | class | `cryptoquant/data/store.py` | SQLite WAL storage, one table per (exchange, symbol, tf) |
 | `OHLCVFetcher` | class | `cryptoquant/data/fetcher.py` | ccxt wrapper, validates OHLCV integrity |
 | `Broker` | class | `cryptoquant/execution/broker.py` | ccxt wrapper, retry logic, proxy support |
 | `RiskManager` | class | `cryptoquant/risk/manager.py` | Daily limits, drawdown circuit breaker, emergency stop |
 | `PositionSizer` | ABC | `cryptoquant/risk/sizer.py` | Fixed / Kelly / ATR sizing methods |
+| `TradeAnalyzer` | class | `cryptoquant/analysis/trade_analyzer.py` | Post-trade metrics, equity curves, regime analysis |
 | `AppConfig` | dataclass | `cryptoquant/config.py` | Root config, YAML + .env overlay |
 | `Trade` | dataclass | `cryptoquant/engine/types.py` | Trade lifecycle record (entry → exit + metrics) |
 | `BacktestResult` | dataclass | `cryptoquant/engine/types.py` | Full backtest output (trades + metrics + curves) |
@@ -85,7 +89,6 @@ CryptoQuant/
 - **Stop priority**: `stop_loss > take_profit > time_exit > signal_reverse` (both backtest and live).
 - **Commission model**: Round-trip commission subtracted from gross trade PnL in `BacktestEngine._create_trade()`.
 - **State persistence**: JSON + SHA-256 checksum in `StateManager`. Atomic write via tmp + rename.
-- **Cache invalidation**: L1 has TTL (default 300s). L2 checks if DB has enough data for requested lookback. L3 only hit on L1+L2 miss.
 - **Proxy handling**: ccxt sets `trust_env=False`, so proxies must be set manually on `exchange.session.proxies`.
 
 ## COMMANDS
@@ -106,9 +109,8 @@ uv run pyright
 # Run backtest demo
 uv run python demo_backtest.py
 
-# Run specific backtest
-uv run python backtest_btc.py
-uv run python backtest_wick_btc.py
+# Run a research experiment (create scripts in research/)
+uv run python research/backtest_<experiment>.py
 ```
 
 ## NOTES
@@ -118,3 +120,4 @@ uv run python backtest_wick_btc.py
 - **Research workflow**: Each `research/backtest_*.py` is a standalone experiment. Results documented in `docs/research/`.
 - **CI pipeline**: ruff → pyright → pytest + security checks (no .env, no API keys in source).
 - **Branch**: `dev` is main development branch.
+- **Documentation drift**: `data/cache.py` no longer exists — use `backtest_feed.py` / `live_feed.py`. `research/` is currently empty.
