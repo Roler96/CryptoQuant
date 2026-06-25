@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T20:02:25.930232+00:00",
+    "strategy_file": "research/backtest_ichimoku_cloud.py",
+    "class_name": "IchimokuCloud",
+    "bars": 8760,
+    "date_range": "2025-06-25 02:00:00 \u2192 2026-06-25 01:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "IchimokuCloud",
+    "symbol": "ETH/USDT",
+    "timeframe": "1h",
+    "initial_capital": 10000,
+    "final_equity": 10190.27,
+    "total_return_pct": 1.9,
+    "annualized_return_pct": 1.9,
+    "sharpe_ratio": 0.47,
+    "sortino_ratio": 0.27,
+    "max_drawdown_pct": 3.63,
+    "max_drawdown_days": 89,
+    "volatility_annual_pct": 4.21,
+    "total_trades": 80,
+    "win_rate_pct": 46.2,
+    "profit_factor": 1.19,
+    "avg_win_pct": 6.81,
+    "avg_loss_pct": -4.94,
+    "avg_hold_hours": 106.9,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": true,
+    "reasons": [
+      "sharpe=0.47 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "IchimokuCloud",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 10454.53,
+      "total_return_pct": 4.55,
+      "annualized_return_pct": 6.56,
+      "sharpe_ratio": 1.52,
+      "sortino_ratio": 0.95,
+      "max_drawdown_pct": 2.14,
+      "max_drawdown_days": 81,
+      "volatility_annual_pct": 4.23,
+      "total_trades": 51,
+      "win_rate_pct": 47.1,
+      "profit_factor": 1.78,
+      "avg_win_pct": 8.56,
+      "avg_loss_pct": -4.27,
+      "avg_hold_hours": 116.8,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "IchimokuCloud",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9765.51,
+      "total_return_pct": -2.34,
+      "annualized_return_pct": -7.6,
+      "sharpe_ratio": -1.89,
+      "sortino_ratio": -0.93,
+      "max_drawdown_pct": 3.63,
+      "max_drawdown_days": 89,
+      "volatility_annual_pct": 4.13,
+      "total_trades": 28,
+      "win_rate_pct": 46.4,
+      "profit_factor": 0.5,
+      "avg_win_pct": 3.61,
+      "avg_loss_pct": -6.26,
+      "avg_hold_hours": 89.9,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 224.3,
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 0.47,
+    "stress_sharpe": 0.42,
+    "sharpe_delta_pct": 10.6,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 8759 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

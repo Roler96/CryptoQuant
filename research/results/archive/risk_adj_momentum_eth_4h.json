@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T18:46:53.780748+00:00",
+    "strategy_file": "research/backtest_risk_adj_momentum.py",
+    "class_name": "RiskAdjustedMomentum",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "RiskAdjustedMomentum",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10146.09,
+    "total_return_pct": 1.46,
+    "annualized_return_pct": 1.46,
+    "sharpe_ratio": 0.36,
+    "sortino_ratio": 0.17,
+    "max_drawdown_pct": 2.79,
+    "max_drawdown_days": 218,
+    "volatility_annual_pct": 4.22,
+    "total_trades": 30,
+    "win_rate_pct": 36.7,
+    "profit_factor": 1.25,
+    "avg_win_pct": 14.16,
+    "avg_loss_pct": -6.58,
+    "avg_hold_hours": 279.5,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "sharpe=0.36 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "RiskAdjustedMomentum",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10253.64,
+      "total_return_pct": 2.54,
+      "annualized_return_pct": 3.64,
+      "sharpe_ratio": 0.82,
+      "sortino_ratio": 0.31,
+      "max_drawdown_pct": 2.27,
+      "max_drawdown_days": 218,
+      "volatility_annual_pct": 4.47,
+      "total_trades": 15,
+      "win_rate_pct": 46.7,
+      "profit_factor": 1.76,
+      "avg_win_pct": 16.98,
+      "avg_loss_pct": -8.42,
+      "avg_hold_hours": 387.7,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "RiskAdjustedMomentum",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9959.06,
+      "total_return_pct": -0.41,
+      "annualized_return_pct": -1.36,
+      "sharpe_ratio": -0.36,
+      "sortino_ratio": -0.16,
+      "max_drawdown_pct": 2.12,
+      "max_drawdown_days": 94,
+      "volatility_annual_pct": 3.6,
+      "total_trades": 10,
+      "win_rate_pct": 40.0,
+      "profit_factor": 0.83,
+      "avg_win_pct": 9.38,
+      "avg_loss_pct": -7.56,
+      "avg_hold_hours": 233.2,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 143.9,
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 0.36,
+    "stress_sharpe": 0.35,
+    "sharpe_delta_pct": 2.8,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.05
+  }
+}
