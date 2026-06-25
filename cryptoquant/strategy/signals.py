@@ -612,3 +612,96 @@ def ichimoku(
     )
 
 
+# === Adaptive Indicators ===
+
+
+def kama(
+    series: pd.Series,
+    er_period: int = 10,
+    fast_ema: int = 2,
+    slow_ema: int = 30,
+) -> pd.Series:
+    """Kaufman's Adaptive Moving Average (KAMA).
+
+    Dynamically adjusts smoothing based on the Efficiency Ratio (ER),
+    which measures how directional price movement is relative to total
+    volatility.  In trending markets (high ER), KAMA follows price
+    closely; in choppy/noisy markets (low ER), it lags more.
+
+    Reference: Perry Kaufman — "Trading Systems and Methods" (1998).
+
+    Args:
+        series: Price series (typically close).
+        er_period: Lookback for Efficiency Ratio calculation.
+        fast_ema: Fastest EMA period for the smoothing constant.
+        slow_ema: Slowest EMA period for the smoothing constant.
+
+    Returns:
+        pd.Series of KAMA values, same index as input.
+    """
+    # Efficiency Ratio: |Δprice| / sum of |Δprice_i|
+    direction = (series - series.shift(er_period)).abs()
+    volatility = series.diff().abs().rolling(er_period).sum()
+    er = direction / volatility.replace(0, np.nan)
+    er = er.clip(0.0, 1.0)
+
+    # Smoothing constant
+    fastest_sc = 2.0 / (fast_ema + 1)
+    slowest_sc = 2.0 / (slow_ema + 1)
+    sc = (er * (fastest_sc - slowest_sc) + slowest_sc) ** 2
+
+    # Recursive KAMA
+    n = len(series)
+    result = pd.Series(np.nan, index=series.index, dtype=float)
+    if n == 0:
+        return result
+
+    val = series.values
+    sc_val = sc.values
+    kama_vals = np.full(n, np.nan)
+
+    # Seed KAMA with the first valid value
+    seed_idx = er_period
+    if seed_idx < n:
+        kama_vals[seed_idx] = val[seed_idx]
+
+    for i in range(seed_idx + 1, n):
+        if np.isnan(sc_val[i]) or np.isnan(val[i - 1]):
+            continue
+        prev = kama_vals[i - 1]
+        if np.isnan(prev):
+            kama_vals[i] = val[i]
+        else:
+            kama_vals[i] = prev + sc_val[i] * (val[i] - prev)
+
+    result.iloc[:] = kama_vals
+    return result
+
+
+# === Volume-Weighted Momentum ===
+
+
+def force_index(
+    df: pd.DataFrame,
+    period: int = 13,
+) -> pd.Series:
+    """Elder's Force Index — volume-weighted price momentum.
+
+    Raw Force Index = (Close_t - Close_t-1) × Volume_t.
+    Smoothed with EMA to filter noise and reveal sustained
+    buying/selling pressure.
+
+    Reference: Alexander Elder — "Trading for a Living" (1993).
+
+    Args:
+        df: OHLCV DataFrame with columns [close, volume].
+        period: EMA smoothing period for the raw Force Index.
+
+    Returns:
+        pd.Series of smoothed Force Index values, same index as df.
+    """
+    close = df["close"]
+    volume = df["volume"]
+    raw_fi = close.diff() * volume
+    smoothed = raw_fi.ewm(span=period, adjust=False).mean()
+    return smoothed

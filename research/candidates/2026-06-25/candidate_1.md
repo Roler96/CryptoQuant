@@ -1,35 +1,44 @@
-# Candidate 1: RiskAdjustedMomentum
+# Candidate 1: KamaTrend — Adaptive Acceleration Trend Following
 
-**Source:** arXiv:2603.15848 "Algorithmic Trading Strategy Development and Optimisation"
 **Date:** 2026-06-25
-**Loop:** 8
-
-## Core Idea
-
-Risk-Adjusted Momentum: normalize historical returns by volatility rather than using raw price change. The paper's EDA found that momentum-to-volatility ratio deciles produce the strongest forward 21-day returns — outperforming raw momentum, raw volatility, and simple trend filters.
-
-## Strategy Design (2 conditions)
-
-1. **Entry Signal:** 63-bar return / 20-bar annualized volatility > threshold (suggest 1.0)
-   - `momentum = close / close.shift(63) - 1`
-   - `vol = std(log_return, 20) * sqrt(365*24)` (annualized)
-   - `risk_adj_momentum = momentum / vol`
-   - Long when risk_adj_momentum > 1.0, short when < -1.0
-2. **Trend Filter:** close > EMA200 (long-only filter)
+**Source:** arXiv SSR analysis + QuantifiedStrategies.com
+**Type:** Trend-following, acceleration-based
 
 ## Rationale
 
-- Previous loop's "AdaptiveStopMomentum" (raw momentum threshold) failed because it picked up noise. Risk-adjusting the momentum signal should filter out high-volatility noise regimes.
-- 2 conditions total — fits the proven template.
-- Different from all prior strategies: breakout family, MACD/ADX, Stochastic, Aroon — none use volatility-normalized momentum.
+Kaufman's Adaptive Moving Average (KAMA) uses an Efficiency Ratio to dynamically adjust its smoothing constant. In trending markets (high ER), KAMA follows price closely (acts like a fast EMA). In choppy/noisy markets (low ER), KAMA lags more (acts like a slow EMA). This self-adaptation eliminates the need for parameter switching across volatility regimes.
+
+**Why this could work:**
+- PSAR (acceleration-based) achieved 4/4 gate pass. KAMA uses a *different* adaptation mechanism (efficiency ratio vs acceleration factor) — it responds to trend smoothness, not price direction persistence.
+- A 2025 SSRN paper specifically analyzed KAMA on Bitcoin with bootstrap validation and Bayesian optimization.
+- KAMA is less whipsaw-prone than standard EMAs while maintaining trend sensitivity.
+- Only 2 AND conditions (KAMA crossover + trend filter) — obeys the 2-condition rule.
+
+## Entry Conditions (exactly 2 AND conditions)
+1. KAMA_fast crosses ABOVE KAMA_slow (bullish crossover)
+2. Close > EMA(200) (trend direction filter)
+
+## Exit Conditions
+- KAMA_fast crosses BELOW KAMA_slow (reverse crossover)
 
 ## Parameters
-
-- `momentum_period`: 63
-- `vol_period`: 20
-- `threshold`: 1.0
-- `trend_period`: 200
+- `er_period`: 10 (efficiency ratio lookback)
+- `fast_ema`: 2 (fastest EMA for SC computation)
+- `slow_ema_fast`: 30 (slow EMA for fast KAMA)
+- `slow_ema_slow`: 50 (slow EMA for slow KAMA)
+- `trend_period`: 200 (EMA trend filter)
+- `min_bars`: 200 (conservative — KAMA needs ER computation bars)
 
 ## Expected Trade Count
+- 1h: 80-200 trades/year (adaptive crossover generates frequent signals)
+- 4h: 30-60 trades/year (adaptive mechanism may generate enough on 4h unlike fixed-lookback)
 
-~50-150 trades/year on 1h (momentum crossover with volatility normalization should fire on 1-3% of bars)
+## Anti-Patterns Avoided
+- ✓ 2 conditions (not ≥3)
+- ✓ Acceleration-based (not lag-based like standard MA crossover)
+- ✓ No ADX, no CLV, no candle patterns, no Ichimoku
+- ✓ Not mean reversion without trend filter
+- ✓ Not volume percentile gate
+
+## Transferable Hypothesis
+If KAMA's efficiency-ratio adaptation produces cleaner signals than fixed-period MAs, this strategy should outperform EMACrossATRFilter (Loop 1) on a per-signal basis, with similar or lower trade count.

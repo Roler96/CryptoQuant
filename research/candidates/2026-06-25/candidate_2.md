@@ -1,36 +1,54 @@
-# Candidate 2: CandleConvictionBreakout
+# Candidate 2: ForceIndexTrend — Volume-Weighted Momentum Trend Following
 
-**Source:** Original (derived from microstructure analysis)
 **Date:** 2026-06-25
-**Loop:** 8
-
-## Core Idea
-
-Candle body ratio |close-open|/|high-low| measures market conviction. Large bodies with small wicks indicate directional agreement between buyers and sellers. Averaging this ratio over a lookback window and comparing to a threshold captures periods of high-conviction directional movement.
-
-## Strategy Design (2 conditions)
-
-1. **Entry Signal:** Smoothed body ratio > threshold
-   - `body_ratio = abs(close - open) / (high - low)`  [capped at 1.0]
-   - `avg_body_ratio = SMA(body_ratio, lookback)`
-   - Long when `avg_body_ratio > threshold AND close > open` (bullish conviction)
-   - Short when `avg_body_ratio > threshold AND close < open` (bearish conviction)
-2. **Trend Filter:** close > EMA200 (long) / close < EMA200 (short)
+**Source:** Elder's Force Index (Alexander Elder, "Trading for a Living")
+**Type:** Trend-following, volume-weighted momentum
 
 ## Rationale
 
-- Crypto markets have 24/7 trading with no defined open/close auctions — but candle body ratio still captures intra-bar conviction
-- High body ratio + directional close = genuine momentum, not noise
-- Unlike CLV (which failed in Loop 6), body ratio is a pure conviction measure independent of where close sits within the range
-- Completely novel — zero overlap with any prior strategy in 7 loops
+Elder's Force Index combines price direction with volume conviction: `FI = (Close_t - Close_t-1) × Volume_t`, then smoothed with an EMA. The volume multiplication amplifies signals on high-conviction directional moves and mutes noise on low-volume drift. The smoothed FI crossing above zero signals sustained bullish pressure.
+
+**Why this could work:**
+- Volume is used as a signal *amplifier* (weight multiplier), not as a gate (percentile threshold) or confirmation (above/below MA). This is a third, untested volume paradigm.
+- Crypto's 24/7 trading means volume signals are continuous (unlike equity markets with session boundaries).
+- Loop 9's PsarTrend used 100% pure price-action (PSAR + EMA). Force Index adds volume conviction to differentiate genuine directional moves from noise-driven price swings.
+- Only 2 AND conditions — obeys the 2-condition rule.
+
+## Entry Conditions (exactly 2 AND conditions)
+1. Force Index (smoothed, 13-period) crosses ABOVE zero
+2. Close > EMA(200) (trend direction filter)
+
+## Exit Conditions
+- Force Index crosses BELOW zero
 
 ## Parameters
-
-- `body_lookback`: 14
-- `threshold`: 0.55
-- `trend_period`: 200
-- `min_bars`: 78 (= 63 + 14 + 1)
+- `fi_period`: 13 (Elder's recommended default — short enough to be responsive)
+- `trend_period`: 200 (EMA trend filter)
+- `min_bars`: 200
 
 ## Expected Trade Count
+- 1h: 80-250 trades/year (FI oscillates frequently, generating many crosses)
+- 4h: 30-80 trades/year (crossovers less frequent on higher timeframe)
 
-~60-180 trades/year on 1h (conviction spikes are common in crypto, EMA filter reduces noise)
+## Volume Paradigm Classification
+| Paradigm | Example | Result |
+|----------|---------|--------|
+| Volume as gate (%ile threshold) | VolSpikeReversal | Failed (0-3 trades) |
+| Volume as confirmation (> SMA) | BBandBreakoutVolume | Passed 2/4 |
+| Volume as signal amplifier (multiplier) | ForceIndexTrend | **Untested** |
+
+The key difference: Force Index's volume multiplication makes the signal *proportional* to volume rather than binary (gate/confirmation). Large-volume bars contribute more to the smoothed FI, promoting cleaner zero-cross edges.
+
+## Anti-Patterns Avoided
+- ✓ 2 conditions (not ≥3)
+- ✓ Volume as amplifier, not gate (not a percentile)
+- ✓ No ADX, no CLV, no candle patterns, no Ichimoku
+- ✓ Not mean reversion without trend filter
+- ✓ Momentum-based but volume-weighted — different from pure momentum (CMO, RSI, Stochastic)
+
+## Risk / Concern
+- OKX volume data may not represent total market volume. Single-exchange volume could produce misleading FI signals if large trades occur off-exchange.
+- On high-volume outlier bars (liquidation cascades), FI may spike and trigger false entries. The 13-period smoothing partially mitigates this.
+
+## Transferable Hypothesis
+If volume-weighted momentum captures genuine conviction better than pure price-action momentum, ForceIndexTrend should produce higher win rates than equivalent pure-price strategies (e.g., MACD-based) with comparable trade counts.
