@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T02:31:02.881255+00:00",
+    "strategy_file": "research/backtest_rsi_bb_mean_reversion.py",
+    "class_name": "RSIBBMeanReversion",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "RSIBBMeanReversion",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 9611.57,
+    "total_return_pct": -3.88,
+    "annualized_return_pct": -3.88,
+    "sharpe_ratio": -1.98,
+    "sortino_ratio": -0.58,
+    "max_drawdown_pct": 4.16,
+    "max_drawdown_days": 335,
+    "volatility_annual_pct": 1.99,
+    "total_trades": 26,
+    "win_rate_pct": 38.5,
+    "profit_factor": 0.27,
+    "avg_win_pct": 2.88,
+    "avg_loss_pct": -6.72,
+    "avg_hold_hours": 328.9,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=26 < 30 (min)",
+      "sharpe=-1.98 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "RSIBBMeanReversion",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9785.21,
+      "total_return_pct": -2.15,
+      "annualized_return_pct": -3.05,
+      "sharpe_ratio": -1.51,
+      "sortino_ratio": -0.42,
+      "max_drawdown_pct": 2.47,
+      "max_drawdown_days": 225,
+      "volatility_annual_pct": 2.04,
+      "total_trades": 21,
+      "win_rate_pct": 47.6,
+      "profit_factor": 0.39,
+      "avg_win_pct": 2.75,
+      "avg_loss_pct": -6.42,
+      "avg_hold_hours": 283.1,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "RSIBBMeanReversion",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9847.69,
+      "total_return_pct": -1.52,
+      "annualized_return_pct": -4.99,
+      "sharpe_ratio": -2.76,
+      "sortino_ratio": -0.83,
+      "max_drawdown_pct": 1.57,
+      "max_drawdown_days": 80,
+      "volatility_annual_pct": 1.84,
+      "total_trades": 6,
+      "win_rate_pct": 33.3,
+      "profit_factor": 0.09,
+      "avg_win_pct": 1.53,
+      "avg_loss_pct": -8.41,
+      "avg_hold_hours": 411.3,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 0.0,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -1.98,
+    "stress_sharpe": -2.01,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.05
+  }
+}

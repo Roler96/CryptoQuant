@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T01:11:17.657771+00:00",
+    "strategy_file": "research/backtest_donchian_ensemble.py",
+    "class_name": "DonchianEnsemble",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "DonchianEnsemble",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 9699.43,
+    "total_return_pct": -3.01,
+    "annualized_return_pct": -3.01,
+    "sharpe_ratio": -1.0,
+    "sortino_ratio": 0.0,
+    "max_drawdown_pct": 3.01,
+    "max_drawdown_days": 1,
+    "volatility_annual_pct": 3.01,
+    "total_trades": 1,
+    "win_rate_pct": 0.0,
+    "profit_factor": 0.0,
+    "avg_win_pct": 0,
+    "avg_loss_pct": -60.11,
+    "avg_hold_hours": 7684.0,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=1 < 30 (min)",
+      "sharpe=-1.00 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    }
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -1.0,
+    "stress_sharpe": -1.0,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}
