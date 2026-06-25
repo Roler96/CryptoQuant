@@ -1,54 +1,74 @@
-# Candidate 2: ForceIndexTrend — Volume-Weighted Momentum Trend Following
+# Strategy Candidate: BBPercentBVolatility
 
-**Date:** 2026-06-25
-**Source:** Elder's Force Index (Alexander Elder, "Trading for a Living")
-**Type:** Trend-following, volume-weighted momentum
+**Generated:** 2026-06-25
+**Source:** John Bollinger's %B + MFI strategy (StockCharts), VolatilityBox BB squeeze research
 
-## Rationale
+## Strategy Concept
 
-Elder's Force Index combines price direction with volume conviction: `FI = (Close_t - Close_t-1) × Volume_t`, then smoothed with an EMA. The volume multiplication amplifies signals on high-conviction directional moves and mutes noise on low-volume drift. The smoothed FI crossing above zero signals sustained bullish pressure.
+Bollinger %B measures price position within Bollinger Bands: %B = (close - lower_band) / (upper_band - lower_band). Values > 1 indicate price above upper band (breakout); values < 0 indicate price below lower band (breakdown). Unlike Loop 4's BBandBreakoutVolume (which used price pierce of band + volume > SMA confirmation), this strategy uses %B threshold crossing + ATR expansion as the confirmation filter. Entry: %B > 0.8 (strong push above upper band area, bullish momentum) AND ATR(14) > ATR(50).rolling_mean() (volatility expansion confirming breakout validity). This is 2 total conditions. Exit: %B crosses below 0.5 (price retreats below band midline). ATR expansion confirmation is proven superior to volume confirmation (Loop 5's meta-analysis: ATR > RSI > Volume for breakout confirmation). The %B approach is more nuanced than raw price pierce — it measures HOW FAR price is through the band, filtering marginal pierces.
 
-**Why this could work:**
-- Volume is used as a signal *amplifier* (weight multiplier), not as a gate (percentile threshold) or confirmation (above/below MA). This is a third, untested volume paradigm.
-- Crypto's 24/7 trading means volume signals are continuous (unlike equity markets with session boundaries).
-- Loop 9's PsarTrend used 100% pure price-action (PSAR + EMA). Force Index adds volume conviction to differentiate genuine directional moves from noise-driven price swings.
-- Only 2 AND conditions — obeys the 2-condition rule.
+## Pseudocode
 
-## Entry Conditions (exactly 2 AND conditions)
-1. Force Index (smoothed, 13-period) crosses ABOVE zero
-2. Close > EMA(200) (trend direction filter)
+```
+for each bar:
+    bb_upper, bb_mid, bb_lower = bollinger_bands(close, period, std_dev)
+    percent_b = (close - bb_lower) / (bb_upper - bb_lower)
+    atr_expanding = atr(14) > sma(atr(14), 50)
+    
+    if no_position:
+        if percent_b > 0.8 AND atr_expanding:
+            enter_long()
+        elif percent_b < 0.2 AND atr_expanding:
+            enter_short()
+    
+    if position_open:
+        if (is_long AND percent_b < 0.5) OR (is_short AND percent_b > 0.5):
+            exit_position()
+```
 
-## Exit Conditions
-- Force Index crosses BELOW zero
+## Expected Indicators
+
+- [x] Bollinger Bands — check if in signals.py; if not, `bb_upper = sma + std*close.rolling.std`, `bb_lower = sma - std*close.rolling.std`
+- [x] ATR — already exists in signals.py
+- [x] SMA — already exists in signals.py
 
 ## Parameters
-- `fi_period`: 13 (Elder's recommended default — short enough to be responsive)
-- `trend_period`: 200 (EMA trend filter)
-- `min_bars`: 200
 
-## Expected Trade Count
-- 1h: 80-250 trades/year (FI oscillates frequently, generating many crosses)
-- 4h: 30-80 trades/year (crossovers less frequent on higher timeframe)
+| Parameter | Range | Default | Description |
+|-----------|-------|---------|-------------|
+| bb_period | 10-30 | 20 | Bollinger Band SMA period |
+| bb_std | 1.5-2.5 | 2.0 | Standard deviation multiplier |
+| percent_b_entry | 0.7-0.9 | 0.8 | %B threshold for long entry (above = bullish breakout) |
+| percent_b_exit | 0.3-0.7 | 0.5 | %B threshold for exit (below midline = momentum fading) |
+| atr_period | 10-20 | 14 | ATR period for expansion check |
+| atr_ma_period | 30-100 | 50 | SMA period for ATR baseline |
 
-## Volume Paradigm Classification
-| Paradigm | Example | Result |
-|----------|---------|--------|
-| Volume as gate (%ile threshold) | VolSpikeReversal | Failed (0-3 trades) |
-| Volume as confirmation (> SMA) | BBandBreakoutVolume | Passed 2/4 |
-| Volume as signal amplifier (multiplier) | ForceIndexTrend | **Untested** |
+## Test Pairs & Timeframes
 
-The key difference: Force Index's volume multiplication makes the signal *proportional* to volume rather than binary (gate/confirmation). Large-volume bars contribute more to the smoothed FI, promoting cleaner zero-cross edges.
+- Pairs: BTC/USDT, ETH/USDT
+- Timeframes: 1h, 4h
 
-## Anti-Patterns Avoided
-- ✓ 2 conditions (not ≥3)
-- ✓ Volume as amplifier, not gate (not a percentile)
-- ✓ No ADX, no CLV, no candle patterns, no Ichimoku
-- ✓ Not mean reversion without trend filter
-- ✓ Momentum-based but volume-weighted — different from pure momentum (CMO, RSI, Stochastic)
+## Expected Performance Range
 
-## Risk / Concern
-- OKX volume data may not represent total market volume. Single-exchange volume could produce misleading FI signals if large trades occur off-exchange.
-- On high-volume outlier bars (liquidation cascades), FI may spike and trigger false entries. The 13-period smoothing partially mitigates this.
+| Metric | Min | Target | Reason |
+|--------|-----|--------|--------|
+| Sharpe | >0.5 | >1.5 | ATR expansion confirmation is the strongest single filter (Loop 5: RangeExpansionBreakout Sharpe=3.19) |
+| MaxDD | <30% | <5% | Volatility expansion filter avoids false breakout entries in low-vol chop |
+| Win Rate | >40% | >50% | Breakout strategies with ATR confirmation average 45-55% win rate |
+| Trades | >30 | 50-100 | %B threshold filter should produce fewer false entries than raw price pierce but still 50+ trades/year |
 
-## Transferable Hypothesis
-If volume-weighted momentum captures genuine conviction better than pure price-action momentum, ForceIndexTrend should produce higher win rates than equivalent pure-price strategies (e.g., MACD-based) with comparable trade counts.
+## References
+
+- [Percent B Money Flow — StockCharts](https://chartschool.stockcharts.com/table-of-contents/trading-strategies-and-models/trading-strategies/percent-b-money-flow)
+- [Bollinger Bands and Volatility — VolatilityBox](https://volatilitybox.com/research/bollinger-bands-volatility/)
+- [Bollinger Bands Strategy Backtest — StratBase](https://stratbase.ai/en/blog/bollinger-bands-strategy-guide)
+
+## Implementation Notes
+
+- BB %B already exists conceptually; implement as `close - bb_lower / (bb_upper - bb_lower)`
+- ATR expansion uses rolling mean of ATR values — this is different from ATR percentile (Loop 5 used 80th percentile). Rolling mean is simpler and produces continuous signals.
+- Exit at %B = 0.5 (midline) means exiting when momentum fades to neutral, not waiting for full reversal
+- Use `DEFAULT_PARAMS` dict, never hardcode
+- Signal convention: 1=long, -1=short, 0=flat
+- Return Series same length as input DataFrame
+- min_bars = max(bb_period, atr_ma_period) + 50 ≈ 100

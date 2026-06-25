@@ -1,10 +1,10 @@
 {
   "version": 1,
   "state": "implement",
-  "loop_started": "2026-06-25T20:31:00Z",
+  "loop_started": "2026-06-25T21:01:00Z",
   "loop_ended": null,
   "date": "2026-06-25",
-  "candidates": ["kama_trend", "force_index_trend"],
+  "candidates": ["supertrend_trend", "bb_percentb_volatility"],
   "implemented": [],
   "backtest_queue": [],
   "backtest_completed": [],

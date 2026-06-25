@@ -1,44 +1,68 @@
-# Candidate 1: KamaTrend — Adaptive Acceleration Trend Following
+# Strategy Candidate: SuperTrendTrend
 
-**Date:** 2026-06-25
-**Source:** arXiv SSR analysis + QuantifiedStrategies.com
-**Type:** Trend-following, acceleration-based
+**Generated:** 2026-06-25
+**Source:** arXiv — 2602.11708 (H6 adaptive trend), BoringEdge SuperTrend backtest 2017-2026
 
-## Rationale
+## Strategy Concept
 
-Kaufman's Adaptive Moving Average (KAMA) uses an Efficiency Ratio to dynamically adjust its smoothing constant. In trending markets (high ER), KAMA follows price closely (acts like a fast EMA). In choppy/noisy markets (low ER), KAMA lags more (acts like a slow EMA). This self-adaptation eliminates the need for parameter switching across volatility regimes.
+SuperTrend is an acceleration-based indicator (like PSAR) that plots a trailing stop line above/below price using ATR. When price closes above the SuperTrend line, the trend is bullish; below is bearish. PSAR went 4/4 gate pass (Loop 9); SuperTrend is its closest analog but with ATR-based stop distance instead of acceleration factor — potentially more adaptive to crypto's variable volatility. Entry: SuperTrend flips bullish AND close > EMA200 (trend direction filter, 2 total conditions). Exit: SuperTrend flips bearish. The ATR multiplier determines sensitivity — higher multiplier = fewer signals.
 
-**Why this could work:**
-- PSAR (acceleration-based) achieved 4/4 gate pass. KAMA uses a *different* adaptation mechanism (efficiency ratio vs acceleration factor) — it responds to trend smoothness, not price direction persistence.
-- A 2025 SSRN paper specifically analyzed KAMA on Bitcoin with bootstrap validation and Bayesian optimization.
-- KAMA is less whipsaw-prone than standard EMAs while maintaining trend sensitivity.
-- Only 2 AND conditions (KAMA crossover + trend filter) — obeys the 2-condition rule.
+## Pseudocode
 
-## Entry Conditions (exactly 2 AND conditions)
-1. KAMA_fast crosses ABOVE KAMA_slow (bullish crossover)
-2. Close > EMA(200) (trend direction filter)
+```
+for each bar:
+    supertrend = compute_supertrend(high, low, close, atr_period, multiplier)
+    trend = close > ema(close, trend_period)
+    
+    if no_position:
+        if supertrend == 1 AND trend == 1:
+            enter_long()
+        elif supertrend == -1 AND trend == 0:
+            enter_short()
+    
+    if position_open:
+        if (is_long AND supertrend == -1) OR (is_short AND supertrend == 1):
+            exit_position()
+```
 
-## Exit Conditions
-- KAMA_fast crosses BELOW KAMA_slow (reverse crossover)
+## Expected Indicators
+
+- [x] SuperTrend — NOT in signals.py; must add `compute_supertrend()` using ATR
+- [x] EMA — already exists in signals.py
+- [x] ATR — already exists in signals.py (needed for SuperTrend)
 
 ## Parameters
-- `er_period`: 10 (efficiency ratio lookback)
-- `fast_ema`: 2 (fastest EMA for SC computation)
-- `slow_ema_fast`: 30 (slow EMA for fast KAMA)
-- `slow_ema_slow`: 50 (slow EMA for slow KAMA)
-- `trend_period`: 200 (EMA trend filter)
-- `min_bars`: 200 (conservative — KAMA needs ER computation bars)
 
-## Expected Trade Count
-- 1h: 80-200 trades/year (adaptive crossover generates frequent signals)
-- 4h: 30-60 trades/year (adaptive mechanism may generate enough on 4h unlike fixed-lookback)
+| Parameter | Range | Default | Description |
+|-----------|-------|---------|-------------|
+| atr_period | 7-20 | 10 | ATR period for SuperTrend calculation |
+| multiplier | 1.5-3.5 | 2.5 | ATR multiplier — higher = fewer signals, lower = more noise |
+| trend_period | 100-300 | 200 | EMA period for trend direction filter |
 
-## Anti-Patterns Avoided
-- ✓ 2 conditions (not ≥3)
-- ✓ Acceleration-based (not lag-based like standard MA crossover)
-- ✓ No ADX, no CLV, no candle patterns, no Ichimoku
-- ✓ Not mean reversion without trend filter
-- ✓ Not volume percentile gate
+## Test Pairs & Timeframes
 
-## Transferable Hypothesis
-If KAMA's efficiency-ratio adaptation produces cleaner signals than fixed-period MAs, this strategy should outperform EMACrossATRFilter (Loop 1) on a per-signal basis, with similar or lower trade count.
+- Pairs: BTC/USDT, ETH/USDT
+- Timeframes: 1h, 4h
+
+## Expected Performance Range
+
+| Metric | Min | Target | Reason |
+|--------|-----|--------|--------|
+| Sharpe | >0.5 | >1.5 | PSAR (analog) hit Sharpe 2.76 on BTC 1h; SuperTrend should be similar |
+| MaxDD | <30% | <5% | Acceleration-based stops adapt to volatility, limiting drawdowns |
+| Win Rate | >40% | >50% | Trend-following with dynamic stops typically 40-50% win rate |
+
+## References
+
+- [Systematic Trend-Following with Adaptive Portfolio Construction (arXiv:2602.11708)](https://arxiv.org/abs/2602.11708)
+- [Bitcoin Supertrend Strategy Backtest — Boring Edge](https://boringedge.com/bitcoin-supertrend-strategy-backtest/)
+- [Supertrend Indicator Backtested — Quantified Strategies](https://quantifiedstrategies.substack.com/p/supertrend-indicator)
+
+## Implementation Notes
+
+- Must add `compute_supertrend()` to `cryptoquant/strategy/signals.py`
+- SuperTrend formula: Upper = hl2 + multiplier*ATR, Lower = hl2 - multiplier*ATR, with trailing logic (upper never decreases, lower never increases within a trend)
+- Signal: 1 when close > final_upper_band (bullish flip), -1 when close < final_lower_band (bearish flip)
+- Use `DEFAULT_PARAMS` dict, never hardcode
+- Signal convention: 1=long, -1=short, 0=flat
+- Return Series same length as input DataFrame

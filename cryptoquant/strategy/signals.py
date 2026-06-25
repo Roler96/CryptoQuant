@@ -612,6 +612,94 @@ def ichimoku(
     )
 
 
+# === SuperTrend ===
+
+
+def supertrend(
+    df: pd.DataFrame,
+    atr_period: int = 10,
+    multiplier: float = 3.0,
+) -> pd.Series:
+    """SuperTrend indicator — acceleration-based trailing stop using ATR.
+
+    Computes a trailing stop line that flips sides when price closes
+    through it.  In an uptrend, the SuperTrend line is below price
+    (final_lower_band).  In a downtrend, it is above price
+    (final_upper_band).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close].
+        atr_period: Period for the ATR calculation.
+        multiplier: ATR multiplier controlling band distance.
+
+    Returns:
+        pd.Series of SuperTrend values (trailing stop level),
+        same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    atr_val = atr(df, period=atr_period)
+    hl2 = (high + low) / 2.0
+
+    upper_band = hl2 + multiplier * atr_val
+    lower_band = hl2 - multiplier * atr_val
+
+    n = len(df)
+    final_upper = np.full(n, np.nan)
+    final_lower = np.full(n, np.nan)
+    st = np.full(n, np.nan)
+    uptrend = np.full(n, True)  # direction: True=uptrend, False=downtrend
+
+    # Seed first bar
+    for i in range(n):
+        if pd.isna(atr_val.iloc[i]):
+            continue
+        # Initialize first valid bar
+        if i == 0 or pd.isna(st[i - 1]):
+            final_upper[i] = upper_band.iloc[i]
+            final_lower[i] = lower_band.iloc[i]
+            if close.iloc[i] > upper_band.iloc[i]:
+                uptrend[i] = True
+                st[i] = final_lower[i]
+            elif close.iloc[i] < lower_band.iloc[i]:
+                uptrend[i] = False
+                st[i] = final_upper[i]
+            else:
+                uptrend[i] = True
+                st[i] = final_lower[i]
+            continue
+
+        # Trailing: final bands never decrease (upper) / increase (lower)
+        # within their respective trends
+        prev_upper = final_upper[i - 1]
+        prev_lower = final_lower[i - 1]
+
+        if close.iloc[i - 1] > prev_upper:
+            # Previous close was above final_upper → still in uptrend
+            uptrend[i] = True
+        elif close.iloc[i - 1] < prev_lower:
+            # Previous close was below final_lower → still in downtrend
+            uptrend[i] = False
+        else:
+            # No flip signal: maintain previous trend
+            uptrend[i] = uptrend[i - 1]
+
+        if uptrend[i]:
+            # In uptrend: lower band trails up, upper band resets
+            final_lower[i] = max(lower_band.iloc[i], prev_lower) if not pd.isna(prev_lower) else lower_band.iloc[i]
+            final_upper[i] = upper_band.iloc[i]
+            st[i] = final_lower[i]
+        else:
+            # In downtrend: upper band trails down, lower band resets
+            final_upper[i] = min(upper_band.iloc[i], prev_upper) if not pd.isna(prev_upper) else upper_band.iloc[i]
+            final_lower[i] = lower_band.iloc[i]
+            st[i] = final_upper[i]
+
+    return pd.Series(st, index=df.index)
+
+
 # === Adaptive Indicators ===
 
 

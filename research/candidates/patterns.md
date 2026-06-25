@@ -389,3 +389,59 @@ This loop reinforced the pattern — both strategies use exactly 2 conditions. 5
 - CandleConvictionBreakout: `body_ratio_period=10, threshold=0.6` — too strict even at relaxed settings. Not recommended for further exploration.
 - PsarTrend: `psar_af_start=0.02, psar_af_step=0.02, psar_af_max=0.20, trend_period=200` — robust across all 4 combos. First acceleration-based entry to achieve 4/4 gate pass. af_max=0.20 is standard; af_max=0.15 may reduce 4h trades below 30.
 - IchimokuCloud: `tenkan_period=9, kijun_period=26, senkou_b_period=52, displacement=26` — standard Ichimoku parameters. Fails sub-daily crypto due to 3-condition disguised entry (TK cross + Span A above + Span B above). Not recommended without removing one AND condition.
+
+## Successful Patterns (2026-06-26 Loop 10)
+
+### Volume-Weighted Momentum — Force Index Dominates
+**Strategies:** KamaTrend, ForceIndexTrend
+**Results:** 3/8 combos passed. Best: ForceIndexTrend BTC 1h Sharpe=2.40, OOS=2.39, 81 trades. ForceIndexTrend ETH 1h achieved full OOS validation (Sharpe=1.40) — first ETH combo to pass OOS gate in 10 loops.
+**Key Ingredients:**
+1. Force Index (volume × price change) zero-cross as entry trigger
+2. EMA200 trend filter — 2 total conditions
+3. Volume weighting naturally filters weak bars without adding AND gates — preserves signal count
+4. Works on both BTC (81 trades) and ETH (79 trades) on 1h
+**Transferable Pattern:** Volume-weighted momentum (Force Index, MFI trend) outperforms position-based metrics (CLV) and raw price momentum for crypto trend following. The volume term multiplies signal strength rather than gating entry — this preserves the 50-200 trade/year sweet spot.
+
+### KAMA — Acceleration-Based Entry Works (1h Only)
+**Results:** BTC 1h Sharpe=0.68, OOS=2.15. Joins PSAR (Loop 9) as the second acceleration-based entry to pass gate.
+**Key Ingredients:**
+1. KAMA crossover (efficiency ratio → adaptive smoothing) — self-adjusts to market noise
+2. Signal line crossover — 2 total conditions
+3. Works on BTC 1h (68 trades) but insufficient on 4h (12 trades) — KAMA is inherently slow
+**Transferable Pattern:** Acceleration/efficiency-based indicators (KAMA, PSAR) work on 1h but NOT on 4h. The adaptive smoothing makes them even slower than fixed EMAs on higher timeframes. For 4h, prefer fixed-parameter or breakout-based entries.
+
+## Anti-Patterns (avoid these directions)
+
+### 2026-06-26 Loop 10: KAMA/Adaptive Indicators on 4h — Triple-Slow Signal Generation
+**Problem:** KamaTrend produced 12 trades on both BTC 4h and ETH 4h — even fewer than standard EMA crossovers (which produce ~20-30). KAMA's adaptive smoothing compounds the 4h bar scarcity problem.
+**Root cause:** KAMA's efficiency ratio takes weeks to change direction on 4h bars. The adaptive constant self-adjusts toward longer smoothing in noisy periods — which on 4h is most of the time. Crossovers become extremely rare events.
+**Lesson:** Adaptive/efficiency-based indicators (KAMA, adaptive EMA, VIDYA) should be restricted to 1h or lower timeframes. They compound the 4h trade-scarcity problem rather than solving it. For 4h trend-following, use fixed-parameter indicators (regular EMA, SMA crossover) with shorter lookbacks.
+
+### 2026-06-26 Loop 10: 4h Trade Scarcity — Now 5 Consecutive Loops
+**Problem:** All 4 4h combos failed (12-14 trades each). This is the 5th consecutive loop where 4h momentum/oscillator strategies fail purely on trade count.
+**Updated tally across Loops 5-10:**
+- Breakout-based 4h strategies: 30-80 trades (viable)
+- Momentum/oscillator/crossover/acceleration 4h strategies: 5-15 trades (not viable)
+**Lesson:** For 4h timeframes, use ONLY breakout-based entries (1-bar inside-bar, 20-bar channel, Bollinger Band pierce). All oscillator, momentum, crossover, and acceleration-based entries will produce <30 trades in a 365-day window. The 4h timeframe simply doesn't have enough bars (2190/year) to support signal generation from smoothed indicator crossovers.
+
+### 2026-06-26 Loop 10: Force Index vs CLV — Volume-Weighting vs Position-Gating
+**Contrary to Loop 6 finding:** Loop 6 found CLV-based entries failed on crypto (6-29 trades/year). Loop 10 shows Force Index (which also incorporates volume) succeeds on both BTC and ETH 1h (79-81 trades). The critical difference:
+- **Force Index:** volume × price_change → multiplies signal strength, preserves signal count
+- **CLV:** (close-low)/(high-low) → gates entry on bar position, kills signal count
+**Lesson:** Volume-weighted momentum is viable on crypto 1h; position-based gating is not. When incorporating volume into a strategy, use it as a signal-strength multiplier (Force Index, OBV delta, VWAP distance) rather than an entry gate (volume > percentile). Multipliers preserve trade count; gates kill it.
+
+### 2026-06-26 Loop 10: OOS > IS — The 5th BTC Regime-Luck Instance
+**Problem:** KamaTrend BTC 1h: IS Sharpe=-0.08 → OOS Sharpe=2.15. ForceIndexTrend BTC 1h: IS Sharpe=2.22 → OOS Sharpe=2.39. This is the 5th strategy across 5 loops to show positive OOS degradation on BTC.
+**Lesson:** BTC's OOS window (Feb-Jun 2026) continues to show strong trending conditions that favor all trend-following strategies. The real expected Sharpe is the IS Sharpe (pre-Feb 2026), not the full-sample or OOS. Deploy conservatively — when the regime shifts back, expect Sharpe closer to IS values. KamaTrend BTC 1h's negative IS Sharpe is a red flag despite OOS=2.15.
+
+### 2026-06-26 Loop 10: The 2-Condition Rule — 10 Loops, 84 Combos, Still Unbroken
+**Updated meta-pattern:** Across 10 loops, 25 strategies, 84 total backtest combinations:
+- ≤2 AND conditions: 39/50 passed (78.0%)
+- ≥3 AND conditions: 0/21 passed (0%)
+- 2-condition failures are now exclusively timeframe problems (4h trade scarcity) or symbol problems (ETH noise), never signal-quality problems
+**Lesson:** At 10 loops and 84 combos, the 2-condition template is definitively proven. The research frontier is now: (1) which 2-condition strategies work on 4h (breakout-only), (2) which strategies survive ETH's hostile OOS regime, and (3) finding the universal parameter set that works across all combos. Stop searching for smarter filters; start searching for better timeframe/symbol/parameter combinations.
+
+## Parameter Sensitivities
+- KamaTrend: `kama_period=10, fast_period=2, slow_period=30, trend_period=200` — only works on 1h. Not recommended for further 4h exploration.
+- ForceIndexTrend: `fi_period=13, trend_period=200` — robust on 1h for both BTC and ETH. fi_period=13 (standard Elder setting) is the sweet spot. OOS validation on ETH 1h confirms not overfit.
+- ForceIndexTrend: Commission sensitivity at 3.3-3.7% Sharpe delta → not fragile. Viable for deployment with standard 5bps commission.
