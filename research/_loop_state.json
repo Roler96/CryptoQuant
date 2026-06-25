@@ -1,16 +1,35 @@
 {
   "version": 1,
-  "state": "implement",
-  "loop_started": "2026-06-25T06:01:06Z",
-  "loop_ended": null,
+  "state": "done",
+  "loop_started": "2026-06-25T10:15:55Z",
+  "loop_ended": "2026-06-25T10:46:55Z",
   "date": "2026-06-25",
-  "candidates": ["adaptive_stop_momentum", "trend_pullback_rsi"],
-  "implemented": [],
+  "candidates": ["bband_breakout_volume", "channel_breakout_rsi"],
+  "implemented": ["bband_breakout_volume", "channel_breakout_rsi"],
   "backtest_queue": [],
-  "backtest_completed": [],
-  "passed": [],
+  "backtest_completed": [
+    {"strategy": "research/backtest_bband_breakout_volume.py", "class": "BBandBreakoutVolume", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_bband_breakout_volume.py", "class": "BBandBreakoutVolume", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_bband_breakout_volume.py", "class": "BBandBreakoutVolume", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_bband_breakout_volume.py", "class": "BBandBreakoutVolume", "symbol": "ETH/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_channel_breakout_rsi.py", "class": "ChannelBreakoutRSI", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_channel_breakout_rsi.py", "class": "ChannelBreakoutRSI", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_channel_breakout_rsi.py", "class": "ChannelBreakoutRSI", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_channel_breakout_rsi.py", "class": "ChannelBreakoutRSI", "symbol": "ETH/USDT", "timeframe": "4h"}
+  ],
+  "passed": [
+    {"strategy": "bband_breakout_volume", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.05, "trades": 131},
+    {"strategy": "bband_breakout_volume", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 2.58, "trades": 123},
+    {"strategy": "channel_breakout_rsi", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 3.40, "trades": 94},
+    {"strategy": "channel_breakout_rsi", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 0.90, "trades": 31},
+    {"strategy": "channel_breakout_rsi", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 2.56, "trades": 94}
+  ],
   "close_calls": [],
-  "failed": [],
+  "failed": [
+    {"strategy": "bband_breakout_volume", "symbol": "BTC/USDT", "timeframe": "4h", "reason": "trades=20 < 30"},
+    {"strategy": "bband_breakout_volume", "symbol": "ETH/USDT", "timeframe": "4h", "reason": "trades=28 < 30"},
+    {"strategy": "channel_breakout_rsi", "symbol": "ETH/USDT", "timeframe": "4h", "reason": "sharpe=0.29 < 0.5"}
+  ],
   "error": null,
-  "ticks": 1
+  "ticks": 3
 }
