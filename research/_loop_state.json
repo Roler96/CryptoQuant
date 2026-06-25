@@ -1,16 +1,35 @@
 {
   "version": 1,
-  "state": "implement",
+  "state": "done",
   "loop_started": "2026-06-25T21:01:00Z",
-  "loop_ended": null,
+  "loop_ended": "2026-06-26T05:45:00Z",
   "date": "2026-06-25",
   "candidates": ["supertrend_trend", "bb_percentb_volatility"],
-  "implemented": [],
+  "implemented": ["supertrend_trend", "bb_percentb_volatility"],
   "backtest_queue": [],
-  "backtest_completed": [],
-  "passed": [],
+  "backtest_completed": [
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.00, "trades": 100, "maxdd": 0.7, "gate": true, "oos_sharpe": 2.15},
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.80, "trades": 28, "maxdd": 0.5, "gate": false, "oos_sharpe": 2.19},
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.74, "trades": 116, "maxdd": 1.1, "gate": true, "oos_sharpe": 3.42},
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.35, "trades": 28, "maxdd": 1.8, "gate": false, "oos_sharpe": 1.89},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.90, "trades": 194, "maxdd": 0.6, "gate": true, "oos_sharpe": 3.00},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.43, "trades": 50, "maxdd": 1.0, "gate": true, "oos_sharpe": 2.35},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.19, "trades": 196, "maxdd": 2.9, "gate": true, "oos_sharpe": 3.31},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.07, "trades": 36, "maxdd": 2.2, "gate": true, "oos_sharpe": 0.03}
+  ],
+  "passed": [
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.00, "trades": 100, "maxdd": 0.74},
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.74, "trades": 116, "maxdd": 1.12},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.90, "trades": 194, "maxdd": 0.64},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.43, "trades": 50, "maxdd": 1.04},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.19, "trades": 196, "maxdd": 2.87},
+    {"strategy": "bb_percentb_volatility", "class": "BBPercentBVolatility", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.07, "trades": 36, "maxdd": 2.23}
+  ],
   "close_calls": [],
-  "failed": [],
+  "failed": [
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "BTC/USDT", "timeframe": "4h", "reason": "trades=28 < min 30"},
+    {"strategy": "supertrend_trend", "class": "SuperTrendTrend", "symbol": "ETH/USDT", "timeframe": "4h", "reason": "trades=28 < min 30"}
+  ],
   "error": null,
-  "ticks": 1
+  "ticks": 6
 }
