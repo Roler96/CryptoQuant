@@ -1,49 +1,35 @@
-# Candidate: AdaptiveStopMomentum
+# Candidate 1: RiskAdjustedMomentum
 
+**Source:** arXiv:2603.15848 "Algorithmic Trading Strategy Development and Optimisation"
 **Date:** 2026-06-25
-**Source:** arxiv:2602.11708 — "Systematic Trend-Following with Adaptive Portfolio Construction" (Nguyen, 2026)
-**Status:** candidate
+**Loop:** 8
 
 ## Core Idea
 
-Simple momentum entry combined with a **dynamic ATR trailing stop** that ratchets up with price and adapts to volatility. The stop widens in high-volatility regimes and tightens in low-volatility — avoiding premature exits while protecting profits.
+Risk-Adjusted Momentum: normalize historical returns by volatility rather than using raw price change. The paper's EDA found that momentum-to-volatility ratio deciles produce the strongest forward 21-day returns — outperforming raw momentum, raw volatility, and simple trend filters.
 
-This is the **signal-generation component** of the AdaptiveTrend framework, simplified to single-asset application.
+## Strategy Design (2 conditions)
 
-## Why It's Different From What We've Tried
+1. **Entry Signal:** 63-bar return / 20-bar annualized volatility > threshold (suggest 1.0)
+   - `momentum = close / close.shift(63) - 1`
+   - `vol = std(log_return, 20) * sqrt(365*24)` (annualized)
+   - `risk_adj_momentum = momentum / vol`
+   - Long when risk_adj_momentum > 1.0, short when < -1.0
+2. **Trend Filter:** close > EMA200 (long-only filter)
 
-- **Not signal-sparse:** Entry condition is a simple momentum threshold (e.g., price up 2% over lookback), so it should fire 50-200 trades/year.
-- **Not mean reversion:** Pure trend-following — goes WITH the prevailing move.
-- **Exit is the innovation:** Dynamic trailing stop (ATR-scaled) vs. fixed SL/TP or signal reverse used in prior strategies.
+## Rationale
 
-## Implementation Plan
+- Previous loop's "AdaptiveStopMomentum" (raw momentum threshold) failed because it picked up noise. Risk-adjusting the momentum signal should filter out high-volatility noise regimes.
+- 2 conditions total — fits the proven template.
+- Different from all prior strategies: breakout family, MACD/ADX, Stochastic, Aroon — none use volatility-normalized momentum.
 
-**Entry (Long):** `(close - close.shift(lookback)) / close.shift(lookback) > entry_threshold` (e.g., 0.02 = 2%)
-**Entry (Short):** Same but negative threshold
-**Exit:** Trailing stop level = `max(previous_stop, close - alpha * ATR)`. Position exits when `low < stop_level` (longs) or `high > stop_level` (shorts).
+## Parameters
 
-### Parameters (initial)
-- `momentum_lookback`: 20 bars (~20h on 1h candles)
-- `entry_threshold`: 0.02 (2% price change)
-- `atr_period`: 14
-- `atr_multiplier`: 2.5 (from paper's optimal)
-- `min_bars`: 50 (~100 for ATR to warm up + lookback)
+- `momentum_period`: 63
+- `vol_period`: 20
+- `threshold`: 1.0
+- `trend_period`: 200
 
-### Signal Convention
-- `1` = long, `-1` = short, `0` = flat
-- When in a position, trailing stop exit takes priority (signal stays in position until stop hit)
-- Stop checked against bar low (longs) / bar high (shorts) — no look-ahead
+## Expected Trade Count
 
-### Expected Trade Count
-Target: 50-200 trades/year. Entry threshold of 2% on 1h should fire ~1-3 times/week per asset.
-
-## Risks & Mitigations
-
-- **Whipsaw in sideways markets:** The trailing stop will be tight because ATR contracts. Quick entries/exits with small losses.
-- **Gap risk:** Crypto trades 24/7 so gaps are rare on 1h, but possible on higher timeframes around exchange maintenance.
-- **Parameter sensitivity:** ATR multiplier has the biggest impact — paper suggests 2.0-3.0 range.
-
-## Test Plan
-
-Test on BTC/USDT and ETH/USDT, 1h and 4h timeframes. 365-day lookback.
-Gate thresholds: ≥30 trades, Sharpe >0.5, MaxDD <30%.
+~50-150 trades/year on 1h (momentum crossover with volatility normalization should fire on 1-3% of bars)
