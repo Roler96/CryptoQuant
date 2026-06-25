@@ -1,36 +1,77 @@
-# Candidate: Dual EMA Crossover + ATR Volatility Filter
+# Candidate 2: VolSpikeReversal
 
-**Source:** arxiv 2511.00665 — EMA crossover strategy section + volatility filtering lessons from prior failures
+**Date:** 2026-06-25
+**Source:** BTC Mean Reversion Strategy (Adrian Keller, Medium Dec 2025) + anti-pattern lesson
+**Type:** Mean reversion WITH trend/regime filter
 
-**Type:** Trend-following with volatility gate
+## Hypothesis
+Volatility spikes + Bollinger Band extremes + volume surges identify
+mean-reversion opportunities — but ONLY in ranging markets (ADX < 20).
+This directly addresses the RSIBBMeanReversion failure where no trend
+filter caused negative Sharpe across all combos.
 
-**Rationale:**
-EMA crossover is one of the most studied technical strategies. The arxiv paper benchmarked it against ML models on Bitcoin post-ETF data, finding it generates frequent signals. The key failure mode is whipsaw in high-volatility regimes — adding an ATR-based volatility filter gates entries during extreme volatility, while using shorter EMA windows (8/21 instead of 50/200) ensures adequate trade frequency.
+## Anti-Pattern Check
+- ✅ NOT pure mean reversion (ADX ranging filter added)
+- ✅ NOT signal-sparse (3 entry conditions + regime gate, reasonable)
+- ✅ Directly addresses RSIBBMeanReversion anti-pattern (adds trend filter)
+- ✅ Different from EMACrossATRFilter (mean reversion vs. trend-following)
 
-**Signal logic:**
-- **Long:** Fast EMA(8) crosses above Slow EMA(21) AND ATR(14) < 2.0 * ATR(50)
-- **Short:** Fast EMA(8) crosses below Slow EMA(21) AND ATR(14) < 2.0 * ATR(50)
-- **Exit:** Reverse crossover (regardless of volatility filter)
-- **Flat:** All other times
+## Strategy Logic
 
-**Parameters:**
-- `fast_period`: 8 (EMA window, adjustable 6-12)
-- `slow_period`: 21 (EMA window, adjustable 18-34)
-- `atr_period`: 14
-- `atr_long_period`: 50
-- `vol_threshold`: 2.0 (ATR(14) must be < 2.0 * ATR(50) to enter)
+### Indicators
+- Bollinger Bands: 20-period SMA ± 2.0 std
+- Volatility spike: 20-period volatility / 100-period MA volatility > 1.5
+- Volume ratio: current volume / 20-period SMA volume > 1.3
+- ADX(14): < 20 = ranging market (our regime filter)
+- Returns Z-score: (return - 100-period mean) / 100-period std
 
-**Expected characteristics:**
-- Generates ~80-150 signals/year on 1h data with relaxed EMA windows
-- Volatility filter reduces ~30-40% of entries during turbulent markets
-- Can hold positions for hours to days (medium-frequency)
-- Both long and short signals → works in bull and bear markets
-- Simple, well-understood strategy with minimal parameters
+### Entry (Long) — ALL conditions required
+1. BB position < 0.1 (price near lower Bollinger Band)
+2. Volatility spike > 1.5 (elevated volatility)
+3. Volume ratio > 1.3 (volume surge = capitulation)
+4. Returns Z-score < -2.0 (extreme negative move)
+5. ADX < 20 (RANGING MARKET — key anti-pattern fix)
 
-**Why it avoids prior anti-patterns:**
-- Entry is a simple crossover check (not binomial voting on 7 channels)
-- Fast/Slow windows are 8/21 bars (~8 hours / 21 hours on 1h) — far shorter than 720-bar Donchian
-- Volatility filter is a ratio check, not a strict regime classifier
-- No ADX or multi-condition regime gate → fewer false negatives
+### Entry (Short) — ALL conditions required
+1. BB position > 0.9 (price near upper Bollinger Band)
+2. Volatility spike > 1.5
+3. Volume ratio > 1.3
+4. Returns Z-score > 2.0 (extreme positive move)
+5. ADX < 20 (ranging market)
 
-**Risk:** Whipsaw in sideways markets; the vol filter helps but won't eliminate all false signals. Add basic stop-loss at 2*ATR.
+### Exit
+- Target: Price returns to BB middle band (50% retracement)
+- Stop-loss: 3% from entry (tight, mean reversion is short-term)
+- Max hold: 48 bars (time-based exit for stalled reversals)
+
+### Signal Convention
+- 1 = long, -1 = short, 0 = flat
+
+## Parameters (Default)
+```python
+{
+    "bb_period": 20,         # Bollinger Band period
+    "bb_std": 2.0,           # BB standard deviation multiplier
+    "vol_short": 20,         # Short volatility lookback
+    "vol_long": 100,         # Long volatility lookback
+    "vol_spike_threshold": 1.5,  # Min volatility ratio for "spike"
+    "vol_ratio_period": 20,  # Volume SMA period
+    "vol_ratio_threshold": 1.3,  # Min volume ratio
+    "zscore_period": 100,    # Returns Z-score lookback
+    "zscore_threshold": 2.0, # Z-score entry threshold
+    "adx_period": 14,        # ADX lookback
+    "adx_max": 20,           # Max ADX for ranging market entry
+    "stop_loss_pct": 0.03,   # 3% stop loss
+    "max_hold_bars": 48,     # Max bars to hold
+}
+```
+
+## Expected Characteristics
+- **Target trades/year:** 50-150 (limited to ranging markets, ~30-40% of time)
+- **Market regime:** Ranging/consolidating markets only (ADX < 20)
+- **Risk:** Mean reversion fails in strong trends — ADX filter eliminates these
+
+## Lesson from Anti-Pattern
+RSIBBMeanReversion failed because it traded mean reversion in ALL regimes,
+including strong 2025-2026 trends. This strategy gates entries to ranging
+markets only (ADX < 20), which should eliminate the worst drawdowns.

@@ -1,35 +1,16 @@
 {
   "version": 1,
-  "state": "done",
-  "loop_started": "2026-06-25T01:45:48Z",
-  "loop_ended": "2026-06-25T02:47:00Z",
+  "state": "implement",
+  "loop_started": "2026-06-25T04:00:50Z",
+  "loop_ended": null,
   "date": "2026-06-25",
-  "candidates": ["rsi_bb_mean_reversion", "ema_cross_atr_filter"],
-  "implemented": ["rsi_bb_mean_reversion", "ema_cross_atr_filter"],
+  "candidates": ["keltner_breakout_adx", "vol_spike_reversal"],
+  "implemented": [],
   "backtest_queue": [],
-  "backtest_completed": [
-    {"strategy": "RSIBBMeanReversion", "symbol": "BTC/USDT", "timeframe": "1h", "passed": false},
-    {"strategy": "RSIBBMeanReversion", "symbol": "BTC/USDT", "timeframe": "4h", "passed": false},
-    {"strategy": "RSIBBMeanReversion", "symbol": "ETH/USDT", "timeframe": "1h", "passed": false},
-    {"strategy": "RSIBBMeanReversion", "symbol": "ETH/USDT", "timeframe": "4h", "passed": false},
-    {"strategy": "EMACrossATRFilter", "symbol": "BTC/USDT", "timeframe": "1h", "passed": true},
-    {"strategy": "EMACrossATRFilter", "symbol": "BTC/USDT", "timeframe": "4h", "passed": true},
-    {"strategy": "EMACrossATRFilter", "symbol": "ETH/USDT", "timeframe": "1h", "passed": true},
-    {"strategy": "EMACrossATRFilter", "symbol": "ETH/USDT", "timeframe": "4h", "passed": true}
-  ],
-  "passed": [
-    {"strategy": "EMACrossATRFilter", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 3.09, "trades": 422, "maxdd": 1.2, "oos_sharpe": 2.56},
-    {"strategy": "EMACrossATRFilter", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.15, "trades": 107, "maxdd": 1.2, "oos_sharpe": 0.90},
-    {"strategy": "EMACrossATRFilter", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.62, "trades": 414, "maxdd": 3.23, "oos_sharpe": 0.06},
-    {"strategy": "EMACrossATRFilter", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.51, "trades": 99, "maxdd": 1.34, "oos_sharpe": 2.08}
-  ],
+  "backtest_completed": [],
+  "passed": [],
   "close_calls": [],
-  "failed": [
-    {"strategy": "RSIBBMeanReversion", "symbol": "BTC/USDT", "timeframe": "1h", "reason": "sharpe=-2.90"},
-    {"strategy": "RSIBBMeanReversion", "symbol": "BTC/USDT", "timeframe": "4h", "reason": "trades=26, sharpe=-1.98"},
-    {"strategy": "RSIBBMeanReversion", "symbol": "ETH/USDT", "timeframe": "1h", "reason": "sharpe=-1.38"},
-    {"strategy": "RSIBBMeanReversion", "symbol": "ETH/USDT", "timeframe": "4h", "reason": "trades=22, sharpe=-0.26"}
-  ],
+  "failed": [],
   "error": null,
-  "ticks": 4
+  "ticks": 1
 }
