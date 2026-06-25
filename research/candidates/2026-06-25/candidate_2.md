@@ -1,77 +1,63 @@
-# Candidate 2: VolSpikeReversal
+# Candidate: TrendPullbackRSI
 
 **Date:** 2026-06-25
-**Source:** BTC Mean Reversion Strategy (Adrian Keller, Medium Dec 2025) + anti-pattern lesson
-**Type:** Mean reversion WITH trend/regime filter
+**Source:** Anti-pattern learning from 2026-06-25 (RSIBBMeanReversion failure) + standard pullback trading literature
+**Status:** candidate
 
-## Hypothesis
-Volatility spikes + Bollinger Band extremes + volume surges identify
-mean-reversion opportunities — but ONLY in ranging markets (ADX < 20).
-This directly addresses the RSIBBMeanReversion failure where no trend
-filter caused negative Sharpe across all combos.
+## Core Idea
 
-## Anti-Pattern Check
-- ✅ NOT pure mean reversion (ADX ranging filter added)
-- ✅ NOT signal-sparse (3 entry conditions + regime gate, reasonable)
-- ✅ Directly addresses RSIBBMeanReversion anti-pattern (adds trend filter)
-- ✅ Different from EMACrossATRFilter (mean reversion vs. trend-following)
+RSI pullback entries WITH a mandatory trend direction filter (EMA). This directly addresses the anti-pattern: "Pure mean reversion without trend filter fails in trending markets."
 
-## Strategy Logic
+The strategy only enters in the direction of the trend, using RSI dips/bounces as entry timing:
+- **Uptrend** (price > EMA): Wait for RSI to pull back to 40-50 range → enter long (buy the dip)
+- **Downtrend** (price < EMA): Wait for RSI to bounce to 50-60 range → enter short (sell the rip)
 
-### Indicators
-- Bollinger Bands: 20-period SMA ± 2.0 std
-- Volatility spike: 20-period volatility / 100-period MA volatility > 1.5
-- Volume ratio: current volume / 20-period SMA volume > 1.3
-- ADX(14): < 20 = ranging market (our regime filter)
-- Returns Z-score: (return - 100-period mean) / 100-period std
+## Why It's Different
 
-### Entry (Long) — ALL conditions required
-1. BB position < 0.1 (price near lower Bollinger Band)
-2. Volatility spike > 1.5 (elevated volatility)
-3. Volume ratio > 1.3 (volume surge = capitulation)
-4. Returns Z-score < -2.0 (extreme negative move)
-5. ADX < 20 (RANGING MARKET — key anti-pattern fix)
+The failed RSIBBMeanReversion entered on RSI<30 + price<BB_lower — which in a bull market meant buying genuinely weak assets. This strategy:
+1. **Mandatory EMA trend filter** — never trades against the trend
+2. **Moderate RSI thresholds** (40-50, not 30/70) — catches pullbacks, not reversals
+3. **Trades WITH momentum** — "buy strength on weakness" rather than "buy weakness"
 
-### Entry (Short) — ALL conditions required
-1. BB position > 0.9 (price near upper Bollinger Band)
-2. Volatility spike > 1.5
-3. Volume ratio > 1.3
-4. Returns Z-score > 2.0 (extreme positive move)
-5. ADX < 20 (ranging market)
+## Implementation Plan
 
-### Exit
-- Target: Price returns to BB middle band (50% retracement)
-- Stop-loss: 3% from entry (tight, mean reversion is short-term)
-- Max hold: 48 bars (time-based exit for stalled reversals)
+**Trend Filter:** `EMA(period=200)` — classic institutional trend line
+**Entry (Long):** `close > EMA_200 AND 40 <= RSI <= 50 AND RSI rising (RSI > RSI.shift(1))`
+**Entry (Short):** `close < EMA_200 AND 50 <= RSI <= 60 AND RSI falling (RSI < RSI.shift(1))`
+**Exit:** 
+- Stop loss: `ATR(14) * 1.5` from entry
+- Take profit: `ATR(14) * 3.0` from entry
+- Time exit: after 48 bars (2 days on 1h)
+- Trend reversal: `close` crosses `EMA_200`
+
+### Parameters (initial)
+- `ema_period`: 200
+- `rsi_period`: 14
+- `rsi_low`: 40
+- `rsi_high`: 50 (long entry zone)
+- `rsi_short_low`: 50
+- `rsi_short_high`: 60 (short entry zone)
+- `atr_period`: 14
+- `stop_loss_atr`: 1.5
+- `take_profit_atr`: 3.0
+- `time_exit_bars`: 48
+- `min_bars`: 250 (200 for EMA + buffer)
 
 ### Signal Convention
-- 1 = long, -1 = short, 0 = flat
+- `1` = long, `-1` = short, `0` = flat
+- Exit priority: stop_loss > take_profit > time_exit > trend_reverse
 
-## Parameters (Default)
-```python
-{
-    "bb_period": 20,         # Bollinger Band period
-    "bb_std": 2.0,           # BB standard deviation multiplier
-    "vol_short": 20,         # Short volatility lookback
-    "vol_long": 100,         # Long volatility lookback
-    "vol_spike_threshold": 1.5,  # Min volatility ratio for "spike"
-    "vol_ratio_period": 20,  # Volume SMA period
-    "vol_ratio_threshold": 1.3,  # Min volume ratio
-    "zscore_period": 100,    # Returns Z-score lookback
-    "zscore_threshold": 2.0, # Z-score entry threshold
-    "adx_period": 14,        # ADX lookback
-    "adx_max": 20,           # Max ADX for ranging market entry
-    "stop_loss_pct": 0.03,   # 3% stop loss
-    "max_hold_bars": 48,     # Max bars to hold
-}
-```
+### Expected Trade Count
+Target: 50-200 trades/year. RSI dips to 40-50 happen frequently in uptrends (2-4 times/month). Should produce 24-48 long trades + similar shorts.
 
-## Expected Characteristics
-- **Target trades/year:** 50-150 (limited to ranging markets, ~30-40% of time)
-- **Market regime:** Ranging/consolidating markets only (ADX < 20)
-- **Risk:** Mean reversion fails in strong trends — ADX filter eliminates these
+## Risks & Mitigations
 
-## Lesson from Anti-Pattern
-RSIBBMeanReversion failed because it traded mean reversion in ALL regimes,
-including strong 2025-2026 trends. This strategy gates entries to ranging
-markets only (ADX < 20), which should eliminate the worst drawdowns.
+- **EMA lag:** EMA(200) is slow to react. In a sudden trend change, the strategy may continue trading the old direction for several bars.
+  - Mitigation: time exit (48 bars) limits exposure. Also, ATR-based SL catches sharp reversals.
+- **Range-bound markets:** If price oscillates around EMA(200), chop risk increases.
+  - Mitigation: RSI rising/falling condition filters some noise.
+
+## Test Plan
+
+Test on BTC/USDT and ETH/USDT, 1h and 4h timeframes. 365-day lookback.
+Gate thresholds: ≥30 trades, Sharpe >0.5, MaxDD <30%.

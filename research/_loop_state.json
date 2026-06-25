@@ -1,10 +1,10 @@
 {
   "version": 1,
   "state": "implement",
-  "loop_started": "2026-06-25T04:00:50Z",
+  "loop_started": "2026-06-25T06:01:06Z",
   "loop_ended": null,
   "date": "2026-06-25",
-  "candidates": ["keltner_breakout_adx", "vol_spike_reversal"],
+  "candidates": ["adaptive_stop_momentum", "trend_pullback_rsi"],
   "implemented": [],
   "backtest_queue": [],
   "backtest_completed": [],

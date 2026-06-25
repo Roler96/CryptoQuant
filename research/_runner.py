@@ -62,6 +62,7 @@ def parse_args():
     p.add_argument("--lookback-days", type=int, default=365, help="Days of history to fetch")
     p.add_argument("--stop-loss", type=float, default=None, help="Stop loss %")
     p.add_argument("--take-profit", type=float, default=None, help="Take profit %")
+    p.add_argument("--max-hold-bars", type=int, default=None, help="Max hold bars (time exit)")
     p.add_argument("--db-path", default="data/cryptoquant.db", help="SQLite DB path")
     p.add_argument("--no-oos", action="store_true", help="Skip OOS split validation")
     p.add_argument("--no-commission-stress", action="store_true", help="Skip commission sensitivity test")
@@ -153,6 +154,7 @@ def _run_single_backtest(
     slippage: float,
     stop_loss_pct: float | None,
     take_profit_pct: float | None,
+    max_hold_bars: int | None = None,
     label: str = "",
 ) -> dict:
     """Run one backtest and return serialized result dict."""
@@ -176,6 +178,7 @@ def _run_single_backtest(
         df, strategy, symbol=symbol,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        max_hold_bars=max_hold_bars,
     )
 
     return {

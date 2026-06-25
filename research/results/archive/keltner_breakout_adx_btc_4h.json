@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T04:31:27.314990+00:00",
+    "strategy_file": "research/backtest_keltner_breakout_adx.py",
+    "class_name": "KeltnerBreakoutADX",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "KeltnerBreakoutADX",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10137.6,
+    "total_return_pct": 1.38,
+    "annualized_return_pct": 1.38,
+    "sharpe_ratio": 0.93,
+    "sortino_ratio": 0.87,
+    "max_drawdown_pct": 0.61,
+    "max_drawdown_days": 178,
+    "volatility_annual_pct": 1.48,
+    "total_trades": 11,
+    "win_rate_pct": 45.5,
+    "profit_factor": 2.27,
+    "avg_win_pct": 9.86,
+    "avg_loss_pct": -3.62,
+    "avg_hold_hours": 777.8,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=11 < 30 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "KeltnerBreakoutADX",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10114.99,
+      "total_return_pct": 1.15,
+      "annualized_return_pct": 1.65,
+      "sharpe_ratio": 0.92,
+      "sortino_ratio": 1.02,
+      "max_drawdown_pct": 0.61,
+      "max_drawdown_days": 178,
+      "volatility_annual_pct": 1.8,
+      "total_trades": 9,
+      "win_rate_pct": 44.4,
+      "profit_factor": 2.18,
+      "avg_win_pct": 10.65,
+      "avg_loss_pct": -3.9,
+      "avg_hold_hours": 659.6,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "KeltnerBreakoutADX",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10028.12,
+      "total_return_pct": 0.28,
+      "annualized_return_pct": 0.94,
+      "sharpe_ratio": 1.08,
+      "sortino_ratio": 1.45,
+      "max_drawdown_pct": 0.18,
+      "max_drawdown_days": 76,
+      "volatility_annual_pct": 0.87,
+      "total_trades": 3,
+      "win_rate_pct": 33.3,
+      "profit_factor": 2.61,
+      "avg_win_pct": 9.14,
+      "avg_loss_pct": -1.75,
+      "avg_hold_hours": 776.0,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": -17.4,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 0.93,
+    "stress_sharpe": 0.92,
+    "sharpe_delta_pct": 1.1,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}
