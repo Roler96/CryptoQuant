@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T12:45:57.943416+00:00",
+    "strategy_file": "research/backtest_range_expansion_breakout.py",
+    "class_name": "RangeExpansionBreakout",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "RangeExpansionBreakout",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10327.61,
+    "total_return_pct": 3.28,
+    "annualized_return_pct": 3.28,
+    "sharpe_ratio": 0.83,
+    "sortino_ratio": 0.31,
+    "max_drawdown_pct": 2.28,
+    "max_drawdown_days": 109,
+    "volatility_annual_pct": 3.96,
+    "total_trades": 30,
+    "win_rate_pct": 50.0,
+    "profit_factor": 1.65,
+    "avg_win_pct": 11.17,
+    "avg_loss_pct": -6.77,
+    "avg_hold_hours": 284.1,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "close_call": false,
+    "reasons": [],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    }
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "skipped"
+  }
+}

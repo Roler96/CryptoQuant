@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T12:45:57.936192+00:00",
+    "strategy_file": "research/backtest_range_expansion_breakout.py",
+    "class_name": "RangeExpansionBreakout",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "RangeExpansionBreakout",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10428.57,
+    "total_return_pct": 4.29,
+    "annualized_return_pct": 4.29,
+    "sharpe_ratio": 2.04,
+    "sortino_ratio": 2.99,
+    "max_drawdown_pct": 0.58,
+    "max_drawdown_days": 86,
+    "volatility_annual_pct": 2.07,
+    "total_trades": 30,
+    "win_rate_pct": 60.0,
+    "profit_factor": 3.52,
+    "avg_win_pct": 6.55,
+    "avg_loss_pct": -2.79,
+    "avg_hold_hours": 284.5,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "close_call": false,
+    "reasons": [],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    }
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "skipped"
+  }
+}

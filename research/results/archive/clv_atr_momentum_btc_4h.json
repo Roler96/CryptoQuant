@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T15:01:15.066082+00:00",
+    "strategy_file": "research/backtest_clv_atr_momentum.py",
+    "class_name": "ClvAtrMomentum",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "ClvAtrMomentum",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 9497.25,
+    "total_return_pct": -5.03,
+    "annualized_return_pct": -5.03,
+    "sharpe_ratio": -1.95,
+    "sortino_ratio": -0.37,
+    "max_drawdown_pct": 5.03,
+    "max_drawdown_days": 256,
+    "volatility_annual_pct": 2.63,
+    "total_trades": 7,
+    "win_rate_pct": 0.0,
+    "profit_factor": 0.0,
+    "avg_win_pct": 0,
+    "avg_loss_pct": -14.64,
+    "avg_hold_hours": 1182.3,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=7 < 30 (min)",
+      "sharpe=-1.95 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "ClvAtrMomentum",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9719.73,
+      "total_return_pct": -2.8,
+      "annualized_return_pct": -3.98,
+      "sharpe_ratio": -1.59,
+      "sortino_ratio": -0.23,
+      "max_drawdown_pct": 2.8,
+      "max_drawdown_days": 146,
+      "volatility_annual_pct": 2.54,
+      "total_trades": 4,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "avg_win_pct": 0,
+      "avg_loss_pct": -14.1,
+      "avg_hold_hours": 1415.0,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "ClvAtrMomentum",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9828.25,
+      "total_return_pct": -1.72,
+      "annualized_return_pct": -5.61,
+      "sharpe_ratio": -2.32,
+      "sortino_ratio": -0.46,
+      "max_drawdown_pct": 1.72,
+      "max_drawdown_days": 66,
+      "volatility_annual_pct": 2.46,
+      "total_trades": 3,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "avg_win_pct": 0,
+      "avg_loss_pct": -11.49,
+      "avg_hold_hours": 546.7,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 0.0,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -1.95,
+    "stress_sharpe": -1.95,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

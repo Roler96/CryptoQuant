@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-25T17:16:13.104118+00:00",
+    "strategy_file": "research/backtest_aroon_trend_continuation.py",
+    "class_name": "AroonTrendContinuation",
+    "bars": 2190,
+    "date_range": "2025-06-25 16:00:00 \u2192 2026-06-25 12:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "AroonTrendContinuation",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10094.2,
+    "total_return_pct": 0.94,
+    "annualized_return_pct": 0.94,
+    "sharpe_ratio": 0.29,
+    "sortino_ratio": 0.38,
+    "max_drawdown_pct": 3.66,
+    "max_drawdown_days": 205,
+    "volatility_annual_pct": 3.4,
+    "total_trades": 48,
+    "win_rate_pct": 33.3,
+    "profit_factor": 1.13,
+    "avg_win_pct": 11.03,
+    "avg_loss_pct": -4.89,
+    "avg_hold_hours": 176.3,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "sharpe=0.29 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "AroonTrendContinuation",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10218.97,
+      "total_return_pct": 2.19,
+      "annualized_return_pct": 3.14,
+      "sharpe_ratio": 0.92,
+      "sortino_ratio": 1.13,
+      "max_drawdown_pct": 1.42,
+      "max_drawdown_days": 96,
+      "volatility_annual_pct": 3.43,
+      "total_trades": 29,
+      "win_rate_pct": 41.4,
+      "profit_factor": 1.51,
+      "avg_win_pct": 10.89,
+      "avg_loss_pct": -5.09,
+      "avg_hold_hours": 203.9,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "AroonTrendContinuation",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9896.21,
+      "total_return_pct": -1.04,
+      "annualized_return_pct": -3.42,
+      "sharpe_ratio": -1.06,
+      "sortino_ratio": -1.33,
+      "max_drawdown_pct": 2.65,
+      "max_drawdown_days": 92,
+      "volatility_annual_pct": 3.25,
+      "total_trades": 18,
+      "win_rate_pct": 22.2,
+      "profit_factor": 0.68,
+      "avg_win_pct": 10.9,
+      "avg_loss_pct": -4.58,
+      "avg_hold_hours": 136.2,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 215.2,
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 0.29,
+    "stress_sharpe": 0.26,
+    "sharpe_delta_pct": 10.3,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.05
+  }
+}

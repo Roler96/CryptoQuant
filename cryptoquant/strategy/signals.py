@@ -453,3 +453,162 @@ def detect_regime(
     return regimes
 
 
+# === Parabolic SAR ===
+
+def psar(
+    df: pd.DataFrame,
+    af_start: float = 0.02,
+    af_step: float = 0.02,
+    af_max: float = 0.20,
+) -> pd.Series:
+    """Parabolic SAR (Stop and Reverse).
+
+    Computes the PSAR indicator which acts as a trailing stop that
+    accelerates as the trend develops.
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low]
+        af_start: Initial acceleration factor (default 0.02)
+        af_step: Acceleration factor increment per new extreme (default 0.02)
+        af_max: Maximum acceleration factor (default 0.20)
+
+    Returns:
+        pd.Series of PSAR values, same index as df.
+    """
+    high = df["high"].values
+    low = df["low"].values
+    n = len(df)
+
+    psar_vals = np.full(n, np.nan)
+    # Initialization: use the first bar's high/low to determine trend
+    # Assume downtrend initially if first close is below open, else uptrend
+    if n < 2:
+        return pd.Series(psar_vals, index=df.index)
+
+    # Determine initial trend from first two bars
+    close = df["close"].values
+    if close[1] > close[0]:
+        # Uptrend start
+        psar_vals[1] = low[0]
+        ep = high[1]  # extreme point
+        af = af_start
+        uptrend = True
+    else:
+        # Downtrend start
+        psar_vals[1] = high[0]
+        ep = low[1]
+        af = af_start
+        uptrend = False
+
+    for i in range(2, n):
+        prev_psar = psar_vals[i - 1]
+
+        if uptrend:
+            # Compute SAR for next bar
+            psar_vals[i] = prev_psar + af * (ep - prev_psar)
+            # SAR must be below the low of prior two bars
+            psar_vals[i] = min(psar_vals[i], low[i - 1])
+            if i >= 2:
+                psar_vals[i] = min(psar_vals[i], low[i - 2])
+
+            # Check for reversal: price goes below SAR
+            if low[i] < psar_vals[i]:
+                # Reverse to downtrend
+                uptrend = False
+                psar_vals[i] = ep  # SAR becomes the prior extreme
+                ep = low[i]
+                af = af_start
+            else:
+                # Continue uptrend: update extreme point and AF
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + af_step, af_max)
+        else:
+            # Downtrend
+            psar_vals[i] = prev_psar - af * (prev_psar - ep)
+            # SAR must be above the high of prior two bars
+            psar_vals[i] = max(psar_vals[i], high[i - 1])
+            if i >= 2:
+                psar_vals[i] = max(psar_vals[i], high[i - 2])
+
+            # Check for reversal: price goes above SAR
+            if high[i] > psar_vals[i]:
+                # Reverse to uptrend
+                uptrend = True
+                psar_vals[i] = ep
+                ep = high[i]
+                af = af_start
+            else:
+                # Continue downtrend: update extreme point and AF
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + af_step, af_max)
+
+    return pd.Series(psar_vals, index=df.index)
+
+
+# === Ichimoku Kinko Hyo ===
+
+def ichimoku(
+    df: pd.DataFrame,
+    tenkan_period: int = 9,
+    kijun_period: int = 26,
+    senkou_b_period: int = 52,
+    displacement: int = 26,
+) -> pd.DataFrame:
+    """Ichimoku Kinko Hyo (Ichimoku Cloud) indicator.
+
+    Computes the five Ichimoku lines.
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close]
+        tenkan_period: Tenkan-sen (conversion line) period (default 9)
+        kijun_period: Kijun-sen (base line) period (default 26)
+        senkou_b_period: Senkou Span B period (default 52)
+        displacement: Cloud displacement in bars (default 26)
+
+    Returns:
+        pd.DataFrame with columns:
+            [tenkan, kijun, senkou_a, senkou_b, chikou]
+        All aligned to the input DataFrame index.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    # Tenkan-sen: (highest high + lowest low) / 2 over tenkan_period
+    tenkan_high = high.rolling(tenkan_period).max()
+    tenkan_low = low.rolling(tenkan_period).min()
+    tenkan = (tenkan_high + tenkan_low) / 2.0
+
+    # Kijun-sen: (highest high + lowest low) / 2 over kijun_period
+    kijun_high = high.rolling(kijun_period).max()
+    kijun_low = low.rolling(kijun_period).min()
+    kijun = (kijun_high + kijun_low) / 2.0
+
+    # Senkou Span A: (Tenkan + Kijun) / 2, plotted displacement bars forward
+    senkou_a_raw = (tenkan + kijun) / 2.0
+    senkou_a = senkou_a_raw.shift(displacement)
+
+    # Senkou Span B: (highest high + lowest low) / 2 over senkou_b_period,
+    # plotted displacement bars forward
+    senkou_b_high = high.rolling(senkou_b_period).max()
+    senkou_b_low = low.rolling(senkou_b_period).min()
+    senkou_b_raw = (senkou_b_high + senkou_b_low) / 2.0
+    senkou_b = senkou_b_raw.shift(displacement)
+
+    # Chikou Span: close plotted displacement bars backward
+    chikou = close.shift(-displacement)
+
+    return pd.DataFrame(
+        {
+            "tenkan": tenkan,
+            "kijun": kijun,
+            "senkou_a": senkou_a,
+            "senkou_b": senkou_b,
+            "chikou": chikou,
+        },
+        index=df.index,
+    )
+
+
