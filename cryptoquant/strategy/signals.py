@@ -700,6 +700,39 @@ def supertrend(
     return pd.Series(st, index=df.index)
 
 
+# === CMO (Chande Momentum Oscillator) ===
+
+
+def cmo(series: pd.Series, period: int = 20) -> pd.Series:
+    """Chande Momentum Oscillator — sum-based improvement over RSI.
+
+    CMO = 100 × (sum_up - sum_down) / (sum_up + sum_down)
+
+    Unlike RSI (which uses Wilder smoothing on average gains/losses),
+    CMO uses raw sums over the lookback period, making it faster and
+    more responsive to regime changes.  Returns values in [-100, 100].
+
+    Reference: Tushar Chande — "The New Technical Trader" (1994).
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback period for sum calculation (default 20).
+
+    Returns:
+        pd.Series of CMO values, same index as input.
+    """
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+
+    sum_up = gain.rolling(period).sum()
+    sum_down = loss.rolling(period).sum()
+
+    total = sum_up + sum_down
+    cmo_val = 100.0 * (sum_up - sum_down) / total.replace(0, np.nan)
+    return cmo_val
+
+
 # === Adaptive Indicators ===
 
 

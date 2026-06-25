@@ -1,74 +1,49 @@
-# Strategy Candidate: BBPercentBVolatility
+# Candidate: CMOTrend
 
-**Generated:** 2026-06-25
-**Source:** John Bollinger's %B + MFI strategy (StockCharts), VolatilityBox BB squeeze research
+## Source
+Tushar Chande, "The New Technical Trader" (1994). Chande Momentum Oscillator (CMO) is an improvement over RSI — it uses sum of up/down moves rather than smoothed average gains/losses, making it faster and more responsive to regime changes.
 
-## Strategy Concept
+arXiv 2602.18481 (AlphaForgeBench) lists CMO among the 120+ pre-computed technical indicators used for strategy generation.
 
-Bollinger %B measures price position within Bollinger Bands: %B = (close - lower_band) / (upper_band - lower_band). Values > 1 indicate price above upper band (breakout); values < 0 indicate price below lower band (breakdown). Unlike Loop 4's BBandBreakoutVolume (which used price pierce of band + volume > SMA confirmation), this strategy uses %B threshold crossing + ATR expansion as the confirmation filter. Entry: %B > 0.8 (strong push above upper band area, bullish momentum) AND ATR(14) > ATR(50).rolling_mean() (volatility expansion confirming breakout validity). This is 2 total conditions. Exit: %B crosses below 0.5 (price retreats below band midline). ATR expansion confirmation is proven superior to volume confirmation (Loop 5's meta-analysis: ATR > RSI > Volume for breakout confirmation). The %B approach is more nuanced than raw price pierce — it measures HOW FAR price is through the band, filtering marginal pierces.
+## Strategy Logic
+**2 entry conditions:**
+1. CMO(20) crosses above signal line SMA(CMO, 10) → momentum shift positive
+2. Close > EMA(200) → trend filter (only long in uptrend)
 
-## Pseudocode
+**Exit:** CMO crosses below signal line (momentum exhausted)
 
-```
-for each bar:
-    bb_upper, bb_mid, bb_lower = bollinger_bands(close, period, std_dev)
-    percent_b = (close - bb_lower) / (bb_upper - bb_lower)
-    atr_expanding = atr(14) > sma(atr(14), 50)
-    
-    if no_position:
-        if percent_b > 0.8 AND atr_expanding:
-            enter_long()
-        elif percent_b < 0.2 AND atr_expanding:
-            enter_short()
-    
-    if position_open:
-        if (is_long AND percent_b < 0.5) OR (is_short AND percent_b > 0.5):
-            exit_position()
-```
+**Short side:** CMO crosses below signal line AND close < EMA(200)
 
-## Expected Indicators
+## Why This Might Work
+- CMO formula: CMO = 100 × (sum_up - sum_down) / (sum_up + sum_down). Unlike RSI (which uses Wilder smoothing), CMO uses a raw sum over the lookback period — no smoothing distortion, faster response.
+- CMO + SMA signal line creates a MACD-like crossover but with normalized 0-100 scale → works across timeframes without parameter tuning (like %B and Stochastic).
+- Normalized oscillator (0-100) → should work on 4h where smoothed crossovers fail (per Loop 9-10 findings).
+- 2 conditions only. CMO crossover + trend filter.
+- Known from traditional finance literature as superior to RSI for trend following (RSI designed for ranging markets, CMO designed for trending markets).
 
-- [x] Bollinger Bands — check if in signals.py; if not, `bb_upper = sma + std*close.rolling.std`, `bb_lower = sma - std*close.rolling.std`
-- [x] ATR — already exists in signals.py
-- [x] SMA — already exists in signals.py
+## Anti-Pattern Check
+- NOT mean reversion (trend filter prevents counter-trend entries)
+- NOT ≥3 conditions (2 only)
+- NOT Ichimoku (no nested AND gates)
+- NOT ADX-based (no lag)
+- NOT CLV/position-based
+- NOT candle pattern
+- NOT another RSI variant (CMO is structurally different — sum-based vs average-based)
+
+## Differentiation from Previous Oscillator Strategies
+- vs StochRSITrend (Loop 7): CMO is raw momentum, not position-in-range. Less whipsaw.
+- vs ChannelBreakoutRSI (Loop 4): CMO crossover is mechanical, not threshold-gated. More signals.
+- vs MACD+ADX (Loop 5): CMO is normalized 0-100, works on 4h unlike ADX.
+- vs BBPercentBVolatility (Loop 11): Similar normalization advantage, but CMO is a crossover (more signals) vs threshold (fewer signals).
 
 ## Parameters
+- cmo_period: 20 (standard Chande)
+- signal_period: 10 (SMA of CMO)
+- trend_period: 200
+- min_bars: 200
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| bb_period | 10-30 | 20 | Bollinger Band SMA period |
-| bb_std | 1.5-2.5 | 2.0 | Standard deviation multiplier |
-| percent_b_entry | 0.7-0.9 | 0.8 | %B threshold for long entry (above = bullish breakout) |
-| percent_b_exit | 0.3-0.7 | 0.5 | %B threshold for exit (below midline = momentum fading) |
-| atr_period | 10-20 | 14 | ATR period for expansion check |
-| atr_ma_period | 30-100 | 50 | SMA period for ATR baseline |
-
-## Test Pairs & Timeframes
-
-- Pairs: BTC/USDT, ETH/USDT
-- Timeframes: 1h, 4h
-
-## Expected Performance Range
-
-| Metric | Min | Target | Reason |
-|--------|-----|--------|--------|
-| Sharpe | >0.5 | >1.5 | ATR expansion confirmation is the strongest single filter (Loop 5: RangeExpansionBreakout Sharpe=3.19) |
-| MaxDD | <30% | <5% | Volatility expansion filter avoids false breakout entries in low-vol chop |
-| Win Rate | >40% | >50% | Breakout strategies with ATR confirmation average 45-55% win rate |
-| Trades | >30 | 50-100 | %B threshold filter should produce fewer false entries than raw price pierce but still 50+ trades/year |
-
-## References
-
-- [Percent B Money Flow — StockCharts](https://chartschool.stockcharts.com/table-of-contents/trading-strategies-and-models/trading-strategies/percent-b-money-flow)
-- [Bollinger Bands and Volatility — VolatilityBox](https://volatilitybox.com/research/bollinger-bands-volatility/)
-- [Bollinger Bands Strategy Backtest — StratBase](https://stratbase.ai/en/blog/bollinger-bands-strategy-guide)
-
-## Implementation Notes
-
-- BB %B already exists conceptually; implement as `close - bb_lower / (bb_upper - bb_lower)`
-- ATR expansion uses rolling mean of ATR values — this is different from ATR percentile (Loop 5 used 80th percentile). Rolling mean is simpler and produces continuous signals.
-- Exit at %B = 0.5 (midline) means exiting when momentum fades to neutral, not waiting for full reversal
-- Use `DEFAULT_PARAMS` dict, never hardcode
-- Signal convention: 1=long, -1=short, 0=flat
-- Return Series same length as input DataFrame
-- min_bars = max(bb_period, atr_ma_period) + 50 ≈ 100
+## Expected Behavior
+- CMO is faster than RSI → 100-250 trades/year on 1h
+- Normalized scale → 30-60 trades/year on 4h (beats ADX/EMA crossovers which produce 5-15)
+- Crossover entry generates more signals than threshold-gated entry (%B at 0.8)
+- Risk: CMO can be noisy in ranging/choppy markets → EMA200 filter should mitigate
