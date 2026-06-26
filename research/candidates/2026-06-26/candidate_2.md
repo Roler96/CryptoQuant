@@ -1,47 +1,42 @@
-# Candidate 2: Ichimoku Cloud Breakout
+# Candidate: Awesome Oscillator Trend
 
 **Date:** 2026-06-26
-**Source:** dagzk/Ichimoku_Backtest (GitHub) + classic Japanese TA
-**Family:** Trend Following (Cloud-based)
+**Source:** GitHub trending — je-suis-tm/quant-trading (Awesome Oscillator), Bill Williams indicators
+**Type:** Momentum trend-following
 
-## Hypothesis
-The Ichimoku Kinko Hyo system's Tenkan-sen (9) / Kijun-sen (26) crossover generates timely entry signals, while the Kumo (cloud) provides a robust trend filter. A 2-condition entry (TK cross + price above cloud) should produce 80-200 trades/year with positive expectancy on crypto 1h.
+## Rationale
 
-## Why This Should Work
-- Tenkan/Kijun cross is a fast-responsive moving average pair — catches trends earlier than EMA12/26
-- The Kumo (Senkou Span A/B projected 26 bars forward) is a forward-looking support/resistance zone — not just a lagging trend indicator
-- Ichimoku is battle-tested across decades of Japanese trading and multiple asset classes
-- 2 total conditions: TK cross + cloud position
-- Different from all 21 strategies tested — no cloud/forward-looking filter used before
+The Awesome Oscillator (AO) is a Bill Williams indicator that measures market momentum as the difference between a 5-period and 34-period SMA of bar midpoints (HL/2). Unlike RSI (smoothed), Stochastic (positional), and CMO (sum-based), AO uses raw SMA of midpoints — a fundamentally different signal generation mechanism.
+
+**Why now:** After 12 loops, CMO (sum-based) showed best Sharpe/quality, but crossover-based oscillators consistently fail on 4h. AO's zero-line crossover is simpler than SMA-of-CMO crossover — the raw difference crossing zero should generate more signals.
+
+**Key differentiator:** AO uses bar midpoints (HL/2), not close prices. This could make it more robust on ETH where close prices are influenced by fragmented liquidity — midpoints average out the exchange-specific extremes.
 
 ## Strategy Design
+
 ```
-Entry (Long):  Tenkan-sen crosses ABOVE Kijun-sen AND close > Senkou Span A AND close > Senkou Span B
-Exit (Long):   Tenkan-sen crosses BELOW Kijun-sen
-Entry (Short): Tenkan-sen crosses BELOW Kijun-sen AND close < Senkou Span A AND close < Senkou Span B
-Exit (Short):  Tenkan-sen crosses ABOVE Kijun-sen
+Entry (Long):  AO crosses above 0 AND close > EMA(200)
+Entry (Short): AO crosses below 0 AND close < EMA(200)
+Exit:          AO crosses back across 0
 ```
 
-## Parameters
-- `tenkan_period=9` — standard Tenkan-sen (conversion line)
-- `kijun_period=26` — standard Kijun-sen (base line)
-- `senkou_b_period=52` — standard Senkou Span B
-- `displacement=26` — standard cloud displacement
-
-## Expected Performance
-- **Trades:** 80-200/year (TK crosses frequently on 1h)
-- **Sharpe target:** >1.0 on BTC 1h
-- **Win rate:** 42-48% typical
-- **Risk:** Cloud false positives in low-volatility consolidation (mitigated by requiring both cloud spans)
+- **AO** = SMA(midpoint, 5) - SMA(midpoint, 34)
+- **midpoint** = (High + Low) / 2
+- **EMA200** trend filter
+- **min_bars** = 200 (AO needs 34 bars to initialize)
 
 ## Anti-Pattern Check
-- ✅ ≤2 AND conditions (TK cross + cloud filter)
-- ✅ Not a candle pattern / CLV / volume percentile
-- ✅ Not momentum oscillator on ETH 1h (TK is a MA crossover, not an oscillator)
-- ✅ Different from all 21 previous strategies
-- ✅ Price-action based entry
-- ⚠️ May have too few signals on 4h (2190 bars vs 8760 at 1h) — focus on 1h
-- ⚠️ ETH 1h may show OOS degradation (systemic pattern in loops 4-8) — test cautiously
 
-## Baseline
-Should outperform plain EMA crossover (Loop 1's EMACrossATRFilter) because the entry trigger is more responsive (9/26 vs 12/26) and the trend filter is forward-looking (cloud vs backward-looking EMA).
+- ✅ 2 conditions (AO crossover + EMA200) — not ≥3
+- ✅ Midpoint-based, not close-based — different from all previous oscillators
+- ✅ No CLV, candle patterns, volume percentiles, ADX, hysteresis, raw price extremes
+- ✅ Not tested before — different from MACD, Stochastic, RSI, CMO, Force Index
+- ⚠️ Crossover-based on 4h — expected to generate fewer trades on 4h (consistent pattern)
+- ⚠️ ETH 1h — may fail OOS like all previous oscillators
+
+## Expected Outcome
+
+- Should generate 60-150 trades on 1h (midpoint crossover is more frequent than CMO crossover)
+- 4h will likely fail on trade count (< 30) — crossover on 4h is proven anti-pattern
+- BTC expected to outperform ETH
+- If AO shows positive Sharpe on ETH 1h + passes OOS, it would be the first oscillator to do so in 12 loops (Force Index came close)

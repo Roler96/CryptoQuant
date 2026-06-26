@@ -1,46 +1,46 @@
-# Candidate 1: Parabolic SAR Trend Following
+# Candidate: Dual Thrust Breakout
 
 **Date:** 2026-06-26
-**Source:** Classic TA literature + je-suis-tm/quant-trading GitHub
-**Family:** Trend Following (SAR-based)
+**Source:** GitHub trending — je-suis-tm/quant-trading (Dual Thrust strategy)
+**Type:** Breakout trend-following
 
-## Hypothesis
-Parabolic SAR acts as a dynamic stop-and-reverse indicator. When price crosses above PSAR, it signals a trend reversal to bullish. Combined with a simple trend filter (EMA200), this provides a clean 2-condition entry that should generate 50-150 trades/year on 1h data.
+## Rationale
 
-## Why This Should Work
-- PSAR is fundamentally different from oscillators (Stochastic/Aroon) and breakouts (channel/BB) — it's acceleration-based
-- PSAR naturally follows trend acceleration, meaning entries occur during genuine trend development, not late
-- EMA200 trend filter eliminates counter-trend PSAR crosses (which are notoriously unreliable)
-- 2 total conditions: PSAR cross + trend filter
-- No complex exit — just PSAR reverse cross
+Dual Thrust is a classic breakout strategy developed by Michael Chalek in the 1980s. It uses the N-day range (high-low) to set upper and lower breakout bounds. Unlike Donchian channels (which track rolling high/low), Dual Thrust uses a lookback range multiplied by coefficients to set the bounds — making it self-normalizing to recent volatility.
+
+**Why now:** After 12 loops, the research frontier is:
+1. 4h breakout strategies (only breakout-based entries work on 4h)
+2. ETH-resistant strategies
+3. Range-normalized indicators (like %B success in Loop 11)
+
+Dual Thrust satisfies all three:
+- It's a breakout strategy → should generate trades on 4h
+- The range multiplier adapts to volatility → normalized entry
+- 2 conditions: price > upper bound + EMA200 trend filter
 
 ## Strategy Design
+
 ```
-Entry (Long):  price > PSAR AND close > EMA200
-Exit (Long):   price < PSAR  
-Entry (Short): price < PSAR AND close < EMA200
-Exit (Short):  price > PSAR
+Entry (Long):  close > Open + K1 × Range(N) AND close > EMA(200)
+Entry (Short): close < Open - K2 × Range(N) AND close < EMA(200)
+Exit:          price crosses opposite bound OR signal reverses
 ```
 
-## Parameters
-- `psar_af_start=0.02` — standard acceleration factor start
-- `psar_af_step=0.02` — standard step
-- `psar_af_max=0.20` — standard max
-- `trend_period=200` — EMA200 for trend filter
-
-## Expected Performance
-- **Trades:** 50-150/year (PSAR generates frequent crosses)
-- **Sharpe target:** >1.0 on BTC 1h
-- **Win rate:** 40-50% typical for TF strategies
-- **Risk:** PSAR whipsaw in ranging markets (mitigated by trend filter)
+- **Range(N)** = Max(HH - LC, HC - LL) over N bars (Dual Thrust original)
+- **K1 = 0.5** (upper coefficient), **K2 = 0.5** (lower coefficient)
+- **N = 20** (lookback period)
+- **EMA200** trend filter
 
 ## Anti-Pattern Check
-- ✅ ≤2 AND conditions (PSAR cross + trend filter)
-- ✅ Not a candle pattern / CLV / volume percentile
-- ✅ Not momentum oscillator on ETH 1h
-- ✅ Different from all 21 previous strategies
-- ✅ Price-action based entry (not pattern recognition)
-- ⚠️ May underperform on 4h (fewer PSAR crosses) — focus on 1h
 
-## Baseline
-Similar to EMA cross systems but with adaptive acceleration — should generate earlier entries than fixed-period moving averages.
+- ✅ 2 conditions (breakout + trend filter) — not ≥3
+- ✅ Breakout-based → viable on 4h (unlike oscillator crossovers)
+- ✅ No CLV, candle patterns, volume percentiles, ADX, hysteresis
+- ✅ Range-normalized → self-adapting to volatility
+- ✅ Not tested before — different from Donchian, InsideBar, BB, Channel
+
+## Expected Outcome
+
+- Should generate 30-80 trades on 4h (breakout pattern), 80-200 on 1h
+- BTC expected to perform better than ETH (consistent pattern)
+- Risk: range normalization may be insufficient for ETH's fragmented liquidity
