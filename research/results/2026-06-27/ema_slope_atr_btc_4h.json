@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-06-26T17:01:26.717186+00:00",
+    "timestamp": "2026-06-26T21:17:02.853113+00:00",
     "strategy_file": "research/backtest_ema_slope_atr.py",
     "class_name": "EMASlopeATR",
     "bars": 2190,

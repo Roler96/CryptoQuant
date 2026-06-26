@@ -1428,3 +1428,125 @@ def williams_r(df: pd.DataFrame, period: int = 14) -> pd.Series:
     # Avoid division by zero (flat bars)
     wr = (highest - df["close"]) / denom.replace(0, np.nan) * -100
     return wr.clip(-100.0, 0.0)
+
+
+# === Keltner Channel ===
+
+
+def keltner_channel(
+    df: pd.DataFrame,
+    ema_period: int = 20,
+    atr_period: int = 10,
+    atr_multiplier: float = 2.0,
+) -> pd.DataFrame:
+    """Keltner Channel with normalized position (%K).
+
+    Middle band = EMA(close, ema_period).
+    Width = ATR(atr_period) × atr_multiplier.
+    Upper/Lower = middle ± width.
+    %K = (close - lower) / (upper - lower) — normalized 0-1 position.
+
+    Args:
+        df: OHLCV DataFrame with 'open', 'high', 'low', 'close', 'volume'.
+        ema_period: EMA period for the middle band (default 20).
+        atr_period: ATR period for the channel width (default 10).
+        atr_multiplier: Multiplier applied to ATR for channel width (default 2.0).
+
+    Returns:
+        pd.DataFrame with columns [middle, upper, lower, width, pct_k], same index as df.
+    """
+    close = df["close"]
+    middle = ema(close, ema_period)
+    width = atr(df, period=atr_period) * atr_multiplier
+    upper = middle + width
+    lower = middle - width
+    denom = upper - lower
+    pct_k = (close - lower) / denom.replace(0, np.nan)
+
+    return pd.DataFrame(
+        {"middle": middle, "upper": upper, "lower": lower, "width": width, "pct_k": pct_k},
+        index=df.index,
+    )
+
+
+# === Connors RSI Components ===
+
+
+def _closing_streak(close: pd.Series) -> pd.Series:
+    """Compute closing streak: consecutive up (positive) or down (negative) closes.
+
+    +1 for each consecutive up-close, +2 for 2-up streak, etc.
+    -1 for each consecutive down-close, -2 for 2-down streak, etc.
+    Zero on flat close resets the streak.
+    """
+    diff = close.diff()
+    streak = pd.Series(0, index=close.index, dtype=float)
+
+    for i in range(1, len(close)):
+        if pd.isna(diff.iloc[i]):
+            streak.iloc[i] = 0
+        elif diff.iloc[i] > 0:
+            streak.iloc[i] = max(streak.iloc[i - 1] + 1, 1)
+        elif diff.iloc[i] < 0:
+            streak.iloc[i] = min(streak.iloc[i - 1] - 1, -1)
+        else:
+            streak.iloc[i] = 0
+
+    return streak
+
+
+def _percent_rank(series: pd.Series, period: int = 100) -> pd.Series:
+    """Percent rank: where the current value ranks in the past `period` values.
+
+    Returns 0-1 where 1 means current value is at the top of the recent range.
+    """
+    result = pd.Series(np.nan, index=series.index)
+
+    for i in range(period, len(series)):
+        window = series.iloc[i - period : i + 1]
+        result.iloc[i] = (window <= window.iloc[-1]).sum() / (period + 1)
+
+    return result
+
+
+def connors_rsi(
+    df: pd.DataFrame,
+    rsi_period: int = 3,
+    streak_rsi_period: int = 2,
+    percent_rank_period: int = 100,
+) -> pd.Series:
+    """Connors RSI (CRSI) composite oscillator.
+
+    CRSI = [RSI(3) + RSI(Streak, 2) + PercentRank(ROC, 100)] / 3
+
+    Combines three momentum dimensions into a single 0-100 signal:
+      1. RSI(3): Ultra-short Wilder RSI — immediate overbought/oversold
+      2. RSI(Streak, 2): RSI on consecutive close streak — trend persistence
+      3. PercentRank(ROC, 100): Where current 1-bar return ranks in last 100 bars
+
+    Reference: Larry Connors — "Connors RSI" (2010).
+
+    Args:
+        df: OHLCV DataFrame with 'close' column.
+        rsi_period: Wilder RSI period on close (default 3).
+        streak_rsi_period: RSI period on closing streak (default 2).
+        percent_rank_period: Lookback for percent rank of 1-bar ROC (default 100).
+
+    Returns:
+        pd.Series of Connors RSI values (0-100), same index as df.
+    """
+    close = df["close"]
+
+    # 1. RSI(3) on close
+    rsi_close = rsi(close, period=rsi_period)
+
+    # 2. RSI on closing streak
+    streak = _closing_streak(close)
+    rsi_streak = rsi(streak, period=streak_rsi_period)
+
+    # 3. PercentRank of 1-bar ROC (0-1) converted to 0-100
+    roc = close.pct_change()
+    pct_rank = _percent_rank(roc, period=percent_rank_period) * 100.0
+
+    crsi = (rsi_close + rsi_streak + pct_rank) / 3.0
+    return crsi

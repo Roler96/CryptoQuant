@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "timestamp": "2026-06-26T18:05:29.920636+00:00",
+    "strategy_file": "research/backtest_trix_trend.py",
+    "class_name": "TRIXTrend",
+    "bars": 8760,
+    "date_range": "2025-06-25 02:00:00 \u2192 2026-06-25 01:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "TRIXTrend",
+    "symbol": "BTC/USDT",
+    "timeframe": "1h",
+    "initial_capital": 10000,
+    "final_equity": 10275.64,
+    "total_return_pct": 2.76,
+    "annualized_return_pct": 2.76,
+    "sharpe_ratio": 1.32,
+    "sortino_ratio": 2.05,
+    "max_drawdown_pct": 1.14,
+    "max_drawdown_days": 118,
+    "volatility_annual_pct": 2.08,
+    "total_trades": 160,
+    "win_rate_pct": 35.6,
+    "profit_factor": 1.5,
+    "avg_win_pct": 2.87,
+    "avg_loss_pct": -1.06,
+    "avg_hold_hours": 53.7,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "close_call": false,
+    "reasons": [],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": true,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "TRIXTrend",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 10176.33,
+      "total_return_pct": 1.76,
+      "annualized_return_pct": 2.53,
+      "sharpe_ratio": 1.22,
+      "sortino_ratio": 2.14,
+      "max_drawdown_pct": 1.14,
+      "max_drawdown_days": 69,
+      "volatility_annual_pct": 2.07,
+      "total_trades": 122,
+      "win_rate_pct": 35.2,
+      "profit_factor": 1.44,
+      "avg_win_pct": 2.69,
+      "avg_loss_pct": -1.02,
+      "avg_hold_hours": 49.2,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "TRIXTrend",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 10105.15,
+      "total_return_pct": 1.05,
+      "annualized_return_pct": 3.55,
+      "sharpe_ratio": 1.62,
+      "sortino_ratio": 2.03,
+      "max_drawdown_pct": 0.63,
+      "max_drawdown_days": 62,
+      "volatility_annual_pct": 2.16,
+      "total_trades": 39,
+      "win_rate_pct": 35.9,
+      "profit_factor": 1.72,
+      "avg_win_pct": 3.58,
+      "avg_loss_pct": -1.16,
+      "avg_hold_hours": 66.1,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": -32.8,
+    "oos_passed": true,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 1.32,
+    "stress_sharpe": 1.12,
+    "sharpe_delta_pct": 15.2,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.2% of 8759 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.21
+  }
+}

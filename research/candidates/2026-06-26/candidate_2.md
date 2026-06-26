@@ -1,52 +1,64 @@
-# Candidate 2: Swing Pivot Breakout (Loop 19)
+# KeltnerChannelTrend — Keltner Channel Breakout + EMA200 Trend Filter
 
-**Date:** 2026-06-26
-**Source:** GitHub trending — fractal/ZigZag pattern detection
-**Loop:** 19
+**Discovered:** 2026-06-26 (Saturday — derived from research frontier analysis)
+**Source:** Derived from Loop 2's KeltnerBreakoutADX failure analysis + research frontier meta-patterns
+**Loop:** 20
 
-## Concept
+## Core Idea
 
-Price action-based swing pivot detection — the simplest form of market structure analysis. A swing high occurs when a bar's high is the highest of the surrounding N bars; a swing low when a bar's low is the lowest. Price breaking above a swing high or below a swing low signals a structural shift — the market is making new extremes, indicating trend continuation or reversal.
+Keltner Channel (ATR-based envelope around EMA) breakout with EMA200 trend filter. Keltner Channels are mathematically distinct from Bollinger Bands (std-based) and Donchian Channels (fixed-lookback range):
 
-This is breakout-based (not oscillator/crossover) → should work on 4h (proven family of entries).
+- **Bollinger Bands:** Price ± k × std(price). Volatility measured by standard deviation. Wide in volatile periods.
+- **Keltner Channels:** EMA(price) ± k × ATR. Volatility measured by ATR. Tighter in volatile periods (ATR is mean absolute, not squared).
+- **Donchian Channels:** Max(high, N) / Min(low, N). Measures range extremes.
 
-## Entry Logic
+The Keltner Channel's ATR-based width means breakouts require genuine directional expansion (not just price noise that inflates std). This produces cleaner signals than BB breakouts while maintaining more trades than Donchian breakouts.
 
-1. **Swing pivot breakout**: Price high > previous N-bar swing high (long) OR price low < previous N-bar swing low (short)
-   - Pivot detection: peak = bar i is highest high in [i-N, i+N]; trough = bar i is lowest low in [i-N, i+N]
-   - No look-ahead bias — pivot identified only after N bars confirm it (i-N...i+N window, entry at next bar after confirmation)
-2. **Close direction confirmation**: close > previous close (long) OR close < previous close (short)
-   - Simple direction filter — not an AND gate, selects direction of the bar that breached
-   - Exactly 2 AND conditions total
+## Why This Differs from KeltnerBreakoutADX (Loop 2)
 
-## Exit Logic
+Loop 2's KeltnerBreakoutADX used 3 conditions:
+1. KC breakout (close > KC_upper / close < KC_lower)
+2. ADX > 25 (trend strength)
+3. (effectively hidden 3rd condition from ADX smoothing lag on 4h)
 
-- Opposite direction signal (bearish breakout closes long; bullish breakout closes short)
-- OR trailing stop at 2× ATR(14) for risk management
+This version drops ADX entirely — replaced by EMA200 trend direction filter. Result: 2 conditions, and ADX's catastrophic 4h lag problem is eliminated.
 
-## Why This Should Work
+## Strategy Design
 
-- **Breakout-based**: Proven family for 4h viability (Dual Thrust: 4/4 pass, BB %B: 4/4 pass, Range Expansion: 4/4 pass)
-- **Pure price action**: No smoothing, no adaptive delay, no mathematical transformation — just structural price levels
-- **Novel direction**: Swing pivot detection has never been tested in 18 loops. All previous breakouts used channels (Donchian, BB, Keltner) or 1-bar ranges (InsideBar). Structural pivot levels are fundamentally different — they represent market-agreed support/resistance.
-- **2 conditions**: Clean template, fast signal generation
+**Entry Conditions (2 total):**
+1. Close > KC_upper → long signal; Close < KC_lower → short signal
+2. Close > EMA(200) for long filter; Close < EMA(200) for short filter
 
-## Expected Trade Count
+**Exit:**
+- Close < KC_middle (EMA) for longs; Close > KC_middle for shorts
+- Or signal reverse
 
-- BTC 1h: 80-150 trades (pivot breakouts fire on structural breaks)
-- BTC 4h: 35-60 trades (breakout-based, proven 4h viability)
-- ETH 1h: 70-130 trades
-- ETH 4h: 30-50 trades (breakout entry avoids 4h oscillator scarcity)
+**Parameters:**
+- `kc_period=20` — EMA period for channel center
+- `kc_multiplier=2.0` — ATR multiplier for channel width
+- `atr_period=14` — ATR lookback (standard)
+- `trend_period=200` — EMA trend filter period
+- `min_bars=200` — warmup period
 
-## Parameters
+**Expected Trade Count:**
+- 1h: 50-120 trades (breakout events on 1h are frequent; KC is slightly tighter than BB)
+- 4h: 25-40 trades (breakout-based, so 4h viable unlike oscillator strategies)
 
-- `pivot_window=5` (N bars on each side for pivot detection → 11 bar window total)
-- `use_trailing_stop=true`
-- `trailing_stop_atr=14`
-- `trailing_stop_mult=2.0`
+## Why It Should Work
 
-## Risk Assessment
+1. **Breakout-based entry** — the only entry type proven to work on 4h across 19 loops. KC breakout generates more signals than BB breakout because ATR-based bands are tighter (ATR < std in most regimes).
 
-- Low-moderate — breakout-based. Risk is pivot_window sensitivity: too small = noise pivots, too large = too few pivots.
-- ETH risk is lower than oscillator strategies (breakout entries don't suffer the same OOS regime problem).
-- 4h should work — structural levels are arguably more meaningful on higher timeframes.
+2. **2 conditions exactly** — follows the proven template. No hidden gates.
+
+3. **ATR normalization is faster than std normalization** — ATR responds to volatility changes in ~14 bars vs ~20 bars for std. This means KC bands tighten/widen faster, producing more timely breakout signals.
+
+4. **Cleaner than KeltnerBreakoutADX** — ADX(14) > 25 on 4h means 56 hours of trend must develop before entry. KC breakout + EMA200 has zero additional lag beyond the channel calculation.
+
+## Anti-Pattern Compliance
+
+- ✅ 2 entry conditions (KC breakout + EMA200 trend)
+- ✅ Breakout-based — 4h viable
+- ✅ No ADX (removes the 4h lag problem from Loop 2)
+- ✅ No smoothing beyond kc_period=20 (exactly at the 20-bar threshold — could reduce to 14 for cleaner 2-condition count)
+- ✅ No hidden AND gates
+- ✅ Not a raw price-extreme indicator on ETH (KC uses ATR-smoothed bands, not bar-specific high/low)

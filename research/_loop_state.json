@@ -1,10 +1,10 @@
 {
   "version": 1,
   "state": "implement",
-  "loop_started": "2026-06-26T17:32:00Z",
+  "loop_started": "2026-06-27T14:30:00Z",
   "loop_ended": null,
-  "date": "2026-06-26",
-  "candidates": ["kst_trend", "trix_trend"],
+  "date": "2026-06-27",
+  "candidates": ["keltner_channel", "connors_rsi"],
   "implemented": [],
   "backtest_queue": [],
   "backtest_completed": [],

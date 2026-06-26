@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-06-26T17:01:27.295857+00:00",
+    "timestamp": "2026-06-26T21:17:07.276773+00:00",
     "strategy_file": "research/backtest_elder_ray_trend.py",
     "class_name": "ElderRayTrend",
     "bars": 8760,
