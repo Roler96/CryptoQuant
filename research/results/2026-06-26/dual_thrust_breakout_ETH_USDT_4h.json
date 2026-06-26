@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "timestamp": "2026-06-26T00:16:38.876667+00:00",
+    "strategy_file": "research/backtest_dual_thrust_breakout.py",
+    "class_name": "DualThrustBreakout",
+    "bars": 2190,
+    "date_range": "2025-06-25 16:00:00 \u2192 2026-06-25 12:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "DualThrustBreakout",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10680.14,
+    "total_return_pct": 6.8,
+    "annualized_return_pct": 6.8,
+    "sharpe_ratio": 1.7,
+    "sortino_ratio": 1.15,
+    "max_drawdown_pct": 1.33,
+    "max_drawdown_days": 91,
+    "volatility_annual_pct": 3.92,
+    "total_trades": 30,
+    "win_rate_pct": 43.3,
+    "profit_factor": 4.04,
+    "avg_win_pct": 13.61,
+    "avg_loss_pct": -2.58,
+    "avg_hold_hours": 284.5,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "close_call": false,
+    "reasons": [],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "DualThrustBreakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10689.83,
+      "total_return_pct": 6.9,
+      "annualized_return_pct": 10.0,
+      "sharpe_ratio": 2.3,
+      "sortino_ratio": 2.7,
+      "max_drawdown_pct": 0.45,
+      "max_drawdown_days": 54,
+      "volatility_annual_pct": 4.17,
+      "total_trades": 16,
+      "win_rate_pct": 56.2,
+      "profit_factor": 12.86,
+      "avg_win_pct": 16.22,
+      "avg_loss_pct": -1.62,
+      "avg_hold_hours": 372.8,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "DualThrustBreakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10204.8,
+      "total_return_pct": 2.05,
+      "annualized_return_pct": 6.99,
+      "sharpe_ratio": 2.22,
+      "sortino_ratio": 1.85,
+      "max_drawdown_pct": 0.62,
+      "max_drawdown_days": 41,
+      "volatility_annual_pct": 3.08,
+      "total_trades": 16,
+      "win_rate_pct": 43.8,
+      "profit_factor": 2.87,
+      "avg_win_pct": 8.96,
+      "avg_loss_pct": -2.43,
+      "avg_hold_hours": 148.5,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 3.5,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 1.7,
+    "stress_sharpe": 1.68,
+    "sharpe_delta_pct": 1.2,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

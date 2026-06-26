@@ -1,16 +1,36 @@
 {
   "version": 1,
-  "state": "implement",
-  "loop_started": "2026-06-26T03:00:00Z",
-  "loop_ended": null,
+  "state": "done",
+  "loop_started": "2026-06-26T01:01:00Z",
+  "loop_ended": "2026-06-26T02:15:41Z",
   "date": "2026-06-26",
   "candidates": ["dual_thrust_breakout", "awesome_oscillator_trend"],
-  "implemented": [],
+  "implemented": ["dual_thrust_breakout", "awesome_oscillator_trend"],
   "backtest_queue": [],
-  "backtest_completed": [],
-  "passed": [],
-  "close_calls": [],
-  "failed": [],
+  "backtest_completed": [
+    {"strategy": "research/backtest_dual_thrust_breakout.py", "class": "DualThrustBreakout", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_dual_thrust_breakout.py", "class": "DualThrustBreakout", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_dual_thrust_breakout.py", "class": "DualThrustBreakout", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_dual_thrust_breakout.py", "class": "DualThrustBreakout", "symbol": "ETH/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_awesome_oscillator_trend.py", "class": "AwesomeOscillatorTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_awesome_oscillator_trend.py", "class": "AwesomeOscillatorTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_awesome_oscillator_trend.py", "class": "AwesomeOscillatorTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_awesome_oscillator_trend.py", "class": "AwesomeOscillatorTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
+  ],
+  "passed": [
+    {"strategy": "dual_thrust_breakout", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 3.65, "trades": 136, "oos_passed": true},
+    {"strategy": "dual_thrust_breakout", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.94, "trades": 30, "oos_passed": false},
+    {"strategy": "dual_thrust_breakout", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 3.08, "trades": 154, "oos_passed": true},
+    {"strategy": "dual_thrust_breakout", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.70, "trades": 30, "oos_passed": false}
+  ],
+  "close_calls": [
+    {"strategy": "awesome_oscillator_trend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 0.46, "trades": 76, "maxdd": 1.88, "reason": "sharpe=0.46 < 0.5"}
+  ],
+  "failed": [
+    {"strategy": "awesome_oscillator_trend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.11, "trades": 10, "reason": "trades=10 < 30"},
+    {"strategy": "awesome_oscillator_trend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": -0.77, "trades": 78, "reason": "sharpe=-0.77"},
+    {"strategy": "awesome_oscillator_trend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.32, "trades": 11, "reason": "trades=11 < 30"}
+  ],
   "error": null,
-  "ticks": 1
+  "ticks": 5
 }
