@@ -912,3 +912,71 @@ def cmf(
     cmf_val = mfv.rolling(period).sum() / volume.rolling(period).sum()
 
     return cmf_val
+
+
+# === Heikin-Ashi Candles ===
+
+
+def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Heikin-Ashi candle transformation.
+
+    HA candles apply a smoothing formula to OHLC data, reducing noise
+    and producing consecutive same-color candles during strong trends.
+
+    HA_close = (O + H + L + C) / 4
+    HA_open = (prev_HA_open + prev_HA_close) / 2
+    HA_high = max(H, HA_open, HA_close)
+    HA_low = min(L, HA_open, HA_close)
+
+    Args:
+        df: OHLCV DataFrame with columns [open, high, low, close].
+
+    Returns:
+        pd.DataFrame with columns [ha_open, ha_high, ha_low, ha_close],
+        same index as input.
+    """
+    open_, high, low, close = df["open"], df["high"], df["low"], df["close"]
+
+    ha_close = (open_ + high + low + close) / 4.0
+    n = len(df)
+    ha_open = pd.Series(np.nan, index=df.index, dtype=float)
+
+    # Seed the first HA open with the first bar's open
+    if n > 0:
+        ha_open.iloc[0] = open_.iloc[0]
+
+    # Recursive: HA_open = (prev_HA_open + prev_HA_close) / 2
+    for i in range(1, n):
+        prev_o = ha_open.iloc[i - 1]
+        prev_c = ha_close.iloc[i - 1]
+        if not pd.isna(prev_o) and not pd.isna(prev_c):
+            ha_open.iloc[i] = (prev_o + prev_c) / 2.0
+
+    ha_high = pd.concat([high, ha_open, ha_close], axis=1).max(axis=1)
+    ha_low = pd.concat([low, ha_open, ha_close], axis=1).min(axis=1)
+
+    return pd.DataFrame(
+        {"ha_open": ha_open, "ha_high": ha_high, "ha_low": ha_low, "ha_close": ha_close},
+        index=df.index,
+    )
+
+
+# === Volume-Weighted Average Price (VWAP) ===
+
+
+def vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Anchored VWAP — volume-weighted average price over a rolling window.
+
+    VWAP = cumulative(P*V) / cumulative(V) over `period` bars.
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close, volume].
+        period: Rolling window for VWAP calculation.
+
+    Returns:
+        pd.Series of VWAP values, same index as input.
+    """
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv = typical_price * df["volume"]
+    vwap_val = pv.rolling(period).sum() / df["volume"].rolling(period).sum()
+    return vwap_val
