@@ -826,3 +826,89 @@ def force_index(
     raw_fi = close.diff() * volume
     smoothed = raw_fi.ewm(span=period, adjust=False).mean()
     return smoothed
+
+
+# === Money Flow Index (MFI) ===
+
+
+def mfi(
+    df: pd.DataFrame,
+    period: int = 14,
+) -> pd.Series:
+    """Money Flow Index — volume-weighted RSI oscillator (0-100).
+
+    MFI incorporates both price change direction AND volume magnitude
+    into a normalized oscillator.  Typical Price = (H+L+C)/3 is multiplied
+    by volume to get Money Flow; positive/negative money flows are summed
+    over the period to compute the Money Ratio.
+
+    Reference: Gene Quong & Avrum Soudack (1989).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close, volume].
+        period: Lookback period (default 14).
+
+    Returns:
+        pd.Series of MFI values in [0, 100], same index as df.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+
+    # Typical Price
+    typical_price = (high + low + close) / 3.0
+
+    # Raw Money Flow = Typical Price × Volume
+    raw_money_flow = typical_price * volume
+
+    # Money flow direction: positive when TP rises, negative when TP falls
+    tp_diff = typical_price.diff()
+
+    positive_flow = raw_money_flow.where(tp_diff > 0, 0.0)
+    negative_flow = raw_money_flow.where(tp_diff < 0, 0.0)
+
+    pos_sum = positive_flow.rolling(period).sum()
+    neg_sum = negative_flow.rolling(period).sum()
+
+    money_ratio = pos_sum / neg_sum.replace(0, np.nan)
+    mfi_val = 100.0 - (100.0 / (1.0 + money_ratio))
+
+    return mfi_val
+
+
+# === Chaikin Money Flow (CMF) ===
+
+
+def cmf(
+    df: pd.DataFrame,
+    period: int = 21,
+) -> pd.Series:
+    """Chaikin Money Flow — volume-weighted accumulation/distribution indicator.
+
+    CMF measures buying/selling pressure by accumulating the Chaikin A/D
+    formula over N periods: CMF = sum(AD_t) / sum(Volume_t) for t in [t-N+1, t].
+    AD_t = ((Close-Low) - (High-Close)) / (High-Low) × Volume_t.
+
+    Positive CMF indicates accumulation (net buying pressure);
+    negative CMF indicates distribution (net selling pressure).
+
+    Reference: Marc Chaikin (1980s).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close, volume].
+        period: Lookback period for sum (default 21).
+
+    Returns:
+        pd.Series of CMF values roughly in [-1, +1], same index as df.
+    """
+    high, low, close, volume = df["high"], df["low"], df["close"], df["volume"]
+
+    # Money Flow Multiplier
+    bar_range = (high - low).replace(0, np.nan)
+    mfm = ((close - low) - (high - close)) / bar_range
+
+    # Money Flow Volume = MFM × Volume
+    mfv = mfm * volume
+
+    # CMF = sum(MFV, N) / sum(Volume, N)
+    cmf_val = mfv.rolling(period).sum() / volume.rolling(period).sum()
+
+    return cmf_val
