@@ -914,6 +914,41 @@ def cmf(
     return cmf_val
 
 
+# === CCI (Commodity Channel Index) ===
+
+
+def cci(df: pd.DataFrame, period: int = 20, constant: float = 0.015) -> pd.Series:
+    """Commodity Channel Index — normalized momentum oscillator.
+
+    CCI = (TP - SMA(TP, N)) / (constant × mean_absolute_deviation(TP, N))
+
+    CCI measures how far price has deviated from its statistical mean in
+    units of mean absolute deviation.  Unlike RSI (fixed 0-100 range),
+    CCI self-scales, making it naturally adaptive across timeframes and
+    volatility regimes.
+
+    Typical thresholds: +100 (overbought), -100 (oversold).
+    ~70-80% of values fall within ±100.
+
+    Reference: Donald Lambert (1980).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close].
+        period: Lookback period for SMA and MAD (default 20).
+        constant: Scaling constant (default 0.015, Lambert's standard).
+
+    Returns:
+        pd.Series of CCI values, same index as df.
+    """
+    high, low, close = df["high"], df["low"], df["close"]
+    tp = (high + low + close) / 3.0
+    tp_sma = tp.rolling(period).mean()
+    mad = tp.rolling(period).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+    denom = constant * mad
+    cci_val = (tp - tp_sma) / denom.replace(0, np.nan)
+    return cci_val
+
+
 # === Heikin-Ashi Candles ===
 
 
