@@ -1,16 +1,25 @@
 {
   "version": 1,
-  "state": "implement",
+  "state": "backtest",
   "loop_started": "2026-06-26T05:30:49Z",
   "loop_ended": null,
   "date": "2026-06-26",
   "candidates": ["heikin_ashi", "vwap"],
-  "implemented": [],
-  "backtest_queue": [],
+  "implemented": ["heikin_ashi", "vwap"],
+  "backtest_queue": [
+    {"strategy": "research/backtest_heikin_ashi_trend.py", "class": "HeikinAshiTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_heikin_ashi_trend.py", "class": "HeikinAshiTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_heikin_ashi_trend.py", "class": "HeikinAshiTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_heikin_ashi_trend.py", "class": "HeikinAshiTrend", "symbol": "ETH/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_vwap_trend.py", "class": "VWAPTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_vwap_trend.py", "class": "VWAPTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_vwap_trend.py", "class": "VWAPTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_vwap_trend.py", "class": "VWAPTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
+  ],
   "backtest_completed": [],
   "passed": [],
   "close_calls": [],
   "failed": [],
   "error": null,
-  "ticks": 1
+  "ticks": 2
 }
