@@ -1,62 +1,52 @@
-# Strategy Candidate: UltimateOscillatorTrend
+# Candidate 2: Swing Pivot Breakout (Loop 19)
 
-**Generated:** 2026-06-26
-**Source:** Web Search — Ultimate Oscillator by Larry Williams (1985), multi-timeframe momentum composite designed to reduce false divergences
+**Date:** 2026-06-26
+**Source:** GitHub trending — fractal/ZigZag pattern detection
+**Loop:** 19
 
-## Strategy Concept
+## Concept
 
-Ultimate Oscillator (UO) combines three timeframes (7, 14, 28 periods) with weighted averaging (4× short + 2× medium + 1× long / 7). This multi-timeframe construction was designed specifically to solve the problem of false divergence signals in single-timeframe oscillators (RSI, Stochastic). The strategy enters long when UO crosses above 50 AND close > EMA200 (uptrend filter). Exit on reverse UO cross below 50. Two conditions total. Unlike CMO (sum-based) and Stochastic (smoothed %K/%D), UO's weighted multi-timeframe approach may provide more robust signals on both 1h and 4h.
+Price action-based swing pivot detection — the simplest form of market structure analysis. A swing high occurs when a bar's high is the highest of the surrounding N bars; a swing low when a bar's low is the lowest. Price breaking above a swing high or below a swing low signals a structural shift — the market is making new extremes, indicating trend continuation or reversal.
 
-## Pseudocode
+This is breakout-based (not oscillator/crossover) → should work on 4h (proven family of entries).
 
-```
-uo = ultimate_oscillator(high, low, close, short=7, medium=14, long=28)
-trend_filter = close > EMA(close, period=200)
+## Entry Logic
 
-signal = 0
-if uo crosses_above 50 and trend_filter:
-    signal = 1  # long
-elif uo crosses_below 50 and not trend_filter:
-    signal = -1  # short
-```
+1. **Swing pivot breakout**: Price high > previous N-bar swing high (long) OR price low < previous N-bar swing low (short)
+   - Pivot detection: peak = bar i is highest high in [i-N, i+N]; trough = bar i is lowest low in [i-N, i+N]
+   - No look-ahead bias — pivot identified only after N bars confirm it (i-N...i+N window, entry at next bar after confirmation)
+2. **Close direction confirmation**: close > previous close (long) OR close < previous close (short)
+   - Simple direction filter — not an AND gate, selects direction of the bar that breached
+   - Exactly 2 AND conditions total
 
-## Expected Indicators
+## Exit Logic
 
-- [ ] UO — Ultimate Oscillator (new to signals.py)
-- [x] EMA (already in signals.py)
+- Opposite direction signal (bearish breakout closes long; bullish breakout closes short)
+- OR trailing stop at 2× ATR(14) for risk management
+
+## Why This Should Work
+
+- **Breakout-based**: Proven family for 4h viability (Dual Thrust: 4/4 pass, BB %B: 4/4 pass, Range Expansion: 4/4 pass)
+- **Pure price action**: No smoothing, no adaptive delay, no mathematical transformation — just structural price levels
+- **Novel direction**: Swing pivot detection has never been tested in 18 loops. All previous breakouts used channels (Donchian, BB, Keltner) or 1-bar ranges (InsideBar). Structural pivot levels are fundamentally different — they represent market-agreed support/resistance.
+- **2 conditions**: Clean template, fast signal generation
+
+## Expected Trade Count
+
+- BTC 1h: 80-150 trades (pivot breakouts fire on structural breaks)
+- BTC 4h: 35-60 trades (breakout-based, proven 4h viability)
+- ETH 1h: 70-130 trades
+- ETH 4h: 30-50 trades (breakout entry avoids 4h oscillator scarcity)
 
 ## Parameters
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| uo_short | 5-10 | 7 | Short period (weight 4) |
-| uo_medium | 10-20 | 14 | Medium period (weight 2) |
-| uo_long | 20-35 | 28 | Long period (weight 1) |
-| trend_period | 100-300 | 200 | EMA trend filter period |
+- `pivot_window=5` (N bars on each side for pivot detection → 11 bar window total)
+- `use_trailing_stop=true`
+- `trailing_stop_atr=14`
+- `trailing_stop_mult=2.0`
 
-## Test Pairs & Timeframes
+## Risk Assessment
 
-- Pairs: BTC/USDT, ETH/USDT
-- Timeframes: 1h, 4h
-
-## Expected Performance Range
-
-| Metric | Min | Target | Reason |
-|--------|-----|--------|--------|
-| Sharpe | >0.3 | >0.5 | Multi-timeframe weighted = fewer false signals than single-period oscillators |
-| MaxDD | <40% | <30% | Trend filter prevents counter-trend entries |
-| Win Rate | >40% | >50% | UO at 50 centerline = balanced entry threshold |
-
-## References
-
-- [Ultimate Oscillator — Larry Williams](https://www.investopedia.com/terms/u/ultimateoscillator.asp)
-- [Ultimate Oscillator on StockCharts](https://school.stockcharts.com/doku.php?id=technical_indicators:ultimate_oscillator)
-
-## Implementation Notes
-
-- Use `DEFAULT_PARAMS` dict, never hardcode
-- Signal convention: 1=long, -1=short, 0=flat
-- Return Series same length as input DataFrame
-- Add UO to `cryptoquant/strategy/signals.py` — formula: BP = close - min(low, prev_close); TR = max(high, prev_close) - min(low, prev_close); avg7 = sum(BP,7)/sum(TR,7); avg14 = ...; avg28 = ...; UO = 100 * (4*avg7 + 2*avg14 + avg28) / 7
-- Use `self.preprocess(df)` for validation
-- min_bars = uo_long + 2 ≈ 30
+- Low-moderate — breakout-based. Risk is pivot_window sensitivity: too small = noise pivots, too large = too few pivots.
+- ETH risk is lower than oscillator strategies (breakout entries don't suffer the same OOS regime problem).
+- 4h should work — structural levels are arguably more meaningful on higher timeframes.

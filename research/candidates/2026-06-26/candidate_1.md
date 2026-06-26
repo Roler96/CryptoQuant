@@ -1,64 +1,48 @@
-# Strategy Candidate: HMATrend
+# Candidate 1: Williams %R Trend (Loop 19)
 
-**Generated:** 2026-06-26
-**Source:** Web Search — Hull Moving Average by Alan Hull (2005), designed to eliminate lag while preserving smoothness
+**Date:** 2026-06-26
+**Source:** GitHub trending — oscillator-based strategies
+**Loop:** 19
 
-## Strategy Concept
+## Concept
 
-Hull Moving Average (HMA) uses weighted moving averages with a square-root smoothing period to achieve near-zero lag compared to traditional EMAs. The strategy enters long when HMA(20) crosses above HMA(50) AND bar range exceeds 1.5× ATR(14) (expansion confirmation). Exit on reverse crossover. Same ATR expansion filter proven across Loops 5, 6, 11 — but paired with a super-fast MA that avoids the lag problem documented with AO (34-bar smoothing killed signal timeliness in Loop 13).
+Williams %R is a normalized momentum oscillator (-100 to 0) measuring where close sits relative to high-low range over N periods. Unlike Stochastic (which uses %K/%D smoothing with Wilders), %R gives a raw, unsmoothed reading — faster than Stochastic, closer to CCI in responsiveness.
 
-## Pseudocode
+## Entry Logic
 
-```
-fast_hma = HMA(close, period=20)
-slow_hma = HMA(close, period=50)
-bar_range = high - low
-atr_expansion = bar_range > 1.5 * ATR(14)
+1. **%R midline crossover**: %R(14) crosses above -50 = bullish; crosses below -50 = bearish
+   - Midline cross generates more signals than extreme thresholds (-20/-80)
+   - Normalized -100 to 0 scale → works identically across timeframes
+2. **EMA200 trend filter**: close > EMA200 = long only; close < EMA200 = short only
+   - Exactly 2 AND conditions
+   - Trend filter ensures we trade with the prevailing direction
 
-signal = 0
-if fast_hma > slow_hma and atr_expansion:
-    signal = 1  # long
-elif fast_hma < slow_hma and atr_expansion:
-    signal = -1  # short
-```
+## Exit Logic
 
-## Expected Indicators
+- Reverse %R midline cross (bullish→bearish closes long; bearish→bullish closes short)
+- Mechanical, no complexity
 
-- [x] ATR (already in signals.py)
-- [ ] HMA — Hull Moving Average (new to signals.py)
+## Why This Should Work
+
+- **Normalized indicator**: %R is inherently 0-100 scale → same pattern as successful BB %B (4/4 pass)
+- **Fast oscillator**: Midline cross fires more frequently than Stochastic's slow %K/%D → more trades
+- **Not yet tested**: Unlike RSI, Stochastic, CCI, CMO — Williams %R has never been tried in 18 loops
+- **2 conditions**: Clean template, no hidden gates, no smoothing above 20 bars
+
+## Expected Trade Count
+
+- BTC 1h: 120-200 trades (faster than Stochastic at 198)
+- BTC 4h: 35-50 trades (faster midline cross vs Stochastic extreme thresholds)
+- ETH 1h: 100-180 trades
+- ETH 4h: 30-40 trades
 
 ## Parameters
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| hma_fast | 10-30 | 20 | Fast HMA period |
-| hma_slow | 30-80 | 50 | Slow HMA period |
-| atr_period | 10-20 | 14 | ATR period |
-| expansion_mult | 1.0-2.5 | 1.5 | ATR expansion multiplier |
+- `wr_period=14` (standard Williams)
+- `trend_period=200` (EMA200, standard)
+- `entry_threshold=-50` (midline)
 
-## Test Pairs & Timeframes
+## Risk Assessment
 
-- Pairs: BTC/USDT, ETH/USDT
-- Timeframes: 1h, 4h
-
-## Expected Performance Range
-
-| Metric | Min | Target | Reason |
-|--------|-----|--------|--------|
-| Sharpe | >0.3 | >0.5 | HMA near-zero lag + proven ATR expansion = high probability |
-| MaxDD | <40% | <30% | ATR expansion filters whipsaw chop |
-| Win Rate | >40% | >50% | Fast MA crossover with volatility filter |
-
-## References
-
-- [Hull Moving Average — Alan Hull](https://alanhull.com/hull-moving-average)
-- [HMA vs EMA: Zero-Lag Comparison](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/hull-moving-average)
-
-## Implementation Notes
-
-- Use `DEFAULT_PARAMS` dict, never hardcode
-- Signal convention: 1=long, -1=short, 0=flat
-- Return Series same length as input DataFrame
-- Add HMA to `cryptoquant/strategy/signals.py` — formula: WMA(2*WMA(n/2) - WMA(n), sqrt(n))
-- Use `self.preprocess(df)` for validation
-- min_bars = max(hma_slow, atr_period) + 5 ≈ 55
+- Medium — midline cross may be whippy on 1h. Consider adding ATR expansion or testing period=20 for stability.
+- ETH 1h OOS risk (standard for all momentum strategies) — but faster oscillator may adapt better than smoothed ones.

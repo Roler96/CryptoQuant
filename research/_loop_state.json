@@ -1,10 +1,10 @@
 {
   "version": 1,
   "state": "implement",
-  "loop_started": "2026-06-26T11:01:03Z",
+  "loop_started": "2026-06-26T17:32:00Z",
   "loop_ended": null,
   "date": "2026-06-26",
-  "candidates": ["hmatrend", "ultimate_oscillator_trend"],
+  "candidates": ["kst_trend", "trix_trend"],
   "implemented": [],
   "backtest_queue": [],
   "backtest_completed": [],

@@ -1307,6 +1307,94 @@ def efficiency_ratio(series: pd.Series, period: int = 20) -> pd.Series:
     return er.clip(0.0, 1.0)
 
 
+# === KST (Know Sure Thing) ===
+
+
+def kst(
+    close: pd.Series,
+    roc1: int = 10, roc2: int = 15, roc3: int = 20, roc4: int = 30,
+    ma1: int = 10, ma2: int = 10, ma3: int = 10, ma4: int = 15,
+    signal_period: int = 9,
+) -> pd.DataFrame:
+    """KST (Know Sure Thing) — multi-timeframe momentum oscillator.
+
+    Sums four Rate-of-Change measurements smoothed to their appropriate
+    timescales into a single composite oscillator.  Crossovers of KST vs
+    its signal line produce entry/exit triggers.
+
+    Formula:
+        ROC(n)  = (close - close.shift(n)) / close.shift(n) * 100
+        KST     = SMA(ROC(roc1), ma1) + SMA(ROC(roc2), ma2)
+                + SMA(ROC(roc3), ma3) + SMA(ROC(roc4), ma4)
+
+    Reference: Martin Pring — "Martin Pring's Introduction to Technical
+    Analysis" (1998).
+
+    Args:
+        close: Close price series.
+        roc1..roc4: ROC periods (default 10, 15, 20, 30).
+        ma1..ma4: Smoothing periods for each ROC (default 10, 10, 10, 15).
+        signal_period: SMA period for the KST signal line (default 9).
+
+    Returns:
+        pd.DataFrame with columns [kst, signal], same index as close.
+    """
+    def _roc(series: pd.Series, period: int) -> pd.Series:
+        return (series - series.shift(period)) / series.shift(period).replace(0, np.nan) * 100
+
+    roc_vals = [
+        _roc(close, roc1),
+        _roc(close, roc2),
+        _roc(close, roc3),
+        _roc(close, roc4),
+    ]
+    kst_vals = (
+        sma(roc_vals[0], ma1)
+        + sma(roc_vals[1], ma2)
+        + sma(roc_vals[2], ma3)
+        + sma(roc_vals[3], ma4)
+    )
+    signal_line = sma(kst_vals, signal_period)
+
+    return pd.DataFrame({"kst": kst_vals, "signal": signal_line}, index=close.index)
+
+
+# === TRIX (Triple Exponential Average) ===
+
+
+def trix(close: pd.Series, period: int = 15, signal_period: int = 9) -> pd.DataFrame:
+    """TRIX (Triple Exponential Average) — triple-smoothed rate-of-change oscillator.
+
+    Applies EMA smoothing three times before computing the 1-bar rate of
+    change, creating a very smooth oscillator that nonetheless measures
+    pure momentum (first derivative).  Extremely noise-resistant while
+    preserving signal timeliness.
+
+    Formula:
+        EMA1 = EMA(close, period)
+        EMA2 = EMA(EMA1, period)
+        EMA3 = EMA(EMA2, period)
+        TRIX = (EMA3 - EMA3.shift(1)) / EMA3.shift(1) * 100
+
+    Reference: Jack Hutson — "Good Trix" (Stocks & Commodities, 1983).
+
+    Args:
+        close: Close price series.
+        period: TRIX period (default 15, Hutson standard).
+        signal_period: SMA period for TRIX signal line (default 9).
+
+    Returns:
+        pd.DataFrame with columns [trix, signal], same index as close.
+    """
+    ema1 = ema(close, period)
+    ema2 = ema(ema1, period)
+    ema3 = ema(ema2, period)
+    trix_val = (ema3 - ema3.shift(1)) / ema3.shift(1).replace(0, np.nan) * 100
+    signal_line = sma(trix_val, signal_period)
+
+    return pd.DataFrame({"trix": trix_val, "signal": signal_line}, index=close.index)
+
+
 # === Williams %R ===
 
 
