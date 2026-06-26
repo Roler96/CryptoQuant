@@ -1,44 +1,38 @@
-# Strategy Candidate: Elder Ray Trend
+# Strategy Candidate: UltimateOscillatorTrend
 
 **Generated:** 2026-06-26
-**Source:** GitHub Trending — Dr. Alexander Elder "Trading for a Living" / stratbase.ai
+**Source:** Web Search — Ultimate Oscillator by Larry Williams (1985), multi-timeframe momentum composite designed to reduce false divergences
 
 ## Strategy Concept
 
-Elder Ray Index 由 Bull Power (High - EMA13) 和 Bear Power (Low - EMA13) 组成，直接测量多空双方推动价格远离共识值的能力。入场：Bull Power 从负转正（多头掌控）AND 价格 > EMA200（趋势向上）；反之亦然。仅 2 个 AND 条件。不同于 Force Index（volume × price_change），Elder Ray 使用裸价格高/低点 vs EMA，信号频率应高于 Force Index（Loop 10: 79-81 trades）且无需成交量数据。
+Ultimate Oscillator (UO) combines three timeframes (7, 14, 28 periods) with weighted averaging (4× short + 2× medium + 1× long / 7). This multi-timeframe construction was designed specifically to solve the problem of false divergence signals in single-timeframe oscillators (RSI, Stochastic). The strategy enters long when UO crosses above 50 AND close > EMA200 (uptrend filter). Exit on reverse UO cross below 50. Two conditions total. Unlike CMO (sum-based) and Stochastic (smoothed %K/%D), UO's weighted multi-timeframe approach may provide more robust signals on both 1h and 4h.
 
 ## Pseudocode
 
 ```
-# Indicators:
-bull_power = high - ema(close, 13)
-bear_power = low - ema(close, 13)
-trend_ema = ema(close, 200)
+uo = ultimate_oscillator(high, low, close, short=7, medium=14, long=28)
+trend_filter = close > EMA(close, period=200)
 
-# Entry (2 conditions):
-long_entry  = (bull_power > 0) AND (bull_power.shift(1) <= 0) AND (close > trend_ema)
-short_entry = (bear_power < 0) AND (bear_power.shift(1) >= 0) AND (close < trend_ema)
-
-# Exit:
-long_exit  = bull_power < 0  # Bulls lose control
-short_exit = bear_power > 0  # Bears lose control
-
-# Exit priority: stop_loss > take_profit > time_exit > signal_reverse
+signal = 0
+if uo crosses_above 50 and trend_filter:
+    signal = 1  # long
+elif uo crosses_below 50 and not trend_filter:
+    signal = -1  # short
 ```
 
 ## Expected Indicators
 
-- [x] EMA (via `ema()` in signals.py)
-- [ ] Elder Ray Bull/Bear Power — needs implementation in signals.py: `elder_ray(df, period=13)`
+- [ ] UO — Ultimate Oscillator (new to signals.py)
+- [x] EMA (already in signals.py)
 
 ## Parameters
 
 | Parameter | Range | Default | Description |
 |-----------|-------|---------|-------------|
-| elder_period | 8-21 | 13 | EMA period for Bull/Bear Power baseline |
+| uo_short | 5-10 | 7 | Short period (weight 4) |
+| uo_medium | 10-20 | 14 | Medium period (weight 2) |
+| uo_long | 20-35 | 28 | Long period (weight 1) |
 | trend_period | 100-300 | 200 | EMA trend filter period |
-| trailing_stop_atr | 1.5-3.0 | 2.0 | ATR multiplier for trailing stop |
-| atr_period | 10-20 | 14 | ATR period for stop |
 
 ## Test Pairs & Timeframes
 
@@ -49,24 +43,20 @@ short_exit = bear_power > 0  # Bears lose control
 
 | Metric | Min | Target | Reason |
 |--------|-----|--------|--------|
-| Sharpe | >0.3 | >1.0 | Similar to Force Index (Sharpe 1.40-2.40) but uses raw price not volume-weighted |
-| MaxDD | <40% | <25% | Zero-cross entry on raw price wicks — may be whippy on 1h ETH |
-| Win Rate | >40% | >45% | Bull/Bear Power zero-cross is fast — expect moderate win rate compensated by favorable win/loss ratio |
-| Trades | 60-250 | 100-180 | Raw price vs EMA generates more signals than smoothed indicators |
+| Sharpe | >0.3 | >0.5 | Multi-timeframe weighted = fewer false signals than single-period oscillators |
+| MaxDD | <40% | <30% | Trend filter prevents counter-trend entries |
+| Win Rate | >40% | >50% | UO at 50 centerline = balanced entry threshold |
 
 ## References
 
-- [Elder Ray Guide: Bull & Bear Power Indicator Explained — StratBase.ai](https://stratbase.ai/en/blog/elder-ray-bull-bear-power)
-- [Elder-Ray Indicator: Bull Power & Bear Power Strategy — GoCharting](https://gocharting.com/docs/charting/technical-indicator/momentum/elder-ray-indicator)
-- [Elder Ray Index Bull and Bear Power Strategy — TrendsAndBreakouts](https://trendsandbreakouts.com/elder-ray-index)
+- [Ultimate Oscillator — Larry Williams](https://www.investopedia.com/terms/u/ultimateoscillator.asp)
+- [Ultimate Oscillator on StockCharts](https://school.stockcharts.com/doku.php?id=technical_indicators:ultimate_oscillator)
 
 ## Implementation Notes
 
 - Use `DEFAULT_PARAMS` dict, never hardcode
 - Signal convention: 1=long, -1=short, 0=flat
 - Return Series same length as input DataFrame
-- Add `elder_ray()` to `cryptoquant/strategy/signals.py` returning DataFrame with [bull_power, bear_power]
+- Add UO to `cryptoquant/strategy/signals.py` — formula: BP = close - min(low, prev_close); TR = max(high, prev_close) - min(low, prev_close); avg7 = sum(BP,7)/sum(TR,7); avg14 = ...; avg28 = ...; UO = 100 * (4*avg7 + 2*avg14 + avg28) / 7
 - Use `self.preprocess(df)` for validation
-- min_bars = max(elder_period, trend_period, atr_period) + 50 ≤ 300
-- Bull Power = High - EMA(close, period); Bear Power = Low - EMA(close, period)
-- Entry is NOT just Bull Power > 0 — must be a CROSS from negative to positive to avoid being always-in
+- min_bars = uo_long + 2 ≈ 30

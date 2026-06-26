@@ -1,35 +1,16 @@
 {
   "version": 1,
-  "state": "done",
-  "loop_started": "2026-06-26T09:16:18Z",
-  "loop_ended": "2026-06-26T10:00:00Z",
+  "state": "implement",
+  "loop_started": "2026-06-26T11:01:03Z",
+  "loop_ended": null,
   "date": "2026-06-26",
-  "candidates": ["vortex_trend", "linreg_trend"],
-  "implemented": ["vortex_trend", "linreg_trend"],
+  "candidates": ["hmatrend", "ultimate_oscillator_trend"],
+  "implemented": [],
   "backtest_queue": [],
-  "backtest_completed": [
-    {"strategy": "research/backtest_vortex_trend.py", "class": "VortexTrend", "symbol": "BTC/USDT", "timeframe": "1h", "result": "research/results/2026-06-26/vortex_trend_BTC_USDT_1h.json"},
-    {"strategy": "research/backtest_vortex_trend.py", "class": "VortexTrend", "symbol": "BTC/USDT", "timeframe": "4h", "result": "research/results/2026-06-26/vortex_trend_BTC_USDT_4h.json"},
-    {"strategy": "research/backtest_vortex_trend.py", "class": "VortexTrend", "symbol": "ETH/USDT", "timeframe": "1h", "result": "research/results/archive/vortex_trend_ETH_USDT_1h.json"},
-    {"strategy": "research/backtest_vortex_trend.py", "class": "VortexTrend", "symbol": "ETH/USDT", "timeframe": "4h", "result": "research/results/2026-06-26/vortex_trend_ETH_USDT_4h.json"},
-    {"strategy": "research/backtest_linreg_trend.py", "class": "LinRegTrend", "symbol": "BTC/USDT", "timeframe": "1h", "result": "research/results/archive/linreg_trend_BTC_USDT_1h.json"},
-    {"strategy": "research/backtest_linreg_trend.py", "class": "LinRegTrend", "symbol": "BTC/USDT", "timeframe": "4h", "result": "research/results/archive/linreg_trend_BTC_USDT_4h.json"},
-    {"strategy": "research/backtest_linreg_trend.py", "class": "LinRegTrend", "symbol": "ETH/USDT", "timeframe": "1h", "result": "research/results/archive/linreg_trend_ETH_USDT_1h.json"},
-    {"strategy": "research/backtest_linreg_trend.py", "class": "LinRegTrend", "symbol": "ETH/USDT", "timeframe": "4h", "result": "research/results/archive/linreg_trend_ETH_USDT_4h.json"}
-  ],
-  "passed": [
-    {"strategy": "VortexTrend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 1.98, "trades": 208, "maxdd": 0.81},
-    {"strategy": "VortexTrend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.83, "trades": 36, "maxdd": 0.56},
-    {"strategy": "VortexTrend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 0.88, "trades": 37, "maxdd": 2.31}
-  ],
+  "backtest_completed": [],
+  "passed": [],
   "close_calls": [],
-  "failed": [
-    {"strategy": "VortexTrend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": -0.10, "reason": "sharpe=-0.10 < 0.5"},
-    {"strategy": "LinRegTrend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": -0.48, "reason": "sharpe=-0.48 < 0.5"},
-    {"strategy": "LinRegTrend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 0.51, "reason": "trades=20 < 30"},
-    {"strategy": "LinRegTrend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 0.06, "reason": "sharpe=0.06 < 0.5"},
-    {"strategy": "LinRegTrend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 0.99, "reason": "trades=18 < 30"}
-  ],
+  "failed": [],
   "error": null,
-  "ticks": 5
+  "ticks": 1
 }

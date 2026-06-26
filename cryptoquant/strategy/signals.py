@@ -1120,3 +1120,102 @@ def linreg(
     return pd.DataFrame(
         {"slope": slope_arr, "r2": r2_arr}, index=series.index
     )
+
+
+# === Hull Moving Average (HMA) ===
+
+
+def hma(series: pd.Series, period: int) -> pd.Series:
+    """Hull Moving Average — zero-lag moving average.
+
+    HMA uses weighted moving averages with a square-root smoothing
+    period to achieve near-zero lag compared to traditional EMAs.
+
+    Formula: HMA = WMA(2 * WMA(close, n/2) - WMA(close, n), sqrt(n))
+
+    Reference: Alan Hull (2005), "The Hull Moving Average".
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback period for the HMA.
+
+    Returns:
+        pd.Series of HMA values, same index as input.
+    """
+    half = int(period / 2)
+    sqrt_n = int(np.sqrt(period))
+
+    if half < 1 or sqrt_n < 1:
+        raise ValueError(f"HMA period {period} is too small (need >= 4)")
+
+    wma_half = wma(series, half)
+    wma_full = wma(series, period)
+
+    raw_hma = 2.0 * wma_half - wma_full
+
+    return wma(raw_hma, sqrt_n)
+
+
+# === Ultimate Oscillator ===
+
+
+def ultimate_oscillator(
+    df: pd.DataFrame,
+    short: int = 7,
+    medium: int = 14,
+    long: int = 28,
+) -> pd.Series:
+    """Ultimate Oscillator — multi-timeframe momentum composite.
+
+    Combines three timeframes with weighted averaging
+    (4× short + 2× medium + 1× long / 7) to reduce false divergences
+    present in single-timeframe oscillators like RSI.
+
+    Formula:
+        BP = close - min(low, prev_close)
+        TR = max(high, prev_close) - min(low, prev_close)
+        avg7 = sum(BP,7) / sum(TR,7)
+        UO = 100 × (4×avg7 + 2×avg14 + 1×avg28) / 7
+
+    Reference: Larry Williams (1985),
+    "The Ultimate Oscillator" (Stocks & Commodities).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close].
+        short: Short period (default 7, weight 4).
+        medium: Medium period (default 14, weight 2).
+        long: Long period (default 28, weight 1).
+
+    Returns:
+        pd.Series of UO values in [0, 100], same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    prev_close = close.shift(1).fillna(close)
+
+    # Buying Pressure and True Range
+    bp = close - pd.concat([low, prev_close], axis=1).min(axis=1)
+    tr = (
+        pd.concat([high, prev_close], axis=1).max(axis=1)
+        - pd.concat([low, prev_close], axis=1).min(axis=1)
+    )
+
+    # Rolling sums for each timeframe
+    sum_bp_short = bp.rolling(short).sum()
+    sum_tr_short = tr.rolling(short).sum()
+    sum_bp_med = bp.rolling(medium).sum()
+    sum_tr_med = tr.rolling(medium).sum()
+    sum_bp_long = bp.rolling(long).sum()
+    sum_tr_long = tr.rolling(long).sum()
+
+    # Averages (with NaN-safe division)
+    avg_short = sum_bp_short / sum_tr_short.replace(0, np.nan)
+    avg_med = sum_bp_med / sum_tr_med.replace(0, np.nan)
+    avg_long = sum_bp_long / sum_tr_long.replace(0, np.nan)
+
+    # Weighted composite: 4×short + 2×med + 1×long / 7
+    numerator = 4.0 * avg_short + 2.0 * avg_med + 1.0 * avg_long
+    uo = 100.0 * numerator / 7.0
+
+    return uo
