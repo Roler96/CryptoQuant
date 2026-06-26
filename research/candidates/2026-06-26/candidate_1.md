@@ -1,46 +1,69 @@
-# Candidate: Dual Thrust Breakout
+# Strategy Candidate: CCI Trend
 
-**Date:** 2026-06-26
-**Source:** GitHub trending — je-suis-tm/quant-trading (Dual Thrust strategy)
-**Type:** Breakout trend-following
+**Generated:** 2026-06-26
+**Source:** GitHub Trending — AlphaForgeBench / je-suis-tm/quant-trading
 
-## Rationale
+## Strategy Concept
 
-Dual Thrust is a classic breakout strategy developed by Michael Chalek in the 1980s. It uses the N-day range (high-low) to set upper and lower breakout bounds. Unlike Donchian channels (which track rolling high/low), Dual Thrust uses a lookback range multiplied by coefficients to set the bounds — making it self-normalizing to recent volatility.
+CCI (Commodity Channel Index) 是归一化动量震荡指标，测量价格偏离统计均值的程度。不同于 RSI 的固定 0-100 范围，CCI 自缩放（以 mean absolute deviation 为单位），天然跨时间段自适应。入场：CCI 穿越 +100（做多）/ -100（做空）。出场：CCI 反向穿越 ±100。加 EMA200 趋势过滤 — 恰好 2 个 AND 条件。CCI 的归一化特性使其类似 Loop 11 的 %B，理论上应能跨 1h/4h 工作。
 
-**Why now:** After 12 loops, the research frontier is:
-1. 4h breakout strategies (only breakout-based entries work on 4h)
-2. ETH-resistant strategies
-3. Range-normalized indicators (like %B success in Loop 11)
-
-Dual Thrust satisfies all three:
-- It's a breakout strategy → should generate trades on 4h
-- The range multiplier adapts to volatility → normalized entry
-- 2 conditions: price > upper bound + EMA200 trend filter
-
-## Strategy Design
+## Pseudocode
 
 ```
-Entry (Long):  close > Open + K1 × Range(N) AND close > EMA(200)
-Entry (Short): close < Open - K2 × Range(N) AND close < EMA(200)
-Exit:          price crosses opposite bound OR signal reverses
+# Entry (2 conditions, both must be true):
+long_entry  = cci > +100 AND close > ema200
+short_entry = cci < -100 AND close < ema200
+
+# Exit (any of):
+long_exit  = cci < +100  # CCI falls back below +100
+short_exit = cci > -100  # CCI rises back above -100
+
+# Exit priority: stop_loss > take_profit > time_exit > signal_reverse
 ```
 
-- **Range(N)** = Max(HH - LC, HC - LL) over N bars (Dual Thrust original)
-- **K1 = 0.5** (upper coefficient), **K2 = 0.5** (lower coefficient)
-- **N = 20** (lookback period)
-- **EMA200** trend filter
+## Expected Indicators
 
-## Anti-Pattern Check
+- [x] EMA200 (via `ema()` in signals.py)
+- [ ] CCI — needs implementation in signals.py: `cci(df, period=20, constant=0.015)`
 
-- ✅ 2 conditions (breakout + trend filter) — not ≥3
-- ✅ Breakout-based → viable on 4h (unlike oscillator crossovers)
-- ✅ No CLV, candle patterns, volume percentiles, ADX, hysteresis
-- ✅ Range-normalized → self-adapting to volatility
-- ✅ Not tested before — different from Donchian, InsideBar, BB, Channel
+## Parameters
 
-## Expected Outcome
+| Parameter | Range | Default | Description |
+|-----------|-------|---------|-------------|
+| cci_period | 10-30 | 20 | CCI lookback period |
+| cci_entry_long | 50-200 | 100 | CCI threshold for long entry |
+| cci_entry_short | -200 to -50 | -100 | CCI threshold for short entry |
+| trend_period | 100-300 | 200 | EMA trend filter period |
+| trailing_stop_atr | 1.5-3.0 | 2.0 | ATR multiplier for trailing stop |
+| atr_period | 10-20 | 14 | ATR period for stop |
 
-- Should generate 30-80 trades on 4h (breakout pattern), 80-200 on 1h
-- BTC expected to perform better than ETH (consistent pattern)
-- Risk: range normalization may be insufficient for ETH's fragmented liquidity
+## Test Pairs & Timeframes
+
+- Pairs: BTC/USDT, ETH/USDT
+- Timeframes: 1h, 4h
+
+## Expected Performance Range
+
+| Metric | Min | Target | Reason |
+|--------|-----|--------|--------|
+| Sharpe | >0.3 | >0.8 | CCI is normalized like %B (which got Sharpe 2.90), but simpler — threshold crossing vs band pierce |
+| MaxDD | <40% | <25% | Normalized indicator self-adapts to volatility, reducing large drawdowns |
+| Win Rate | >40% | >50% | CCI >100/< -100 filters noise — should have better win rate than raw momentum |
+| Trades | 50-200 | 80-150 | Normalized indicator should generate consistent signal density across timeframes |
+
+## References
+
+- [AlphaForgeBench — Benchmarking Trading Strategy Design](https://arxiv.org/html/2602.18481v2)
+- [CCI Indicator — TradingView](https://www.tradingview.com/scripts/commoditychannelindex/)
+- [je-suis-tm/quant-trading — CCI Strategy](https://github.com/je-suis-tm/quant-trading)
+
+## Implementation Notes
+
+- Use `DEFAULT_PARAMS` dict, never hardcode
+- Signal convention: 1=long, -1=short, 0=flat
+- Return Series same length as input DataFrame
+- Add `cci()` to `cryptoquant/strategy/signals.py`
+- Use `self.preprocess(df)` for validation
+- CCI formula: CCI = (TP - SMA(TP, N)) / (constant × mean_absolute_deviation(TP, N))
+  where TP = (H + L + C) / 3, constant = 0.015 (standard)
+- min_bars = max(cci_period, trend_period, atr_period) + 50 ≤ 300

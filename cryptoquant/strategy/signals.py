@@ -1015,3 +1015,108 @@ def vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
     pv = typical_price * df["volume"]
     vwap_val = pv.rolling(period).sum() / df["volume"].rolling(period).sum()
     return vwap_val
+
+
+# === Vortex Indicator ===
+
+
+def vortex(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Vortex Indicator — measures trend direction and strength.
+
+    VI+ = sum(|High - Previous Low|) / sum(True Range) over `period` bars
+    VI- = sum(|Low - Previous High|) / sum(True Range) over `period` bars
+
+    A bullish trend is signaled when VI+ > VI- (positive vortex crosses
+    above negative vortex).
+
+    Reference: Etzkorn (2010), "The Vortex Indicator".
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low, close].
+        period: Lookback period for summing vortex movement (default 14).
+
+    Returns:
+        pd.DataFrame with columns [vip, vim], same index as input.
+    """
+    high, low, close = df["high"], df["low"], df["close"]
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    prev_close = close.shift(1)
+
+    # True Range
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    # Vortex movement
+    vm_plus = (high - prev_low).abs()
+    vm_minus = (low - prev_high).abs()
+
+    # Sum over period
+    tr_sum = tr.rolling(period).sum()
+    vip = vm_plus.rolling(period).sum() / tr_sum
+    vim = vm_minus.rolling(period).sum() / tr_sum
+
+    return pd.DataFrame({"vip": vip, "vim": vim}, index=df.index)
+
+
+# === Linear Regression ===
+
+
+def linreg(
+    series: pd.Series, period: int = 30
+) -> pd.DataFrame:
+    """Rolling linear regression — slope and R² over a moving window.
+
+    Computes ordinary least-squares regression of `series` against
+    bar index (x = 0, 1, 2, ..., period-1) over each rolling window.
+
+    Uses bar index as the independent variable (x = range(period))
+    and the series values as the dependent variable (y).
+
+    Args:
+        series: Price or indicator series.
+        period: Rolling window length (default 30).
+
+    Returns:
+        pd.DataFrame with columns [slope, r2], same index as input.
+    """
+    x = np.arange(period, dtype=float)
+    x_mean = x.mean()
+    x_diff = x - x_mean
+    ssx = float((x_diff * x_diff).sum())
+
+    n = len(series)
+    slope_arr = np.full(n, np.nan)
+    r2_arr = np.full(n, np.nan)
+
+    if n < period:
+        return pd.DataFrame({"slope": slope_arr, "r2": r2_arr}, index=series.index)
+
+    values = series.values
+
+    for i in range(period - 1, n):
+        y = values[i - period + 1 : i + 1].astype(float)
+        y_mean = y.mean()
+        y_diff = y - y_mean
+        sxy = float((x_diff * y_diff).sum())
+        ssy = float((y_diff * y_diff).sum())
+
+        slope_val = sxy / ssx if ssx != 0 else 0.0
+        slope_arr[i] = slope_val
+
+        if ssy == 0.0:
+            r2_arr[i] = 0.0
+        else:
+            y_pred = y_mean + slope_val * x_diff
+            ss_res = float(((y - y_pred) ** 2).sum())
+            r2_arr[i] = 1.0 - ss_res / ssy
+
+    return pd.DataFrame(
+        {"slope": slope_arr, "r2": r2_arr}, index=series.index
+    )
