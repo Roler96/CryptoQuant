@@ -1219,3 +1219,89 @@ def ultimate_oscillator(
     uo = 100.0 * numerator / 7.0
 
     return uo
+
+
+# === Fisher Transform ===
+
+
+def fisher_transform(
+    df: pd.DataFrame,
+    fisher_period: int = 10,
+    signal_period: int = 5,
+) -> pd.DataFrame:
+    """Fisher Transform — Gaussian distribution of price for sharp turning points.
+
+    Converts any price waveform into a Gaussian normal distribution using
+    the inverse hyperbolic tangent transform.  Unlike smoothed oscillators
+    (RSI, Stochastic), Fisher produces sharp, high-amplitude peaks at
+    price reversals — making entry/exit timing more precise.
+
+    Formula:
+        median = (high + low) / 2
+        normalized = 2 * (median - min(median,N)) / (max(median,N) - min(median,N)) - 1
+        fisher = 0.5 * ln((1 + norm) / (1 - norm))
+        signal = EMA(fisher, signal_period)
+
+    Reference: John Ehlers — \"Using the Fisher Transform\"
+    (Stocks & Commodities, Nov 2002).
+
+    Args:
+        df: OHLCV DataFrame with columns [high, low].
+        fisher_period: Lookback for normalization window (default 10).
+        signal_period: EMA smoothing period for signal line (default 5).
+
+    Returns:
+        pd.DataFrame with columns [fisher, signal], same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    median = (high + low) / 2.0
+
+    # Normalize to [-1, 1] range
+    roll_min = median.rolling(fisher_period).min()
+    roll_max = median.rolling(fisher_period).max()
+    denom = (roll_max - roll_min).replace(0, np.nan)
+    normalized = 2.0 * (median - roll_min) / denom - 1.0
+
+    # Clip to avoid ln(0) / ln(∞)
+    normalized = normalized.clip(-0.999, 0.999)
+
+    # Fisher Transform: 0.5 * ln((1+x)/(1-x))
+    fisher = 0.5 * np.log((1.0 + normalized) / (1.0 - normalized))
+
+    # Signal line: EMA of fisher value
+    signal_line = fisher.ewm(span=signal_period, adjust=False).mean()
+
+    return pd.DataFrame(
+        {"fisher": fisher, "signal": signal_line}, index=df.index
+    )
+
+
+# === Kaufman Efficiency Ratio ===
+
+
+def efficiency_ratio(series: pd.Series, period: int = 20) -> pd.Series:
+    """Kaufman Efficiency Ratio — directional noise vs trend measurement.
+
+    ER = |Δprice| / sum(|Δprice_i|) over `period` bars.
+
+    Values range [0, 1]:
+        0 = pure noise (price returns to start after N bars)
+        1 = pure trend (straight line over N bars, zero path overhead)
+
+    Unlike KAMA (which uses ER internally as a smoothing coefficient),
+    this returns ER directly as a standalone metric of trend quality.
+
+    Reference: Perry Kaufman — \"Trading Systems and Methods\" (1998).
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback for ER measurement (default 20).
+
+    Returns:
+        pd.Series of ER values in [0, 1], same index as input.
+    """
+    direction = (series - series.shift(period)).abs()
+    volatility = series.diff().abs().rolling(period).sum()
+    er = direction / volatility.replace(0, np.nan)
+    return er.clip(0.0, 1.0)
