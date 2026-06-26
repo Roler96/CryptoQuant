@@ -1305,3 +1305,38 @@ def efficiency_ratio(series: pd.Series, period: int = 20) -> pd.Series:
     volatility = series.diff().abs().rolling(period).sum()
     er = direction / volatility.replace(0, np.nan)
     return er.clip(0.0, 1.0)
+
+
+# === Williams %R ===
+
+
+def williams_r(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Williams %R — raw normalized momentum oscillator.
+
+    %R = (HighestHigh(period) - Close) / (HighestHigh(period) - LowestLow(period)) * -100
+
+    Unlike Stochastic (which uses %K/%D smoothing), Williams %R is a raw,
+    unsmoothed reading of where close sits within the price range. Values
+    range [-100, 0]: -100 means close at lowest low (oversold), 0 means
+    close at highest high (overbought).
+
+    Faster than Stochastic in detecting regime changes — no Wilder
+    smoothing gate, no %K/%D delay. Midline (-50) cross generates
+    ~2-3× more signals than extreme thresholds (-20/-80).
+
+    Reference: Larry Williams — \"How I Made One Million Dollars Last
+    Year Trading Commodities\" (1979).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close' columns.
+        period: Lookback for range detection (default 14).
+
+    Returns:
+        pd.Series of Williams %R values in [-100, 0], same index as df.
+    """
+    highest = df["high"].rolling(period).max()
+    lowest = df["low"].rolling(period).min()
+    denom = highest - lowest
+    # Avoid division by zero (flat bars)
+    wr = (highest - df["close"]) / denom.replace(0, np.nan) * -100
+    return wr.clip(-100.0, 0.0)
