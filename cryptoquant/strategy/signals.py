@@ -1637,3 +1637,114 @@ def connors_rsi(
 
     crsi = (rsi_close + rsi_streak + pct_rank) / 3.0
     return crsi
+
+
+# === On-Balance Volume (OBV) ===
+
+
+def obv(df: pd.DataFrame) -> pd.Series:
+    """On-Balance Volume — cumulative volume-flow indicator.
+
+    OBV adds volume on up-days and subtracts volume on down-days,
+    measuring whether volume is flowing into or out of the asset.
+
+    Reference: Joseph Granville — "Granville's New Key to Stock
+    Market Profits" (1963).
+
+    Args:
+        df: OHLCV DataFrame with 'close' and 'volume' columns.
+
+    Returns:
+        pd.Series of cumulative OBV values, same index as df.
+    """
+    close = df["close"]
+    volume = df["volume"]
+
+    direction = pd.Series(np.sign(close.diff()), index=df.index).fillna(0)
+    raw_obv = (direction * volume)
+    return raw_obv.cumsum()
+
+
+def obv_sma(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """On-Balance Volume with signal SMA for crossover detection.
+
+    Args:
+        df: OHLCV DataFrame with 'close' and 'volume' columns.
+        period: SMA period on OBV (default 20).
+
+    Returns:
+        pd.DataFrame with columns [obv, signal], same index as df.
+    """
+    obv_val = obv(df)
+    signal_line = sma(obv_val, period)
+    return pd.DataFrame(
+        {"obv": obv_val, "signal": signal_line}, index=df.index
+    )
+
+
+# === Donchian Channel ===
+
+
+def donchian(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """Donchian Channel — N-period highest high / lowest low.
+
+    Args:
+        df: OHLCV DataFrame with 'high' and 'low' columns.
+        period: Lookback period for highs/lows (default 20).
+
+    Returns:
+        pd.DataFrame with columns [upper, lower, middle], same index.
+        Values are shifted by 1 bar to avoid look-ahead bias.
+    """
+    high = df["high"]
+    low = df["low"]
+
+    upper = high.rolling(period).max().shift(1)
+    lower = low.rolling(period).min().shift(1)
+    middle = (upper + lower) / 2.0
+
+    return pd.DataFrame(
+        {"upper": upper, "lower": lower, "middle": middle}, index=df.index
+    )
+
+
+# === Choppiness Index ===
+
+
+def choppiness_index(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Choppiness Index — measures market trending vs. ranging.
+
+    CI = 100 * log10( sum(ATR(1), n) / (HH(n) - LL(n)) ) / log10(n)
+
+    Values: CI < 38.2 → trending, CI > 61.8 → choppy/ranging.
+
+    Reference: E.W. Dreiss — "The Choppiness Index" (S&C, 1993).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close' columns.
+        period: Lookback for ATR sum and HH/LL range (default 14).
+
+    Returns:
+        pd.Series of Choppiness Index values (0-100), same index.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    sum_tr_n = tr.rolling(period).sum()
+    hh_n = high.rolling(period).max()
+    ll_n = low.rolling(period).min()
+    range_n = hh_n - ll_n
+
+    # Avoid division by zero
+    ratio = sum_tr_n / range_n.replace(0, np.nan)
+
+    ci = 100.0 * np.log10(ratio) / np.log10(period)
+    return ci
