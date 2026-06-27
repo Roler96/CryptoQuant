@@ -1,25 +1,25 @@
 {
   "version": 1,
   "state": "backtest",
-  "loop_started": "2026-06-27T14:45:36Z",
+  "loop_started": "2026-06-27T18:45:39Z",
   "loop_ended": null,
   "date": "2026-06-27",
-  "candidates": ["dmi_trend", "zscore_momentum_trend"],
-  "implemented": ["dmi_trend", "zscore_momentum_trend"],
+  "candidates": ["squeeze_momentum", "obv_trend"],
+  "implemented": ["squeeze_momentum", "obv_trend"],
   "backtest_queue": [
-    {"strategy": "research/backtest_dmi_trend.py", "class": "DMITrend", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_dmi_trend.py", "class": "DMITrend", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_dmi_trend.py", "class": "DMITrend", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_dmi_trend.py", "class": "DMITrend", "symbol": "ETH/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_zscore_momentum_trend.py", "class": "ZScoreMomentumTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_zscore_momentum_trend.py", "class": "ZScoreMomentumTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_zscore_momentum_trend.py", "class": "ZScoreMomentumTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_zscore_momentum_trend.py", "class": "ZScoreMomentumTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
+    {"strategy": "research/backtest_squeeze_momentum.py", "class": "SqueezeMomentum", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_squeeze_momentum.py", "class": "SqueezeMomentum", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_squeeze_momentum.py", "class": "SqueezeMomentum", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_squeeze_momentum.py", "class": "SqueezeMomentum", "symbol": "ETH/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_obv_trend.py", "class": "OBVTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_obv_trend.py", "class": "OBVTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_obv_trend.py", "class": "OBVTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_obv_trend.py", "class": "OBVTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
   ],
   "backtest_completed": [],
   "passed": [],
   "close_calls": [],
   "failed": [],
   "error": null,
-  "ticks": 7
+  "ticks": 1
 }
