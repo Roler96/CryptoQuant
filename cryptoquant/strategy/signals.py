@@ -1639,6 +1639,78 @@ def connors_rsi(
     return crsi
 
 
+# === TTM Squeeze ===
+
+
+def ttm_squeeze(
+    df: pd.DataFrame,
+    bb_period: int = 20,
+    bb_std: float = 2.0,
+    kc_period: int = 20,
+    kc_multiplier: float = 1.5,
+) -> pd.DataFrame:
+    """TTM Squeeze — volatility compression/expansion detection.
+
+    Compares Bollinger Band width to Keltner Channel width.
+    When BB width < KC width, the market is "squeezed" (compressing).
+    When BB width expands back above KC width, the squeeze "fires"
+    (volatility expansion), signalling a breakout.
+
+    Based on John Carter's TTM Squeeze indicator.
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close' columns.
+        bb_period: BB moving average period (default 20).
+        bb_std: BB standard deviation multiplier (default 2.0).
+        kc_period: KC EMA period (default 20).
+        kc_multiplier: KC ATR multiplier (default 1.5).
+
+    Returns:
+        pd.DataFrame with columns:
+            [bb_width, kc_width, is_squeezed, squeeze_fire]
+        All aligned to the input DataFrame index.
+    """
+    import numpy as np
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+
+    # Bollinger Band width (normalized: (upper-lower)/middle)
+    bb_middle = close.rolling(bb_period).mean()
+    bb_std_val = close.rolling(bb_period).std()
+    bb_upper = bb_middle + bb_std * bb_std_val
+    bb_lower = bb_middle - bb_std * bb_std_val
+    bb_width = (bb_upper - bb_lower) / bb_middle
+
+    # Keltner Channel width: ATR(period) * multiplier
+    # Use ATR-like: TR then EMA(TR, kc_period)
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr_kc = tr.ewm(alpha=1 / kc_period, min_periods=kc_period, adjust=False).mean()
+    kc_width = atr_kc * kc_multiplier
+
+    # Squeeze: BB width < KC width (Bollinger is inside Keltner = compression)
+    is_squeezed = bb_width < kc_width
+
+    # Squeeze fire: squeeze was on last bar and is now off (BB expands above KC)
+    was_squeezed = is_squeezed.shift(1).fillna(False).astype(bool)
+    squeeze_fire = was_squeezed & ~is_squeezed
+
+    return pd.DataFrame(
+        {
+            "bb_width": bb_width,
+            "kc_width": kc_width,
+            "is_squeezed": is_squeezed,
+            "squeeze_fire": squeeze_fire,
+        },
+        index=df.index,
+    )
+
+
 # === On-Balance Volume (OBV) ===
 
 
