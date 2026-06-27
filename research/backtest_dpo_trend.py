@@ -42,7 +42,7 @@ class DPOTrend(Strategy):
     """
 
     timeframe = "1h"
-    min_bars = 200  # warmup: 20 (DPO sma) + 14 (ATR) + buffer
+    min_bars = 300  # warmup: 200 (EMA200 trend equiv) + 20 (DPO) + 14 (ATR) + buffer
     version = "1.0.0"
 
     DEFAULT_PARAMS = {
@@ -56,17 +56,22 @@ class DPOTrend(Strategy):
         return "DPOTrend"
 
     def _compute_dpo(self, close: pd.Series, period: int) -> pd.Series:
-        """Compute Detrended Price Oscillator.
+        """Compute Detrended Price Oscillator (DPO).
 
-        DPO = Close — SMA(Close, N/2+1), displaced forward N/2+1 bars.
-        The displacement removes the trend and centers the oscillator at zero.
+        Standard formula: DPO = Close - SMA(Close, period) displaced
+        backward by period/2+1 bars.  The backward displacement removes
+        the trend and centers the oscillator around zero WITHOUT
+        looking into the future — the SMA is computed on historical data
+        only and then shifted backward to align with the bar being compared.
+
+        Reference: StockCharts DPO definition.
         """
         n = period
         half = n // 2 + 1
-        sma_centered = sma(close, period=half)
-        # Displace SMA forward by N/2+1 bars to center it
-        sma_displaced = sma_centered.shift(-half)
-        dpo = close - sma_displaced
+        sma_val = sma(close, period=n)
+        # Displace SMA backward by half bars to center it (no future leak)
+        sma_shifted = sma_val.shift(half)
+        dpo = close - sma_shifted
         return dpo
 
     def generate_signal(self, df: pd.DataFrame) -> pd.Series:

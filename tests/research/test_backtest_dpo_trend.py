@@ -72,7 +72,7 @@ class TestDPOTrend:
         s = DPOTrend()
         assert s.name == "DPOTrend"
         assert s.timeframe == "1h"
-        assert s.min_bars == 200
+        assert s.min_bars == 300
         assert s.version == "1.0.0"
         assert s.params["dpo_period"] == 20
         assert s.params["atr_period"] == 14
@@ -136,16 +136,16 @@ class TestDPOTrend:
     def test_dpo_computation_returns_finite_values(self):
         """DPO computation returns finite values in the valid range.
 
-        The DPO calculation uses forward displacement (.shift(-half)), so
-        the last `dpo_period//2+1` bars are always NaN. This is expected.
+        The DPO calculation uses backward displacement (.shift(half)), so
+        the first `dpo_period//2+1` bars are always NaN.  The warmup
+        start offset accounts for this.
         """
         df = _make_cycle_df(500)
         s = DPOTrend()
         close = df["close"]
         dpo = s._compute_dpo(close, period=20)
-        # Valid range: after warmup, before displacement NaN tail
-        start = 50    # well after SMA warmup
-        end = -12      # before displacement NaN (half=11)
-        valid = dpo.iloc[start:end]
+        # Valid range: after SMA warmup and displacement NaN head
+        start = 50    # well after SMA(dpo_period=20) warmup + shift(half=11)
+        valid = dpo.iloc[start:]
         assert valid.notna().all()
         assert np.isfinite(valid).all()
