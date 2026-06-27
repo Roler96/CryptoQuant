@@ -1857,3 +1857,106 @@ def choppiness_index(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
     ci = 100.0 * np.log10(ratio) / np.log10(period)
     return ci
+
+
+# === Schaff Trend Cycle (STC) ===
+
+
+def stc(
+    df: pd.DataFrame,
+    fast: int = 23,
+    slow: int = 50,
+    cycle: int = 10,
+    d_period: int = 3,
+) -> pd.Series:
+    """Schaff Trend Cycle — Stochastic of MACD, a double-smoothed 0-100 oscillator.
+
+    STC applies the Stochastic %K formula to the MACD line, producing a faster
+    turning signal than MACD alone while retaining trend quality.
+
+    Formula:
+        MACD = EMA(close, fast) - EMA(close, slow)
+        %K = 100 * (MACD - LLV(MACD, cycle)) / (HHV(MACD, cycle) - LLV(MACD, cycle))
+        STC = EMA(%K, d_period)
+
+    Reference: Doug Schaff — "Schaff Trend Cycle" (1999).
+
+    Args:
+        df: OHLCV DataFrame with 'close' column.
+        fast: Fast EMA period for MACD (default 23).
+        slow: Slow EMA period for MACD (default 50).
+        cycle: Lookback for %K normalization (default 10).
+        d_period: Smoothing period for final STC (default 3).
+
+    Returns:
+        pd.Series of STC values in [0, 100], same index as df.
+    """
+    close = df["close"]
+    macd_line = ema(close, fast) - ema(close, slow)
+
+    lowest = macd_line.rolling(cycle).min()
+    highest = macd_line.rolling(cycle).max()
+    denom = highest - lowest
+
+    stoch_k = 100.0 * (macd_line - lowest) / denom.replace(0, np.nan)
+    stc_val = stoch_k.ewm(span=d_period, adjust=False).mean()
+
+    return stc_val
+
+
+# === Twiggs Money Flow (TMF) ===
+
+
+def twiggs_money_flow(
+    df: pd.DataFrame,
+    period: int = 21,
+) -> pd.Series:
+    """Twiggs Money Flow — volume-weighted money flow with True Range normalization.
+
+    TMF improves on Chaikin Money Flow (CMF) by using True Range instead of
+    High-Low range for the denominator and Wilder EMA smoothing instead of
+    a simple sum. The True Range denominator handles gap-driven bars and
+    wick-heavy candles better than High-Low range.
+
+    Formula:
+        TR = max(H-L, |H-prevC|, |L-prevC|)
+        dm = close - open
+        raw = volume * (2*dm - TR) / TR
+        TMF = 100 * EMA(raw, period) / EMA(volume, period)
+
+    Reference: Colin Twiggs — "Twiggs Money Flow" (Incredible Charts).
+
+    Args:
+        df: OHLCV DataFrame with columns [open, high, low, close, volume].
+        period: Wilder EMA smoothing period (default 21).
+
+    Returns:
+        pd.Series of TMF values, same index as df. Positive = accumulation,
+        negative = distribution.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    volume = df["volume"]
+    open_ = df["open"]
+
+    # True Range
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    dm = close - open_
+    raw_mf = volume * (2.0 * dm - tr) / tr.replace(0, np.nan)
+
+    # Wilder EMA smoothing (alpha = 1/period)
+    ema_raw = raw_mf.ewm(alpha=1.0 / period, adjust=False).mean()
+    ema_vol = volume.ewm(alpha=1.0 / period, adjust=False).mean()
+
+    tmf = 100.0 * ema_raw / ema_vol.replace(0, np.nan)
+    return tmf
