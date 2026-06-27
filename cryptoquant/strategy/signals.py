@@ -2166,3 +2166,254 @@ def pvt_sma(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     return pd.DataFrame(
         {"pvt": pvt_val, "signal": signal_line}, index=df.index
     )
+
+
+# === Hilbert Transform & MAMA/FAMA ===
+
+
+def hilbert_transform(
+    df: pd.DataFrame, price_col: str = "close"
+) -> pd.DataFrame:
+    """Compute Hilbert Transform InPhase (I) and Quadrature (Q) components.
+
+    Follows John Ehlers' MESA algorithm:
+      Smooth price → Detrend → InPhase → Quadrature
+
+    The I and Q components represent the cyclical component of price
+    as a complex phasor: I = real part, Q = imaginary part.
+
+    Args:
+        df: OHLCV DataFrame; uses `price_col` as the input series.
+        price_col: Column name for price input (default "close").
+
+    Returns:
+        pd.DataFrame with columns [i, q, phase, delta_phase, smooth],
+        same index as df.  i/q are the core Hilbert components;
+        phase is in degrees (0-360); delta_phase is the phase change
+        per bar (clamped to a minimum of 1).
+    """
+    price = df[price_col].values.astype(np.float64)
+    n = len(price)
+
+    # ── 1. Smooth with 4-bar WMA ──
+    smooth = np.full(n, np.nan, dtype=np.float64)
+    w = np.array([4.0, 3.0, 2.0, 1.0])
+    w_sum = w.sum()
+    for i in range(3, n):
+        smooth[i] = np.dot(price[i - 3 : i + 1][::-1], w) / w_sum
+
+    # ── 2. Detrend with 7-bar bandpass filter ──
+    detrender = np.full(n, np.nan, dtype=np.float64)
+    for i in range(7, n):
+        detrender[i] = (
+            0.0962 * smooth[i]
+            + 0.5769 * smooth[i - 2]
+            - 0.5769 * smooth[i - 4]
+            - 0.0962 * smooth[i - 6]
+        )
+
+    # ── 3. InPhase (I) — 1-bar delay of detrender ──
+    i_comp = np.full(n, np.nan, dtype=np.float64)
+    for idx in range(8, n):
+        i_comp[idx] = 0.25 * detrender[idx - 3] + 0.75 * detrender[idx - 1]
+
+    # ── 4. Quadrature (Q) — Hilbert transform of detrender ──
+    q_comp = np.full(n, np.nan, dtype=np.float64)
+    for idx in range(8, n):
+        # 5.5-bar Hilbert Transformer (Ehlers)
+        q_comp[idx] = (
+            0.0962 * detrender[idx]
+            + 0.5769 * detrender[idx - 2]
+            - 0.5769 * detrender[idx - 4]
+            - 0.0962 * detrender[idx - 6]
+        )
+
+    # ── 5. Phase ──
+    phase = np.full(n, np.nan, dtype=np.float64)
+    delta_phase = np.full(n, np.nan, dtype=np.float64)
+    for idx in range(8, n):
+        if q_comp[idx] != 0.0:
+            phase_rad = np.arctan(np.abs(i_comp[idx] / q_comp[idx]))
+        else:
+            phase_rad = np.pi / 2.0
+        # Unwrap to 0-360 degrees
+        deg = np.degrees(phase_rad)
+        if q_comp[idx] < 0 and i_comp[idx] > 0:
+            deg = 180.0 - deg
+        elif q_comp[idx] < 0 and i_comp[idx] < 0:
+            deg = -180.0 + deg
+        elif q_comp[idx] > 0 and i_comp[idx] < 0:
+            deg = -deg
+        if deg < 0:
+            deg += 360.0
+        phase[idx] = deg
+
+    # ── 6. Delta phase (clamped minimum 1) ──
+    for idx in range(9, n):
+        if np.isnan(phase[idx]) or np.isnan(phase[idx - 1]):
+            continue
+        dp = phase[idx - 1] - phase[idx]
+        if dp < 1.0:
+            dp = 1.0
+        if dp > 50.0:
+            dp = 50.0  # upper clamp — prevent insane alpha
+        delta_phase[idx] = dp
+
+    return pd.DataFrame(
+        {
+            "i": i_comp,
+            "q": q_comp,
+            "phase": phase,
+            "delta_phase": delta_phase,
+            "smooth": smooth,
+        },
+        index=df.index,
+    )
+
+
+def mama_fama(
+    df: pd.DataFrame,
+    fast_limit: float = 0.5,
+    slow_limit: float = 0.05,
+    price_col: str = "close",
+) -> pd.DataFrame:
+    """Compute MAMA and FAMA (MESA Adaptive / Following Moving Averages).
+
+    MAMA adapts its EMA alpha based on the rate of phase change measured
+    by the Hilbert Transform — fast attack at cycle turning points, slow
+    decay during trend continuation.  FAMA is MAMA applied to MAMA with
+    half the alpha.
+
+    Reference: John Ehlers — "MAMA – The Mother of Adaptive Moving
+    Averages" (MESA Software).
+
+    Args:
+        df: OHLCV DataFrame.
+        fast_limit: Maximum alpha (default 0.5).
+        slow_limit: Minimum alpha (default 0.05).
+        price_col: Column name for price input (default "close").
+
+    Returns:
+        pd.DataFrame with columns [mama, fama], same index as df.
+        Values before the Hilbert warmup (7 bars) are NaN.
+    """
+    price = df[price_col].values.astype(np.float64)
+    n = len(price)
+
+    # Pre-compute delta_phase from Hilbert Transform
+    ht = hilbert_transform(df, price_col=price_col)
+    delta_phase = ht["delta_phase"].values
+
+    mama_vals = np.full(n, np.nan, dtype=np.float64)
+    fama_vals = np.full(n, np.nan, dtype=np.float64)
+
+    for i in range(n):
+        dp = delta_phase[i]
+        if np.isnan(dp):
+            continue
+
+        # Adaptive alpha: FastLimit / delta_phase, clamped
+        alpha = fast_limit / dp
+        if alpha < slow_limit:
+            alpha = slow_limit
+        if alpha > fast_limit:
+            alpha = fast_limit
+
+        # Seed the first valid bar
+        if i == 0 or np.isnan(mama_vals[i - 1]):
+            mama_vals[i] = price[i]
+            fama_vals[i] = price[i]
+        else:
+            mama_vals[i] = alpha * price[i] + (1.0 - alpha) * mama_vals[i - 1]
+            fama_vals[i] = (
+                0.5 * alpha * mama_vals[i]
+                + (1.0 - 0.5 * alpha) * fama_vals[i - 1]
+            )
+
+    return pd.DataFrame(
+        {"mama": mama_vals, "fama": fama_vals}, index=df.index
+    )
+
+
+# === Relative Momentum Index (RMI) ===
+
+
+def rmi(
+    df: pd.DataFrame,
+    momentum_period: int = 5,
+    rmi_period: int = 14,
+    signal_period: int = 9,
+) -> pd.DataFrame:
+    """Relative Momentum Index (RMI) with signal line.
+
+    RMI is a variation of RSI that uses momentum (price change over
+    N bars) instead of single-bar price changes.  This provides
+    additional smoothing and clearer turning points.
+
+    Uses Wilder's EMA (alpha = 1/period) for the smoothing steps,
+    matching the original RSI implementation.
+
+    Reference: Roger Altman (1993).
+
+    Args:
+        df: OHLCV DataFrame with 'close' column.
+        momentum_period: Bars for momentum calculation (default 5).
+        rmi_period: Wilder's EMA period for smoothing (default 14).
+        signal_period: Signal line EMA period (default 9).
+
+    Returns:
+        pd.DataFrame with columns [rmi, signal], same index as df.
+    """
+    close = df["close"].values.astype(np.float64)
+    n = len(close)
+
+    # Momentum: close - close[momentum_period] ago
+    mom = np.full(n, np.nan, dtype=np.float64)
+    for i in range(momentum_period, n):
+        mom[i] = close[i] - close[i - momentum_period]
+
+    # Separate up/down momentum
+    up = np.maximum(mom, 0.0)
+    down = np.abs(np.minimum(mom, 0.0))
+
+    # Wilder's EMA smoothing (alpha = 1/rmi_period)
+    rmi_alpha = 1.0 / rmi_period
+    avg_up = np.full(n, np.nan, dtype=np.float64)
+    avg_down = np.full(n, np.nan, dtype=np.float64)
+    rmi_vals = np.full(n, np.nan, dtype=np.float64)
+
+    first_valid = momentum_period + rmi_period
+    if first_valid >= n:
+        return pd.DataFrame(
+            {"rmi": rmi_vals, "signal": pd.Series(np.nan, index=df.index)},
+            index=df.index,
+        )
+
+    # Seed with SMA over first rmi_period valid bars
+    start = momentum_period
+    avg_up[start + rmi_period - 1] = np.mean(up[start : start + rmi_period])
+    avg_down[start + rmi_period - 1] = np.mean(
+        down[start : start + rmi_period]
+    )
+
+    for i in range(start + rmi_period, n):
+        avg_up[i] = rmi_alpha * up[i] + (1.0 - rmi_alpha) * avg_up[i - 1]
+        avg_down[i] = rmi_alpha * down[i] + (1.0 - rmi_alpha) * avg_down[i - 1]
+
+    # RMI = 100 - 100 / (1 + avg_up / avg_down)
+    epsilon = 1e-10
+    for i in range(n):
+        if np.isnan(avg_up[i]) or np.isnan(avg_down[i]):
+            continue
+        denom = avg_down[i]
+        if denom < epsilon:
+            denom = epsilon
+        rmi_vals[i] = 100.0 - 100.0 / (1.0 + avg_up[i] / denom)
+
+    rmi_series = pd.Series(rmi_vals, index=df.index)
+    signal_series = ema(rmi_series, signal_period)
+
+    return pd.DataFrame(
+        {"rmi": rmi_vals, "signal": signal_series.values},
+        index=df.index,
+    )

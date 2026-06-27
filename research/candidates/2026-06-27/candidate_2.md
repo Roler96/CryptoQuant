@@ -1,62 +1,52 @@
-# Z-Score Rolling Momentum + EMA200 Trend (ZScoreMomentumTrend)
+# Candidate 2: OBVTrend
 
-**Source:** Brian Plotnik Medium article "Systematic Crypto Trading Strategies" (Jun 23, 2025)
-**Inspired by:** RiskAdjustedMomentum (Loop 8, 2/4 pass) + Z-score normalization from statistical arbitrage literature
 **Date:** 2026-06-27
+**Source:** On-Balance Volume (Joe Granville, 1963) — classic volume indicator adaptation
+**Type:** Volume-Weighted Breakout (Volume family)
 
-## Strategy Concept
+## Strategy Description
 
-Rolling Z-score of price returns: (short_MA(returns) - long_MA(returns)) / long_std(returns). 
-Enter when Z-score crosses above +1.0 (bullish momentum) or below -1.0 (bearish momentum). 
-Filtered by EMA200 trend direction.
+On-Balance Volume (OBV) is a cumulative volume indicator that adds volume on up-close bars and subtracts volume on down-close bars. It measures whether volume is flowing into or out of an asset.
 
-## Why This Should Work
+1. **OBV Calculation:** OBV[t] = OBV[t-1] + volume[t] if close > prev close; OBV[t] = OBV[t-1] - volume[t] if close < prev close; unchanged if close == prev close
+2. **Entry Signal:** OBV breaks above its 20-bar highest high → bullish volume pressure. OBV breaks below its 20-bar lowest low → bearish volume pressure.
+3. **Trend Filter:** Close above EMA(200) for longs; close below EMA(200) for shorts
+4. **Exit:** OBV breaks opposite 20-bar extreme (OBV < 20-bar lowest low for long exit; OBV > 20-bar highest high for short exit)
 
-- **RiskAdjustedMomentum** (Loop 8, BTC 1h Sharpe=1.68, OOS=2.49) used return/vol ratio — similar concept but with ratio normalization
-- Z-score normalization (standard deviation denominator) is scale-invariant across volatility regimes, unlike raw ratio
-- The Z-score measures how many standard deviations current short-term return is from the long-term mean — statistically robust
-- Short window captures immediate momentum shift; long window + std provides regime-adaptive baseline
-- EMA200 trend filter prevents counter-trend entries in strong directional moves
+## Why This Is Novel
 
-## How It Differs from RiskAdjustedMomentum (Loop 8)
-| Component | RiskAdjustedMomentum | ZScoreMomentumTrend |
-|-----------|---------------------|---------------------|
-| Momentum | 63-bar return | 10-bar MA(returns) |
-| Baseline | 20-bar annualized vol | 50-bar MA(returns) + 50-bar std(returns) |
-| Normalization | return / vol (ratio) | (short - long) / long_std (Z-score) |
-| Entry condition | signal > 0.5 threshold | zscore crosses ±1.0 |
-| 4h viability | 20 trades (failed) | Shorter windows (10/50) — potentially more signals |
+- **OBV has NEVER been tested** across 18 research loops
+- Force Index (Loop 10), CMF (Loop 14), MFI (Loop 14) were tested — but these all use rate-of-change or ratio calculations
+- OBV is **cumulative** — it accumulates volume direction over the entire price history, making it fundamentally different from windowed indicators
+- OBV breakout captures shifts in volume regime that windowed indicators miss
 
-## Entry Conditions (2 total)
-1. **Z-score crossover:** zscore > 1.0 for long, zscore < -1.0 for short
-2. **EMA200 trend filter:** close > EMA(200) for long bias, close < EMA(200) for short bias
+## Signal Density Expectation
 
-## Exit
-- Z-score crosses back through 0 (momentum neutralized)
-- Uses next-bar-open entry (no lookahead)
+- OBV breaks 20-bar highs/lows 50-100 times/year on 1h BTC
+- On 4h: 15-25 times/year — borderline, but OBV's cumulative nature means breakouts are more significant when they occur
+- The trend filter reduces false signals (OBV breakout against trend is ignored)
 
 ## Parameters
-- `short_period=10` — short MA of log returns (10 bars)
-- `long_period=50` — long MA + std of log returns (50 bars)  
-- `entry_threshold=1.0` — Z-score > 1.0 long, < -1.0 short
-- `exit_threshold=0.0` — Z-score crosses zero = exit
-- `trend_period=200` — EMA200 trend filter
-- `min_bars=250` — warmup: 200+50 bars
 
-## Expected Trade Count
-- 1h: ~80-180 trades (10/50 windows = 2-4 days of context, frequent crossovers)
-- 4h: ~25-50 trades (shorter windows than RiskAdjustedMomentum's 63-bar)
+- obv_lookback=20 (for high/low extremes)
+- trend_period=200
 
-## Known Risks
-- Z-score ±1.0 threshold: ~68% of values fall within ±1σ under normality — reasonable signal density
-- 4h: 50-bar long window = 200 hours (8.3 days) — signal updates are slow. Trade count may be marginal (<30).
-- ETH: Z-score is based on returns, not bar extremes — should be less vulnerable to ETH noise than Elder Ray/Aroon
-- Parameter sensitivity: 10/50 windows are a starting point; optimization may be needed
+## Risk Factors
 
-## Anti-Pattern Check
-- ✅ 2 AND conditions (Z-score threshold + EMA200 trend)
-- ✅ Not a raw price-extreme indicator (returns-based)
-- ✅ Not triple-smoothed (simple MA of returns)
-- ✅ Not candle pattern detection
-- ✅ Returns-based = ETH-robust (close-based, not extreme-based)
-- ⚠️ 4h: 50-bar window may cause trade scarcity (known anti-pattern)
+- OBV is unbounded — the absolute value grows over time, but we only care about relative breakouts
+- During strong trends, OBV continuously makes new 20-bar highs → may generate too many/frequent entries on 1h
+- 4h trade count may be insufficient (15-25 range)
+- OBV divergence (price makes higher high, OBV makes lower high) is a classic signal but NOT used in this strategy — we use simple breakout only
+
+## Relation to Anti-Patterns
+
+- ✅ 2 conditions (OBV breakout + trend filter)
+- ✅ Volume acts as signal MULTIPLIER (preserves trade count), not as gate (cf. Volume > percentile anti-pattern)
+- ✅ Not a raw price-extreme indicator (OBV is volume-based, safe for ETH)
+- ⚠️ 4h trade count is the primary risk — OBV extremes on 4h take ~80 hours to form
+- ℹ️ OBV's cumulative nature means earlier data influences current values — ensure backtest uses full history
+
+## References
+
+- Granville, J. (1963). "Granville's New Key to Stock Market Profits"
+- Confirms Force Index / MFI pattern: volume-weighted > raw price for ETH robustness (Loop 10, 14)

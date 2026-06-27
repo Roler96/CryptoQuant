@@ -1,43 +1,45 @@
-# DMI Crossover + EMA200 Trend (DMITrend)
+# Candidate 1: SqueezeMomentum
 
-**Source:** Saturday quant blog research (June 27, 2026) — Medium + QuantConnect
-**Inspired by:** VortexTrend (Loop 17, 3/4 pass) + Elder's DMI system
 **Date:** 2026-06-27
+**Source:** TTM Squeeze (John Carter) adaptation + StratBase ATR research
+**Type:** Volatility Contraction → Expansion (Breakout-adjacent)
 
-## Strategy Concept
+## Strategy Description
 
-Directional Movement Index (DMI) crossover with EMA200 trend filter. Enter when +DI crosses above -DI (bullish) or -DI crosses above +DI (bearish), filtered by close vs EMA200 for trend direction.
+The TTM Squeeze detects periods of low volatility (compression) followed by expansion breakouts. Core mechanics:
 
-## Why This Should Work
+1. **Squeeze Detection:** Bollinger Band(20, 2.0) width < Keltner Channel(20, 1.5) width → market is "squeezed" (compressing)
+2. **Squeeze Fire:** When BB width expands back above KC width (squeeze releases), volatility expansion is confirmed
+3. **Entry:** Squeeze fires + close is above EMA(200) (bullish trend) → go long. Squeeze fires + close below EMA(200) → go short.
+4. **Exit:** Opposite squeeze fire OR trailing stop at 2× ATR(14)
 
-- **Vortex** (Loop 17, 3/4 pass, BTC 1h Sharpe=1.98) uses VI+/VI- which are normalized +DM/-DM. Raw DMI crossover is simpler — no True Range normalization, just smoothed +DM vs -DM comparison.
-- DMI crossover fires on genuine directional shifts, not smoothed trend strength (ADX is the smoothed average of |+DI - -DI|).
-- Unlike Vortex (which normalizes, softening signals), raw DMI crossover may generate cleaner entry timing.
-- EMA200 trend filter is the universal proven confirmation (used in 15+ successful strategies).
+## Why This Is Novel
 
-## Entry Conditions (2 total)
-1. **DMI crossover:** +DI(14) > -DI(14) for long, -DI(14) > +DI(14) for short
-2. **EMA200 trend filter:** close > EMA(200) for long bias, close < EMA(200) for short bias
+- BB and KC have been tested INDIVIDUALLY (BBPercentBVolatility Loop 11, KeltnerBreakoutADX Loop 2)
+- Their INTERACTION (BB inside KC = squeeze) has NEVER been tested
+- Squeeze detection is fundamentally different from either BB %B threshold or KC breakout — it measures volatility compression, not price level
 
-## Exit
-- Reverse DMI crossover (opposite direction signal)
-- Uses next-bar-open entry (no lookahead)
+## Signal Density Expectation
+
+- Squeeze fires occur 50-150 times/year on 1h BTC (BB width cycles between inside/outside KC ~every 10-30 bars)
+- On 4h: 15-30 fires/year — borderline but combined with trailing stop exits on extended squeezes, may still pass 30-trade gate
 
 ## Parameters
-- `di_period=14` — standard Wilder DMI period
-- `trend_period=200` — EMA200 trend filter
-- `min_bars=200` — warmup: 200 bars for EMA200 + 14 for DMI
 
-## Known Risks
-- Wilder smoothing (alpha=1/14) creates ~13-bar effective lag on DMI lines
-- On 4h: 14 bars × 4h = 56 hours lag — may reduce trade count (mitigated by DMI crossover being inherently more frequent than ADX threshold)
-- ETH: DMI uses bar extremes (+DM = high-prev_high, -DM = prev_low-low) — may be vulnerable to ETH's wick-driven microstructure (like Elder Ray, Aroon)
-- Expected: BTC 1h/4h should pass; ETH 1h/4h uncertain
+- bb_period=20, bb_std=2.0
+- kc_period=20, kc_multiplier=1.5
+- trend_period=200
+- trailing_stop_atr=14, trailing_stop_mult=2.0
 
-## Anti-Pattern Check
-- ✅ 2 AND conditions (DMI cross + EMA200 trend)
-- ✅ Not a raw price-extreme indicator (DMI is Wilder-smoothed)
-- ✅ Not triple-smoothed (single Wilder smoothing)
-- ✅ Not candle pattern detection
-- ⚠️ DMI uses bar extremes — ETH-specific risk per Loops 7, 17
-- ⚠️ Wilder smoothing on 4h — trade count risk per Loops 5-22
+## Risk Factors
+
+- In strong trending markets (2025-2026), squeeze fires may be rare as BB stays outside KC continuously
+- 4h trade count may approach 30-trade minimum
+- Need to verify: do we enter on the FIRST bar of squeeze fire, or on a confirmation bar?
+
+## Relation to Anti-Patterns
+
+- ✅ 2 conditions (squeeze fire + trend direction)
+- ✅ Not a price-extreme indicator (safe for ETH)
+- ✅ Not a smoothed oscillator crossover
+- ⚠️ May generate fewer 4h trades — monitor closely
