@@ -1,35 +1,16 @@
 {
   "version": 1,
-  "state": "done",
-  "loop_started": "2026-06-26T23:45:50Z",
-  "loop_ended": "2026-06-27T01:55:00Z",
+  "state": "implement",
+  "loop_started": "2026-06-27T03:00:31Z",
+  "loop_ended": null,
   "date": "2026-06-27",
-  "candidates": ["donchian_atr_breakout", "trix_trend"],
-  "implemented": ["donchian_atr_breakout", "trix_trend"],
+  "candidates": ["tsi_trend", "bb_squeeze_breakout"],
+  "implemented": [],
   "backtest_queue": [],
-  "backtest_completed": [
-    {"strategy": "research/backtest_donchian_atr_breakout.py", "class": "DonchianATRBreakout", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_donchian_atr_breakout.py", "class": "DonchianATRBreakout", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_donchian_atr_breakout.py", "class": "DonchianATRBreakout", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_donchian_atr_breakout.py", "class": "DonchianATRBreakout", "symbol": "ETH/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_trix_trend.py", "class": "TRIXTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_trix_trend.py", "class": "TRIXTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_trix_trend.py", "class": "TRIXTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_trix_trend.py", "class": "TRIXTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
-  ],
-  "passed": [
-    {"name": "donchian_atr_breakout_btc_1h", "strategy": "donchian_atr_breakout", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.26, "trades": 84, "maxdd": 0.8, "oos_passed": false, "overfit_warning": true},
-    {"name": "donchian_atr_breakout_eth_1h", "strategy": "donchian_atr_breakout", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.76, "trades": 60, "maxdd": 2.6, "oos_passed": false, "overfit_warning": true},
-    {"name": "trix_trend_btc_1h", "strategy": "trix_trend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 1.32, "trades": 160, "maxdd": 1.14, "oos_passed": true, "overfit_warning": false},
-    {"name": "trix_trend_btc_4h", "strategy": "trix_trend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 1.68, "trades": 36, "maxdd": 0.59, "oos_passed": false, "overfit_warning": false}
-  ],
+  "backtest_completed": [],
+  "passed": [],
   "close_calls": [],
-  "failed": [
-    {"name": "donchian_atr_breakout_btc_4h", "strategy": "donchian_atr_breakout", "reason": "trades=22 < 30"},
-    {"name": "donchian_atr_breakout_eth_4h", "strategy": "donchian_atr_breakout", "reason": "trades=18 < 30"},
-    {"name": "trix_trend_eth_1h", "strategy": "trix_trend", "reason": "sharpe=-0.07 < 0.5"},
-    {"name": "trix_trend_eth_4h", "strategy": "trix_trend", "reason": "sharpe=0.08 < 0.5"}
-  ],
+  "failed": [],
   "error": null,
-  "ticks": 6
+  "ticks": 1
 }

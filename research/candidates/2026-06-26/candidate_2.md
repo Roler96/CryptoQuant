@@ -1,64 +1,41 @@
-# KeltnerChannelTrend — Keltner Channel Breakout + EMA200 Trend Filter
+# TRIXTrend — Triple Exponential Average Crossover + Trend Filter
 
-**Discovered:** 2026-06-26 (Saturday — derived from research frontier analysis)
-**Source:** Derived from Loop 2's KeltnerBreakoutADX failure analysis + research frontier meta-patterns
-**Loop:** 20
+## Source
+Jack Hutson (1980s), "TRIX: Triple Exponential Smoothing Oscillator."
+Technical Analysis of Stocks & Commodities magazine.
 
-## Core Idea
+## Hypothesis
+TRIX zero-cross detects momentum shifts with less noise than single/double-smoothed oscillators. EMA200 trend filter provides directional bias. 2 conditions. TRIX's triple EMA construction (EMA(EMA(EMA(price)))) is mathematically similar to a low-pass filter — preserves signal frequency better than Wilder-smoothed oscillators (RSI, Stochastic) while filtering high-frequency noise.
 
-Keltner Channel (ATR-based envelope around EMA) breakout with EMA200 trend filter. Keltner Channels are mathematically distinct from Bollinger Bands (std-based) and Donchian Channels (fixed-lookback range):
+## Entry Conditions (exactly 2 AND gates)
+1. **TRIX Crossover**: TRIX(period) > TRIX_signal(period) for long / TRIX < TRIX_signal for short
+2. **Trend Filter**: Close > EMA(200) for long / Close < EMA(200) for short
 
-- **Bollinger Bands:** Price ± k × std(price). Volatility measured by standard deviation. Wide in volatile periods.
-- **Keltner Channels:** EMA(price) ± k × ATR. Volatility measured by ATR. Tighter in volatile periods (ATR is mean absolute, not squared).
-- **Donchian Channels:** Max(high, N) / Min(low, N). Measures range extremes.
+## Exit
+Reverse TRIX crossover (TRIX < TRIX_signal for long / TRIX > TRIX_signal for short)
 
-The Keltner Channel's ATR-based width means breakouts require genuine directional expansion (not just price noise that inflates std). This produces cleaner signals than BB breakouts while maintaining more trades than Donchian breakouts.
+## Parameters
+- `trix_period`: 14 (standard, balances signal density vs noise reduction)
+- `signal_period`: 9 (standard TRIX signal line)
+- `trend_period`: 200 (EMA trend filter)
+- `min_bars`: 150 (triple EMA needs warmup)
 
-## Why This Differs from KeltnerBreakoutADX (Loop 2)
+## Expected
+- BTC 1h: 100-200 trades, Sharpe 1.5-2.5
+- ETH 1h: 80-160 trades, Sharpe 0.5-1.5 (ETH OOS risk per systemic pattern)
+- BTC 4h: 20-30 trades, Sharpe 0.5-1.5 (4h crossover scarcity risk)
+- ETH 4h: 15-25 trades, Sharpe -0.5-0.5 (likely fails trade count)
 
-Loop 2's KeltnerBreakoutADX used 3 conditions:
-1. KC breakout (close > KC_upper / close < KC_lower)
-2. ADX > 25 (trend strength)
-3. (effectively hidden 3rd condition from ADX smoothing lag on 4h)
+## Anti-patterns avoided
+- 2 conditions only
+- Triple smoothing is mathematical transformation (similar to Fisher), not percentile gate
+- No smoothing >20 bars on sub-components (14-period base, not 34 like AO)
+- Normalized output (~0-centered) — works across volatility regimes
 
-This version drops ADX entirely — replaced by EMA200 trend direction filter. Result: 2 conditions, and ADX's catastrophic 4h lag problem is eliminated.
+## Risk: 4h trade scarcity
+TRIX crossover on 4h may produce <30 trades (same as all crossover/oscillator 4h strategies across Loops 5-18). This is expected and will not be considered a strategy failure — the 1h results are the primary target.
 
-## Strategy Design
-
-**Entry Conditions (2 total):**
-1. Close > KC_upper → long signal; Close < KC_lower → short signal
-2. Close > EMA(200) for long filter; Close < EMA(200) for short filter
-
-**Exit:**
-- Close < KC_middle (EMA) for longs; Close > KC_middle for shorts
-- Or signal reverse
-
-**Parameters:**
-- `kc_period=20` — EMA period for channel center
-- `kc_multiplier=2.0` — ATR multiplier for channel width
-- `atr_period=14` — ATR lookback (standard)
-- `trend_period=200` — EMA trend filter period
-- `min_bars=200` — warmup period
-
-**Expected Trade Count:**
-- 1h: 50-120 trades (breakout events on 1h are frequent; KC is slightly tighter than BB)
-- 4h: 25-40 trades (breakout-based, so 4h viable unlike oscillator strategies)
-
-## Why It Should Work
-
-1. **Breakout-based entry** — the only entry type proven to work on 4h across 19 loops. KC breakout generates more signals than BB breakout because ATR-based bands are tighter (ATR < std in most regimes).
-
-2. **2 conditions exactly** — follows the proven template. No hidden gates.
-
-3. **ATR normalization is faster than std normalization** — ATR responds to volatility changes in ~14 bars vs ~20 bars for std. This means KC bands tighten/widen faster, producing more timely breakout signals.
-
-4. **Cleaner than KeltnerBreakoutADX** — ADX(14) > 25 on 4h means 56 hours of trend must develop before entry. KC breakout + EMA200 has zero additional lag beyond the channel calculation.
-
-## Anti-Pattern Compliance
-
-- ✅ 2 entry conditions (KC breakout + EMA200 trend)
-- ✅ Breakout-based — 4h viable
-- ✅ No ADX (removes the 4h lag problem from Loop 2)
-- ✅ No smoothing beyond kc_period=20 (exactly at the 20-bar threshold — could reduce to 14 for cleaner 2-condition count)
-- ✅ No hidden AND gates
-- ✅ Not a raw price-extreme indicator on ETH (KC uses ATR-smoothed bands, not bar-specific high/low)
+## Relation to prior work
+- CMOTrend (Loop 12): Sum-based momentum, 114 trades on BTC 1h. TRIX is triple-smoothed but preserves crossovers better than CMO's single-smoothing.
+- FisherTransformTrend (Loop 18): Mathematical transformation, 296 trades on BTC 1h. TRIX is also transformational (triple EMA) but less aggressive — should generate 100-200 trades.
+- MacdAdxTrend (Loop 5): MACD cross + ADX trend, 240-250 trades on 1h. TRIX replaces MACD's single-EMA smoothing with triple-EMA, and EMA200 replaces ADX's smoothed trend gate.

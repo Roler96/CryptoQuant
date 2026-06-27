@@ -1509,6 +1509,93 @@ def _percent_rank(series: pd.Series, period: int = 100) -> pd.Series:
     return result
 
 
+# === True Strength Index (TSI) ===
+
+
+def tsi(
+    close: pd.Series,
+    short_period: int = 13,
+    long_period: int = 25,
+    signal_period: int = 7,
+) -> pd.DataFrame:
+    """True Strength Index — double-EMA-smoothed momentum oscillator.
+
+    TSI = 100 * EMA(EMA(Δp, short), long) / EMA(EMA(|Δp|, short), long)
+
+    The double smoothing on both numerator and denominator produces
+    cleaner zero-crosses than single-smoothed oscillators (RSI, CMO,
+    Stochastic).
+
+    Reference: William Blau — "The True Strength Index" (S&C, 1991).
+
+    Args:
+        close: Close price series.
+        short_period: First EMA period for momentum (default 13).
+        long_period: Second EMA period for smoothing (default 25).
+        signal_period: EMA period for signal line (default 7).
+
+    Returns:
+        pd.DataFrame with columns [tsi, signal], same index as close.
+    """
+    delta = close.diff()
+    abs_delta = delta.abs()
+
+    # Double-smoothed momentum (numerator)
+    ema_momentum = ema(ema(delta, short_period), long_period)
+
+    # Double-smoothed absolute momentum (denominator)
+    ema_abs = ema(ema(abs_delta, short_period), long_period)
+
+    tsi_val = 100.0 * ema_momentum / ema_abs.replace(0, np.nan)
+    signal_line = ema(tsi_val, signal_period)
+
+    return pd.DataFrame(
+        {"tsi": tsi_val, "signal": signal_line}, index=close.index
+    )
+
+
+# === Bollinger Band Squeeze ===
+
+
+def bb_squeeze(
+    df: pd.DataFrame,
+    bb_period: int = 20,
+    bb_std: float = 2.0,
+    squeeze_lookback: int = 125,
+) -> pd.Series:
+    """Bollinger Band Squeeze — low-volatility consolidation detection.
+
+    Returns True when BB width (normalized) reaches a multi-period
+    minimum, signalling a low-volatility consolidation that often
+    precedes a breakout.
+
+    Args:
+        df: OHLCV DataFrame with 'close' column.
+        bb_period: BB moving average period (default 20).
+        bb_std: BB standard deviation multiplier (default 2.0).
+        squeeze_lookback: Bars for minimum BB width detection (default 125).
+
+    Returns:
+        pd.Series of boolean values, same index as df.
+    """
+    close = df["close"]
+    middle = close.rolling(bb_period).mean()
+    std_dev = close.rolling(bb_period).std()
+    upper = middle + bb_std * std_dev
+    lower = middle - bb_std * std_dev
+
+    # Normalized BB width
+    bb_width = (upper - lower) / middle
+
+    # Rolling minimum of BB width (shift by 1 to avoid look-ahead)
+    rolling_min_width = bb_width.rolling(squeeze_lookback).min().shift(1)
+
+    # Squeeze: current width == the minimum seen in the lookback
+    is_squeeze = bb_width <= rolling_min_width
+
+    return is_squeeze
+
+
 def connors_rsi(
     df: pd.DataFrame,
     rsi_period: int = 3,
