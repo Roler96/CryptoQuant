@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "timestamp": "2026-06-27T08:46:31.837513+00:00",
+    "strategy_file": "research/backtest_bb_squeeze_breakout.py",
+    "class_name": "BBSqueezeBreakout",
+    "bars": 8760,
+    "date_range": "2025-06-25 16:00:00 \u2192 2026-06-25 15:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "BBSqueezeBreakout",
+    "symbol": "ETH/USDT",
+    "timeframe": "1h",
+    "initial_capital": 10000,
+    "final_equity": 9552.11,
+    "total_return_pct": -4.48,
+    "annualized_return_pct": -4.48,
+    "sharpe_ratio": -0.95,
+    "sortino_ratio": -0.15,
+    "max_drawdown_pct": 5.09,
+    "max_drawdown_days": 278,
+    "volatility_annual_pct": 4.71,
+    "total_trades": 4,
+    "win_rate_pct": 25.0,
+    "profit_factor": 0.3,
+    "avg_win_pct": 38.56,
+    "avg_loss_pct": -42.65,
+    "avg_hold_hours": 2128.5,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=4 < 30 (min)",
+      "sharpe=-0.95 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "BBSqueezeBreakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9694.2,
+      "total_return_pct": -3.06,
+      "annualized_return_pct": -4.34,
+      "sharpe_ratio": -0.77,
+      "sortino_ratio": -0.12,
+      "max_drawdown_pct": 5.09,
+      "max_drawdown_days": 168,
+      "volatility_annual_pct": 5.54,
+      "total_trades": 3,
+      "win_rate_pct": 33.3,
+      "profit_factor": 0.42,
+      "avg_win_pct": 42.75,
+      "avg_loss_pct": -51.34,
+      "avg_hold_hours": 1962.3,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "BBSqueezeBreakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9873.7,
+      "total_return_pct": -1.26,
+      "annualized_return_pct": -4.15,
+      "sharpe_ratio": -1.83,
+      "sortino_ratio": 0.0,
+      "max_drawdown_pct": 1.26,
+      "max_drawdown_days": 1,
+      "volatility_annual_pct": 2.31,
+      "total_trades": 1,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "avg_win_pct": 0,
+      "avg_loss_pct": -25.26,
+      "avg_hold_hours": 2463.0,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 0.0,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -0.95,
+    "stress_sharpe": -0.95,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 8759 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

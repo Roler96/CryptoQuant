@@ -1,25 +1,35 @@
 {
   "version": 1,
-  "state": "backtest",
+  "state": "done",
   "loop_started": "2026-06-27T08:07:31Z",
-  "loop_ended": null,
+  "loop_ended": "2026-06-27T09:11:11Z",
   "date": "2026-06-27",
   "candidates": ["tsi_trend", "bb_squeeze_breakout"],
   "implemented": ["tsi_trend", "bb_squeeze_breakout"],
-  "backtest_queue": [
-    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "ETH/USDT", "timeframe": "4h"}
+  "backtest_queue": [],
+  "backtest_completed": [
+    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "1h", "result": "PASS|OOS_FAIL"},
+    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "4h", "result": "FAIL"},
+    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "1h", "result": "FAIL"},
+    {"strategy": "research/backtest_tsi_trend.py", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "4h", "result": "FAIL"},
+    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "BTC/USDT", "timeframe": "1h", "result": "FAIL"},
+    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "BTC/USDT", "timeframe": "4h", "result": "FAIL"},
+    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "ETH/USDT", "timeframe": "1h", "result": "FAIL"},
+    {"strategy": "research/backtest_bb_squeeze_breakout.py", "class": "BBSqueezeBreakout", "symbol": "ETH/USDT", "timeframe": "4h", "result": "FAIL"}
   ],
-  "backtest_completed": [],
-  "passed": [],
+  "passed": [
+    {"name": "tsi_trend_btc_1h", "strategy": "tsi_trend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 0.63, "trades": 79, "maxdd": 1.57, "oos_sharpe": 1.72, "is_sharpe": 0.17, "oos_passed": false}
+  ],
   "close_calls": [],
-  "failed": [],
+  "failed": [
+    {"name": "tsi_trend_btc_4h", "reason": "trades=12"},
+    {"name": "tsi_trend_eth_1h", "reason": "sharpe=-0.17"},
+    {"name": "tsi_trend_eth_4h", "reason": "trades=13,sharpe=0.28"},
+    {"name": "bb_squeeze_btc_1h", "reason": "trades=8"},
+    {"name": "bb_squeeze_btc_4h", "reason": "trades=2"},
+    {"name": "bb_squeeze_eth_1h", "reason": "trades=4,sharpe=-0.95"},
+    {"name": "bb_squeeze_eth_4h", "reason": "trades=1,sharpe=-1.0"}
+  ],
   "error": null,
-  "ticks": 2
+  "ticks": 5
 }

@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "timestamp": "2026-06-27T06:47:07.954631+00:00",
+    "strategy_file": "research/backtest_choppiness_breakout.py",
+    "class_name": "ChoppinessBreakout",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "ChoppinessBreakout",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10068.32,
+    "total_return_pct": 0.68,
+    "annualized_return_pct": 0.68,
+    "sharpe_ratio": 0.44,
+    "sortino_ratio": 0.11,
+    "max_drawdown_pct": 0.85,
+    "max_drawdown_days": 95,
+    "volatility_annual_pct": 1.57,
+    "total_trades": 6,
+    "win_rate_pct": 33.3,
+    "profit_factor": 1.6,
+    "avg_win_pct": 18.54,
+    "avg_loss_pct": -5.81,
+    "avg_hold_hours": 1392.7,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=6 < 30 (min)",
+      "sharpe=0.44 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "ChoppinessBreakout",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10165.18,
+      "total_return_pct": 1.65,
+      "annualized_return_pct": 2.37,
+      "sharpe_ratio": 1.35,
+      "sortino_ratio": 0.65,
+      "max_drawdown_pct": 0.29,
+      "max_drawdown_days": 95,
+      "volatility_annual_pct": 1.75,
+      "total_trades": 4,
+      "win_rate_pct": 50.0,
+      "profit_factor": 6.27,
+      "avg_win_pct": 19.62,
+      "avg_loss_pct": -3.13,
+      "avg_hold_hours": 1434.0,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "ChoppinessBreakout",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 9916.53,
+      "total_return_pct": -0.83,
+      "annualized_return_pct": -2.76,
+      "sharpe_ratio": -2.02,
+      "sortino_ratio": -0.32,
+      "max_drawdown_pct": 0.85,
+      "max_drawdown_days": 1,
+      "volatility_annual_pct": 1.38,
+      "total_trades": 3,
+      "win_rate_pct": 33.3,
+      "profit_factor": 0.02,
+      "avg_win_pct": 0.26,
+      "avg_loss_pct": -8.48,
+      "avg_hold_hours": 778.7,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 249.6,
+    "oos_passed": false,
+    "overfit_warning": true
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 0.44,
+    "stress_sharpe": 0.43,
+    "sharpe_delta_pct": 2.3,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

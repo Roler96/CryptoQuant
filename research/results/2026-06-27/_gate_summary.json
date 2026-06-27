@@ -77,6 +77,20 @@
       "is_sharpe": 2.42,
       "oos_passed": false,
       "overfit_warning": false
+    },
+    {
+      "name": "tsi_trend_btc_1h",
+      "strategy": "tsi_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "sharpe": 0.63,
+      "trades": 79,
+      "maxdd": 1.57,
+      "oos_sharpe": 1.72,
+      "is_sharpe": 0.17,
+      "oos_passed": false,
+      "overfit_warning": true,
+      "regime_luck": true
     }
   ],
   "close_calls": [],
@@ -86,26 +100,90 @@
       "strategy": "keltner_channel",
       "symbol": "BTC/USDT",
       "timeframe": "4h",
+      "reason": "trades=22 < 30",
       "sharpe": 2.02,
       "trades": 22,
-      "maxdd": 0.51,
-      "oos_sharpe": 2.77,
-      "is_sharpe": 1.7,
-      "oos_passed": false,
-      "overfit_warning": false
+      "maxdd": 0.51
     },
     {
       "name": "keltner_channel_eth_4h",
       "strategy": "keltner_channel",
       "symbol": "ETH/USDT",
       "timeframe": "4h",
+      "reason": "trades=22 < 30",
       "sharpe": 1.27,
       "trades": 22,
-      "maxdd": 1.35,
-      "oos_sharpe": 1.13,
-      "is_sharpe": 1.27,
-      "oos_passed": false,
-      "overfit_warning": false
+      "maxdd": 1.35
+    },
+    {
+      "name": "tsi_trend_btc_4h",
+      "strategy": "tsi_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "reason": "trades=12 < 30",
+      "sharpe": 1.74,
+      "trades": 12,
+      "maxdd": 0.56
+    },
+    {
+      "name": "tsi_trend_eth_1h",
+      "strategy": "tsi_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "reason": "sharpe=-0.17 < 0.5",
+      "sharpe": -0.17,
+      "trades": 63,
+      "maxdd": 4.46
+    },
+    {
+      "name": "tsi_trend_eth_4h",
+      "strategy": "tsi_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "reason": "trades=13 < 30, sharpe=0.28 < 0.5",
+      "sharpe": 0.28,
+      "trades": 13,
+      "maxdd": 2.28
+    },
+    {
+      "name": "bb_squeeze_breakout_btc_1h",
+      "strategy": "bb_squeeze_breakout",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "reason": "trades=8 < 30",
+      "sharpe": 1.06,
+      "trades": 8,
+      "maxdd": 0.89
+    },
+    {
+      "name": "bb_squeeze_breakout_btc_4h",
+      "strategy": "bb_squeeze_breakout",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "reason": "trades=2 < 30, sharpe=0.17 < 0.5",
+      "sharpe": 0.17,
+      "trades": 2,
+      "maxdd": 1.09
+    },
+    {
+      "name": "bb_squeeze_breakout_eth_1h",
+      "strategy": "bb_squeeze_breakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "reason": "trades=4 < 30, sharpe=-0.95 < 0.5",
+      "sharpe": -0.95,
+      "trades": 4,
+      "maxdd": 5.09
+    },
+    {
+      "name": "bb_squeeze_breakout_eth_4h",
+      "strategy": "bb_squeeze_breakout",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "reason": "trades=1 < 30, sharpe=-1.00 < 0.5",
+      "sharpe": -1.0,
+      "trades": 1,
+      "maxdd": 2.33
     }
   ]
 }
