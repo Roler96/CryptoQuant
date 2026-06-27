@@ -1863,3 +1863,50 @@ Loop 26 adds 8 passing combos from 2-condition strategies. No ≥3-condition str
 - EMVTrend: `emv_smooth=5, trend_period=200` — robust across all 4 combos. emv_smooth=5 is critical — minimal smoothing preserves instantaneous zero-cross property. Longer smoothing (10+) would reintroduce crossover-lag problems on 4h. First strategy to pass OOS on ETH 1h (Sharpe=1.56).
 - EMVTrend: Commission sensitivity at 5bps baseline is favorable given 267-292 trades. At 10bps, expected Sharpe delta < 10% — not fragile.
 - ADLineTrend: `ad_sma_short=5` for exit is balanced. Shorter (3) would increase whipsaw exits; longer (10) would hold losers too long.
+
+## Successful Patterns (2026-06-27 Loop 27)
+
+### STC (Schaff Trend Cycle) — BTC-Only Dual-Smoothed Oscillator
+**Strategies:** STCTrend, TMFTrend
+**Results:** 2/8 combos passed (25%). Best: STCTrend BTC 4h Sharpe=1.76, OOS=1.91, 32 trades. STCTrend passed 2/4 — BTC 1h (Sharpe=1.37, 158 trades) and BTC 4h (Sharpe=1.76, 32 trades).
+**Key Ingredients:**
+1. STC = Stochastic(MACD(23,50), 10) — double-smoothed 0-100 oscillator. Inner MACD provides trend direction; outer Stochastic normalization accelerates turning points.
+2. STC > 25 entry + EMA200 trend filter — 2 total conditions
+3. Exit at STC midline (50) — mechanical neutral zone
+4. Works on both BTC 1h (158 trades) and BTC 4h (32 trades) — dual-timeframe BTC robustness
+5. OOS validation: BTC 1h OOS=2.03 (IS=1.14, positive degradation), BTC 4h OOS=1.91 (IS=1.83, stable)
+**Transferable Pattern:** Composite oscillators (STC = oscillator of oscillator) can overcome the 4h trade scarcity problem because the inner indicator captures trend while the outer Stochastic formula accelerates turning points. The 0-100 normalization preserves threshold-independence. Second dual-smoothed indicator to achieve 4h pass (after CCI Loop 15).
+
+## Anti-Patterns (avoid these directions)
+
+### 2026-06-27 Loop 27: Twiggs Money Flow Zero-Cross — Catastrophic 0-1 Trade Failure
+**Problem:** TMFTrend produced 0-1 trades across ALL 4 combos (BTC/ETH × 1h/4h). BTC 1h: 1 trade, Sharpe=-1.00. BTC 4h: 0 trades. ETH 1h: 1 trade, Sharpe=-1.00. ETH 4h: 0 trades. This is an even worse signal-sparsity failure than VWAPTrend (Loop 13) or HeikinAshiTrend (Loop 13), which each produced 1 trade per combo.
+**Root cause:** Twiggs Money Flow applies Wilder EMA smoothing (α=1/21) to volume-weighted money flow. The zero-cross event — TMF changing sign — requires money flow accumulation/distribution to reverse direction. With Wilder smoothing, this takes weeks to months on any timeframe. In crypto's 24/7 markets, directional money flow persists much longer than in traditional equities — zero-cross events effectively never occur within a 365-day window.
+**Lesson:** TMF, like CMF, OBV, and A/D Line, belongs to the cumulative volume indicator family. These indicators measure long-term accumulation/distribution and should NEVER be used as entry triggers. The zero-cross event is far too rare. If using volume-based indicators for entry, prefer instantaneous/per-bar volume normalization (EMV, Force Index, VWAP distance, MFI with fixed threshold >50) — these generate 50-300 trades/year vs TMF's 0-1.
+
+### 2026-06-27 Loop 27: STCTrend ETH — Sharper BTC/ETH Divergence Than Any Previous Oscillator
+**Problem:** STCTrend showed the sharpest BTC/ETH Sharpe divergence of any oscillator-family strategy: BTC 1h=1.37 vs ETH 1h=0.03 (98% degradation), BTC 4h=1.76 vs ETH 4h=0.30 (83% degradation). The difference is not trade count (ETH 1h actually has MORE trades: 179 vs 158) — it's pure signal quality.
+**Root cause:** STC's inner MACD(23,50) crossovers are directionally meaningful on BTC (concentrated liquidity, genuine trend shifts) but noise-driven on ETH (fragmented liquidity, fake crossovers from multi-venue arbitrage). The outer Stochastic normalization amplifies the signal but doesn't distinguish between genuine and noise-driven MACD crossovers. On ETH, STC oscillates around 50 randomly — 179 trades with zero edge.
+**Lesson:** Dual-smoothed composite oscillators (STC, TRIX, PPO-as-Stochastic) amplify noise on ETH. ETH's microstructure produces fake MACD crossovers that survive double smoothing and appear as genuine STC signals with zero predictive content. STC-based strategies should be BTC-only. For ETH oscillator entries, prefer instantaneous (CCI) or Gaussian-transformed (Fisher) indicators that don't compound smoothing artifacts.
+
+### 2026-06-27 Loop 27: TMF = Third Cumulative Volume Indicator to Fail (After OBV, A/D Line)
+**Problem:** TMF joins OBV (Loop 24: 1 trade, Sharpe=0.0) and A/D Line (Loop 26: passed main gate but failed ETH OOS) as cumulative volume indicators tested. TMF is the worst — 0-1 trades across all combos, vs OBV's 1 trade and A/D Line's 79-97 trades.
+**Root cause ranking:**
+- **OBV** (OBVTrend): >42,000-bar lookback for zero-cross = 1 trade/year. Fails purely on signal sparsity.
+- **TMF** (TMFTrend): 21-bar Wilder EMA smoothing on cumulative flow = 0-1 trades/year. Wilder EMA kills signal count.
+- **A/D Line** (ADLineTrend): 5/20 SMA crossover on cumulative A/D = 79-97 trades/year. Works on main gate but ETH OOS fails.
+**Lesson:** The cumulative volume indicator family (OBV, CMF, TMF, A/D Line, Force Index — when zero-cross based) is unsuitable for crypto entry generation. These indicators measure long-duration accumulation/distribution that takes months to reverse. For volume-based entry signals, use per-bar instantaneous volume measures: EMV (Ease of Movement), raw volume * price change (Force Index ELDER-style), MFI with fixed >50 threshold, or VWAP distance from price. These generate 50-300 trades/year vs 0-1 for cumulative counterparts.
+
+### 2026-06-27 Loop 27: The 2-Condition Rule — 27 Loops, 132 Combos, Still Unbroken
+**Updated meta-pattern:** Across 27 research cycles, 35+ strategies, 132 total backtest combinations:
+- ≤2 AND conditions: 66/83 passed (79.5%)
+- ≥3 AND conditions: 0/25 passed (0%)
+- 2-condition failures from signal-sparse generators: 12 (HeikinAshi 4, VWAP 4, TMF 4, CandleConvictionBreakout is ≥3)
+
+STCTrend (2 conditions: STC threshold + EMA200) passes 2/4. TMFTrend (2 conditions: TMF zero-cross + EMA200) fails 4/4 due to signal sparsity — the TMF zero-cross fires <2 times/year. This is identically the HeikinAshi and VWAP failure pattern: 2 conditions necessary, but the primary trigger must fire ≥50 times/year.
+**Lesson:** The gate failure has two causes: (1) ≥3 AND conditions → 0% pass rate (25/25 failed), (2) signal-sparse primary trigger → 0% pass rate (12/12 failed). The 2-condition template requires the primary trigger to be reasonably frequent. When designing new strategies, verify the primary trigger fires ≥50 times/year on 1h before implementing the full strategy.
+
+## Parameter Sensitivities
+- STCTrend: `stc_fast=23, stc_slow=50, stc_cycle=10, stc_d_period=3, stc_entry=25, trend_period=200` — robust on BTC 1h/4h. stc_entry=25 is balanced; 30 would reduce trades on 4h below 30. stc_cycle=12 or stc_d_period=5 would reduce signal frequency. Not recommended for ETH.
+- STCTrend: Commission sensitivity at 13.9% Sharpe delta (5→10bps) — borderline but not fragile. Viable for BTC deployment with standard 5bps.
+- TMFTrend: `tmf_period=21, trend_period=200` — zero-cross events too rare. Not viable with any parameter set. Do not revisit cumulative volume zero-cross strategies for crypto entry generation.

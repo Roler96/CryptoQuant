@@ -91,6 +91,34 @@
       "oos_passed": false,
       "overfit_warning": true,
       "regime_luck": true
+    },
+    {
+      "name": "stc_trend_btc_1h",
+      "strategy": "stc_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "sharpe": 1.37,
+      "trades": 158,
+      "maxdd": 1.34,
+      "oos_sharpe": 2.03,
+      "is_sharpe": 1.14,
+      "oos_passed": true,
+      "overfit_warning": false,
+      "regime_luck": false
+    },
+    {
+      "name": "stc_trend_btc_4h",
+      "strategy": "stc_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "sharpe": 1.76,
+      "trades": 32,
+      "maxdd": 0.43,
+      "oos_sharpe": 1.91,
+      "is_sharpe": 1.83,
+      "oos_passed": false,
+      "overfit_warning": false,
+      "regime_luck": false
     }
   ],
   "close_calls": [],
@@ -184,6 +212,66 @@
       "sharpe": -1.0,
       "trades": 1,
       "maxdd": 2.33
+    },
+    {
+      "name": "stc_trend_eth_1h",
+      "strategy": "stc_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "reason": "sharpe=0.03 < 0.5",
+      "sharpe": 0.03,
+      "trades": 179,
+      "maxdd": 3.80
+    },
+    {
+      "name": "stc_trend_eth_4h",
+      "strategy": "stc_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "reason": "sharpe=0.30 < 0.5",
+      "sharpe": 0.30,
+      "trades": 35,
+      "maxdd": 3.23
+    },
+    {
+      "name": "tmf_trend_btc_1h",
+      "strategy": "tmf_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "reason": "trades=1 < 30, sharpe=-1.00 < 0.5",
+      "sharpe": -1.00,
+      "trades": 1,
+      "maxdd": 0.60
+    },
+    {
+      "name": "tmf_trend_btc_4h",
+      "strategy": "tmf_trend",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "reason": "trades=0 < 30, sharpe=0.00 < 0.5",
+      "sharpe": 0.0,
+      "trades": 0,
+      "maxdd": 0.00
+    },
+    {
+      "name": "tmf_trend_eth_1h",
+      "strategy": "tmf_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "reason": "trades=1 < 30, sharpe=-1.00 < 0.5",
+      "sharpe": -1.00,
+      "trades": 1,
+      "maxdd": 1.78
+    },
+    {
+      "name": "tmf_trend_eth_4h",
+      "strategy": "tmf_trend",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "reason": "trades=0 < 30, sharpe=0.00 < 0.5",
+      "sharpe": 0.0,
+      "trades": 0,
+      "maxdd": 0.00
     }
   ]
 }
