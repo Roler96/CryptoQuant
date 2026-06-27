@@ -2067,3 +2067,102 @@ def vhf(df: pd.DataFrame, period: int = 20) -> pd.Series:
     # VHF = net directional / total path
     vhf_vals = net_change / total_path.replace(0.0, np.nan)
     return vhf_vals.clip(0.0, 1.0)
+
+
+# === Chaikin Oscillator ===
+
+
+def chaikin_oscillator(
+    df: pd.DataFrame, fast: int = 3, slow: int = 10
+) -> pd.Series:
+    """Chaikin Oscillator — momentum of the Accumulation/Distribution Line.
+
+    Chaikin Oscillator = EMA(fast, A/D Line) − EMA(slow, A/D Line).
+
+    Measures the rate of change of accumulation/distribution pressure.
+    Positive oscillator → buying pressure accelerating; negative →
+    distribution pressure accelerating. Zero-cross signals precede
+    price moves by 1-3 bars in trending markets.
+
+    Reference: Marc Chaikin — "Technical Analysis from A to Z" (1995).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume' columns.
+        fast: Fast EMA period (default 3, standard Chaikin).
+        slow: Slow EMA period (default 10, standard Chaikin).
+
+    Returns:
+        pd.Series of Chaikin Oscillator values, same index as df.
+    """
+    ad = ad_line(df)
+    ema_fast = ema(ad, period=fast)
+    ema_slow = ema(ad, period=slow)
+    return ema_fast - ema_slow
+
+
+def chaikin_oscillator_signal(
+    df: pd.DataFrame, fast: int = 3, slow: int = 10
+) -> pd.DataFrame:
+    """Chaikin Oscillator with zero-line for crossover detection.
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume' columns.
+        fast: Fast EMA period (default 3).
+        slow: Slow EMA period (default 10).
+
+    Returns:
+        pd.DataFrame with columns [chaikin, zero].
+        Zero is always 0.0 (the crossover reference line).
+    """
+    co = chaikin_oscillator(df, fast=fast, slow=slow)
+    return pd.DataFrame(
+        {"chaikin": co, "zero": pd.Series(0.0, index=df.index)},
+        index=df.index,
+    )
+
+
+# === Price Volume Trend (PVT) ===
+
+
+def pvt(df: pd.DataFrame) -> pd.Series:
+    """Price Volume Trend — cumulative volume-weighted price change.
+
+    PVT = cumulative sum of (volume_t × pct_change_t).
+
+    Unlike OBV which only uses sign(Δclose) — binary accumulation,
+    PVT uses proportional price change. More granular signals than
+    OBV while retaining the cumulative noise-smoothing property.
+
+    PVT_t = PVT_{t-1} + volume_t × (close_t − close_{t-1}) / close_{t-1}
+
+    Reference: David L. Markstein — "How to Chart Your Way to Stock
+    Market Profits" (1965).
+
+    Args:
+        df: OHLCV DataFrame with 'close' and 'volume' columns.
+
+    Returns:
+        pd.Series of cumulative PVT values, same index as df.
+    """
+    close = df["close"]
+    volume = df["volume"]
+    pct_change = close.pct_change().fillna(0.0)
+    raw_pvt = volume * pct_change
+    return raw_pvt.cumsum()
+
+
+def pvt_sma(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """Price Volume Trend with signal SMA for crossover detection.
+
+    Args:
+        df: OHLCV DataFrame with 'close' and 'volume' columns.
+        period: SMA period on PVT (default 20).
+
+    Returns:
+        pd.DataFrame with columns [pvt, signal], same index as df.
+    """
+    pvt_val = pvt(df)
+    signal_line = sma(pvt_val, period)
+    return pd.DataFrame(
+        {"pvt": pvt_val, "signal": signal_line}, index=df.index
+    )
