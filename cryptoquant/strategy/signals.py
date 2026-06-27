@@ -2032,3 +2032,38 @@ def twiggs_money_flow(
 
     tmf = 100.0 * ema_raw / ema_vol.replace(0, np.nan)
     return tmf
+
+
+# === Vertical Horizontal Filter (VHF) ===
+
+
+def vhf(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Vertical Horizontal Filter — trendiness indicator (0 to 1).
+
+    VHF measures whether the market is trending directionally (high VHF)
+    or choppy/mean-reverting (low VHF).  It is the ratio of net directional
+    movement to total path length.
+
+    Formula:
+        VHF = |close - close.shift(period-1)| / sum(|close - close.shift(1)|, period)
+
+    A VHF near 1.0 means price moved in a straight line (strong trend).
+    A VHF near 0.0 means price oscillated but went nowhere (chop).
+
+    Reference: Adam White — \"The Vertical Horizontal Filter\" (TASC, 1991).
+
+    Args:
+        df: OHLCV DataFrame with 'close' column.
+        period: Lookback for trendiness measurement (default 20).
+
+    Returns:
+        pd.Series of VHF values in [0, 1], same index as df.
+    """
+    close = df["close"]
+    # Net directional change over period (bars 0 to period-1 inclusive)
+    net_change = (close - close.shift(period - 1)).abs()
+    # Total path length: sum of absolute 1-bar changes
+    total_path = close.diff().abs().rolling(period).sum()
+    # VHF = net directional / total path
+    vhf_vals = net_change / total_path.replace(0.0, np.nan)
+    return vhf_vals.clip(0.0, 1.0)
