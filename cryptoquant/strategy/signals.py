@@ -1682,6 +1682,115 @@ def obv_sma(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     )
 
 
+# === Accumulation/Distribution Line (A/D Line) ===
+
+
+def ad_line(df: pd.DataFrame) -> pd.Series:
+    """Accumulation/Distribution Line — cumulative volume-flow indicator.
+
+    Unlike OBV which only uses sign(Δclose), A/D Line weights each bar by
+    close position within the bar range (Money Flow Multiplier).  Close
+    near high → full volume added; close near low → full volume subtracted;
+    close at midpoint → zero contribution.
+
+    Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
+    Money Flow Volume = MFM × Volume_t
+    A/D Line = cumulative sum of MFV
+
+    Reference: Marc Chaikin — \"Technical Analysis from A to Z\" (1995).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume' columns.
+
+    Returns:
+        pd.Series of cumulative A/D Line values, same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    volume = df["volume"]
+
+    bar_range = (high - low).replace(0, np.nan)
+    mfm = ((close - low) - (high - close)) / bar_range
+    mfv = mfm * volume
+    return mfv.fillna(0).cumsum()
+
+
+def ad_line_sma(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+    """Accumulation/Distribution Line with signal SMA for crossover detection.
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume' columns.
+        period: SMA period on A/D Line (default 20).
+
+    Returns:
+        pd.DataFrame with columns [ad_line, signal], same index as df.
+    """
+    ad = ad_line(df)
+    signal_line = sma(ad, period)
+    return pd.DataFrame(
+        {"ad_line": ad, "signal": signal_line}, index=df.index
+    )
+
+
+# === Ease of Movement (EMV) ===
+
+
+def ease_of_movement(df: pd.DataFrame, smooth: int = 5) -> pd.Series:
+    """Ease of Movement — volume-normalized price movement indicator.
+
+    Measures how much price moved relative to the volume required to
+    move it. High EMV → price moves easily (low friction / strong trend).
+    Low EMV → price struggles (high friction / chop / distribution).
+
+    Distance Moved = (High+Low)/2 - (Prev_High+Prev_Low)/2
+    Box Ratio = Volume / (High - Low)
+    EMV = Distance Moved / Box Ratio (smoothed with EMA)
+
+    Reference: Richard Arms — \"Volume Cycles in the Stock Market\" (1994).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'volume' columns.
+        smooth: EMA smoothing period for raw EMV (default 5).
+
+    Returns:
+        pd.Series of smoothed EMV values, same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
+
+    midpoint = (high + low) / 2.0
+    distance_moved = midpoint.diff()
+
+    bar_range = (high - low).replace(0, np.nan)
+    box_ratio = volume / bar_range
+
+    raw_emv = distance_moved / box_ratio.replace(0, np.nan)
+    smoothed = raw_emv.ewm(span=smooth, adjust=False).mean()
+
+    return smoothed
+
+
+def emv_sma(df: pd.DataFrame, emv_smooth: int = 5, sma_period: int = 20) -> pd.DataFrame:
+    """Ease of Movement with signal line for zero-cross / crossover detection.
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'volume' columns.
+        emv_smooth: EMA smoothing period for raw EMV (default 5).
+        sma_period: SMA period on EMV for signal line (default 20).
+
+    Returns:
+        pd.DataFrame with columns [emv, signal], same index as df.
+        Signal line is EMA of EMV for smoother crossover detection.
+    """
+    emv_val = ease_of_movement(df, smooth=emv_smooth)
+    signal_line = sma(emv_val, sma_period)
+    return pd.DataFrame(
+        {"emv": emv_val, "signal": signal_line}, index=df.index
+    )
+
+
 # === Donchian Channel ===
 
 
