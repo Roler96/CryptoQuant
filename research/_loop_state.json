@@ -1,16 +1,28 @@
 {
   "version": 1,
-  "state": "implement",
+  "state": "done",
   "loop_started": "2026-06-27T10:16:07Z",
-  "loop_ended": null,
+  "loop_ended": "2026-06-27T11:15:00Z",
   "date": "2026-06-27",
   "candidates": ["adline_trend", "emv_trend"],
-  "implemented": [],
+  "implemented": ["adline_trend", "emv_trend"],
   "backtest_queue": [],
-  "backtest_completed": [],
-  "passed": [],
+  "backtest_completed": [
+    {"strategy": "adline_trend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.60, "trades": 150, "maxdd": 0.33, "gate": "PASS", "oos_sharpe": 3.00, "oos_passed": true},
+    {"strategy": "adline_trend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 2.13, "trades": 32, "maxdd": 0.38, "gate": "PASS", "oos_sharpe": 2.29, "oos_passed": true},
+    {"strategy": "adline_trend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 0.94, "trades": 192, "maxdd": 2.53, "gate": "PASS", "oos_sharpe": 0.10, "oos_passed": false},
+    {"strategy": "adline_trend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 2.13, "trades": 34, "maxdd": 0.83, "gate": "PASS", "oos_sharpe": 1.74, "oos_passed": true},
+    {"strategy": "emv_trend", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.87, "trades": 267, "maxdd": 0.41, "gate": "PASS", "oos_sharpe": 2.94, "oos_passed": true},
+    {"strategy": "emv_trend", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 2.29, "trades": 48, "maxdd": 0.07, "gate": "PASS", "oos_sharpe": 2.68, "oos_passed": true},
+    {"strategy": "emv_trend", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 1.60, "trades": 292, "maxdd": 1.93, "gate": "PASS", "oos_sharpe": 1.56, "oos_passed": true},
+    {"strategy": "emv_trend", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 1.40, "trades": 62, "maxdd": 1.45, "gate": "PASS", "oos_sharpe": 0.92, "oos_passed": false}
+  ],
+  "passed": [
+    "adline_trend (4/4 main, 3/4 OOS)",
+    "emv_trend (4/4 main, 3/4 OOS)"
+  ],
   "close_calls": [],
   "failed": [],
   "error": null,
-  "ticks": 1
+  "ticks": 5
 }
