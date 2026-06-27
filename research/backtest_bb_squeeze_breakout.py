@@ -1,17 +1,19 @@
 """Bollinger Band Squeeze Breakout strategy.
 
-Volatility-breakout strategy that waits for BB width contraction
-(squeeze), then enters on a breakout of the bands. Exactly 2 entry
-conditions: (1) squeeze detected, (2) price breakout.
+Volatility expansion strategy: detect BB width contraction (squeeze)
+followed by a breakout outside the bands. Exactly 2 entry conditions.
 
-BB squeeze occurs when BB width reaches a multi-period minimum,
-signalling low-volatility consolidation. When price subsequently
-breaks the bands, it often starts a volatility expansion (new trend).
+BB width = (BB_upper - BB_lower) / BB_middle (normalized)
+Squeeze: BB width at multi-period minimum
 
-Entry (long):  squeeze AND close > BB upper
-Entry (short): squeeze AND close < BB lower
-Exit (long):   close < BB middle (SMA20)
-Exit (short):  close > BB middle (SMA20)
+Entry (long):  squeeze detected AND close > BB_upper
+Entry (short): squeeze detected AND close < BB_lower
+Exit (long):   close < BB_middle (SMA20)
+Exit (short):  close > BB_middle (SMA20)
+
+The squeeze identifies quiet consolidation periods. When price breaks out
+during a squeeze, it signals the start of a volatility expansion — the
+beginning of a new directional move.
 
 Reference: John Bollinger — "Bollinger on Bollinger Bands" (2001).
 """
@@ -24,7 +26,7 @@ from cryptoquant.strategy.signals import bb_squeeze, bollinger_bands
 
 
 class BBSqueezeBreakout(Strategy):
-    """Bollinger Band Squeeze + Breakout strategy.
+    """Bollinger Band Squeeze Breakout — volatility expansion entry.
 
     Parameters:
         bb_period: BB moving average period (default 20)
@@ -62,24 +64,26 @@ class BBSqueezeBreakout(Strategy):
         bb_std = self.params["bb_std"]
         squeeze_lookback = self.params["squeeze_lookback"]
 
-        # Compute BB and squeeze detection
-        bb = bollinger_bands(df, period=bb_period, std=bb_std)
-        bb_middle = bb["middle"]
-        bb_upper = bb["upper"]
-        bb_lower = bb["lower"]
+        # Compute indicators
+        bands = bollinger_bands(df, period=bb_period, std=bb_std)
+        upper = bands["upper"]
+        lower = bands["lower"]
+        middle = bands["middle"]
 
         is_squeeze = bb_squeeze(
-            df, bb_period=bb_period, bb_std=bb_std,
+            df,
+            bb_period=bb_period,
+            bb_std=bb_std,
             squeeze_lookback=squeeze_lookback,
         )
 
         # Entry signals (2 conditions: squeeze + breakout)
-        long_entry = is_squeeze & (close > bb_upper)
-        short_entry = is_squeeze & (close < bb_lower)
+        long_entry = is_squeeze & (close > upper)
+        short_entry = is_squeeze & (close < lower)
 
-        # Exit signals: price crosses back through middle band
-        exit_long = close < bb_middle
-        exit_short = close > bb_middle
+        # Exit signals: price crosses BB middle band (SMA20)
+        exit_long = close < middle
+        exit_short = close > middle
 
         # Stateful signal generation
         n = len(df)
@@ -87,7 +91,7 @@ class BBSqueezeBreakout(Strategy):
         position = 0  # 0=flat, 1=long, -1=short
 
         for i in range(n):
-            if pd.isna(bb_middle.iloc[i]):
+            if pd.isna(upper.iloc[i]) or pd.isna(lower.iloc[i]):
                 signal_arr[i] = 0
                 continue
 
