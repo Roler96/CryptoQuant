@@ -1,117 +1,155 @@
-"""Tests for TRIXTrend strategy."""
-
+"""Tests for TriXTrend strategy."""
 import numpy as np
 import pandas as pd
 import pytest
 
 from cryptoquant.exceptions import StrategyError
+from research.backtest_trix_trend import TriXTrend
 
 
-# ── Test data ─────────────────────────────────────────────────────
-
-
-def _make_df(n: int = 500) -> pd.DataFrame:
-    """Synthetic OHLCV with a gentle uptrend and some volatility."""
-    rng = np.random.default_rng(42)
-    base = np.linspace(90, 120, n) + rng.normal(0, 1.5, n)
-    idx = pd.date_range("2025-01-01", periods=n, freq="h", tz="UTC")
-    idx = idx.tz_localize(None)
+def _make_flat_df(n: int = 500) -> pd.DataFrame:
+    """Create a flat-price OHLCV DataFrame for testing."""
+    dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+    close = np.full(n, 100.0)
     return pd.DataFrame(
         {
-            "open": base + rng.normal(0, 0.5, n),
-            "high": base + np.abs(rng.normal(1.5, 1.0, n)),
-            "low": base - np.abs(rng.normal(1.5, 1.0, n)),
-            "close": base,
-            "volume": rng.uniform(100, 1000, n),
+            "open": close - 0.1,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.full(n, 1000.0),
         },
-        index=idx,
+        index=dates,
     )
 
 
-def _make_trending_df(n: int = 500, direction: str = "up") -> pd.DataFrame:
-    """Strong trending data for signal generation."""
+def _make_uptrend_df(n: int = 500) -> pd.DataFrame:
+    """Create a clean trending-up DataFrame for TRIX testing."""
+    dates = pd.date_range("2024-01-01", periods=n, freq="1h")
     rng = np.random.default_rng(42)
-    if direction == "up":
-        base = np.linspace(90, 150, n) + rng.normal(0, 2, n)
-    else:
-        base = np.linspace(150, 90, n) + rng.normal(0, 2, n)
-
-    idx = pd.date_range("2025-01-01", periods=n, freq="h", tz="UTC")
-    idx = idx.tz_localize(None)
+    trend = np.linspace(100.0, 200.0, n)
+    noise = rng.normal(0, 1.5, n)
+    close = trend + noise
     return pd.DataFrame(
         {
-            "open": base,
-            "high": base + np.abs(rng.normal(2, 1.5, n)),
-            "low": base - np.abs(rng.normal(1.5, 1.0, n)),
-            "close": base,
-            "volume": rng.uniform(100, 1000, n),
+            "open": close - 0.5,
+            "high": close + 1.5,
+            "low": close - 1.5,
+            "close": close,
+            "volume": np.full(n, 1000.0),
         },
-        index=idx,
+        index=dates,
     )
 
 
-# ── Strategy tests ────────────────────────────────────────────────
+def _make_downtrend_df(n: int = 500) -> pd.DataFrame:
+    """Create a clean trending-down DataFrame for TRIX testing."""
+    dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+    rng = np.random.default_rng(42)
+    trend = np.linspace(200.0, 80.0, n)
+    noise = rng.normal(0, 1.5, n)
+    close = trend + noise
+    return pd.DataFrame(
+        {
+            "open": close + 0.5,
+            "high": close + 1.5,
+            "low": close - 1.5,
+            "close": close,
+            "volume": np.full(n, 1000.0),
+        },
+        index=dates,
+    )
 
 
-class TestTRIXTrend:
-    """Tests for the TRIXTrend strategy class."""
+def _make_choppy_df(n: int = 500) -> pd.DataFrame:
+    """Create a choppy, mean-reverting DataFrame."""
+    dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+    rng = np.random.default_rng(42)
+    close = np.zeros(n)
+    close[0] = 100.0
+    for i in range(1, n):
+        reversion = 0.7 * (100.0 - close[i - 1])
+        noise = rng.normal(0, 1.5)
+        close[i] = close[i - 1] + reversion + noise
+        close[i] = np.clip(close[i], 92.0, 108.0)
+    return pd.DataFrame(
+        {
+            "open": close - 0.3,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.full(n, 1000.0),
+        },
+        index=dates,
+    )
 
-    def test_import(self):
-        """Strategy module imports without error."""
-        from research.backtest_trix_trend import TRIXTrend
-        assert TRIXTrend is not None
 
-    def test_generate_signal_shape(self):
-        """generate_signal() returns Series with same length and index."""
-        from research.backtest_trix_trend import TRIXTrend
+class TestTriXTrend:
+    """Tests for the TriXTrend strategy."""
 
-        df = _make_df(350)
-        strategy = TRIXTrend()
-        signals = strategy.generate_signal(df)
-        assert isinstance(signals, pd.Series)
-        assert len(signals) == len(df)
-        assert signals.index.equals(df.index)
+    def test_default_params_instantiation(self):
+        """Strategy can be instantiated with default parameters."""
+        s = TriXTrend()
+        assert s.name == "TriXTrend"
+        assert s.timeframe == "1h"
+        assert s.params["trix_period"] == 15
+        assert s.params["signal_period"] == 9
+        assert s.params["trend_period"] == 200
 
-    def test_insufficient_bars_raises(self):
-        """Raises StrategyError when len(df) < min_bars."""
-        from research.backtest_trix_trend import TRIXTrend
-
-        df = _make_df(50)
-        strategy = TRIXTrend()
+    def test_min_bars_raises(self):
+        """Strategy raises StrategyError when df has fewer than min_bars."""
+        s = TriXTrend()
+        dates = pd.date_range("2024-01-01", periods=50, freq="1h")
+        df = pd.DataFrame(
+            {
+                "open": 100.0, "high": 101.0, "low": 99.0,
+                "close": 100.0, "volume": 1000.0,
+            },
+            index=dates,
+        )
         with pytest.raises(StrategyError):
-            strategy.generate_signal(df)
+            s.generate_signal(df)
 
-    def test_signals_on_trending_data(self):
-        """Strategy generates non-zero signals on strong trending data."""
-        from research.backtest_trix_trend import TRIXTrend
+    def test_signal_shape(self):
+        """Signal output matches input DataFrame shape."""
+        df = _make_uptrend_df(500)
+        s = TriXTrend()
+        sig = s.generate_signal(df)
+        assert len(sig) == len(df)
+        assert sig.index.equals(df.index)
+        assert sig.dtype in (int, np.int32, np.int64)
 
-        df = _make_trending_df(500, "up")
-        strategy = TRIXTrend()
-        signals = strategy.generate_signal(df)
+    def test_flat_market_no_trades(self):
+        """In a completely flat market, TRIX stays near zero — minimal signals."""
+        df = _make_flat_df(500)
+        s = TriXTrend()
+        sig = s.generate_signal(df)
+        # Flat market = zero rate-of-change = TRIX stays near 0 = no crossovers
+        assert (sig != 0).sum() < len(sig) * 0.10  # <10% non-flat
 
-        nonzero = (signals != 0).sum()
-        assert nonzero > 0, f"Expected non-zero signals, got all flat ({len(signals)} bars)"
+    def test_uptrend_generates_long_trades(self):
+        """Strong uptrend produces positive rate-of-change → TRIX rises → long entry."""
+        df = _make_uptrend_df(500)
+        s = TriXTrend()
+        sig = s.generate_signal(df)
+        assert 1 in sig.values
+        long_count = (sig == 1).sum()
+        assert long_count > 0
 
-    def test_signal_values_are_valid(self):
-        """Signals only contain -1, 0, or 1."""
-        from research.backtest_trix_trend import TRIXTrend
+    def test_downtrend_generates_short_trades(self):
+        """Strong downtrend produces negative rate-of-change → TRIX falls → short."""
+        df = _make_downtrend_df(500)
+        s = TriXTrend()
+        sig = s.generate_signal(df)
+        assert -1 in sig.values
+        short_count = (sig == -1).sum()
+        assert short_count > 0
 
-        df = _make_df(350)
-        strategy = TRIXTrend()
-        signals = strategy.generate_signal(df)
-        unique = set(signals.unique())
-        assert unique <= {-1, 0, 1}, f"Unexpected signal values: {unique}"
-
-    def test_trix_indicator_integration(self):
-        """TRIX indicator function works with strategy's parameters."""
+    def test_trix_indicator_shape(self):
+        """TRIX indicator produces DataFrame with [trix, signal] columns."""
         from cryptoquant.strategy.signals import trix
-
-        df = _make_df(500)
-        close_series: pd.Series = df["close"]  # type: ignore[assignment]
-        trix_df = trix(close_series, period=15, signal_period=9)
+        df = _make_uptrend_df(500)
+        trix_df = trix(df["close"])
         assert "trix" in trix_df.columns
         assert "signal" in trix_df.columns
         assert len(trix_df) == len(df)
-        # Values should not be all NaN after warmup
-        valid_count = trix_df["trix"].notna().sum()
-        assert valid_count > 0, "TRIX indicator produced all NaN values"
