@@ -2565,3 +2565,107 @@ def qstick(df: pd.DataFrame, period: int = 14) -> pd.Series:
     open_ = df["open"]
     diff = close - open_
     return diff.rolling(period).mean()
+
+
+# === Polarized Fractal Efficiency (PFE) ===
+
+
+def pfe(series: pd.Series, period: int = 10) -> pd.Series:
+    """Polarized Fractal Efficiency — signed efficiency measure.
+
+    PFE measures how efficiently price moves over N bars using fractal
+    geometry. Unlike Kaufman's Efficiency Ratio (unsigned 0-1), PFE is
+    signed (-100 to +100), making it a natural oscillator for trend-
+    following entry.
+
+    Formula:
+        net = sqrt((C[t] - C[t-N])² + N²)
+        gross = Σ sqrt((C[i] - C[i-1])² + 1)  for i = t-N+1..t
+        PFE = 100 × (net / gross) × sign(C[t] - C[t-N])
+
+    Reference: Hans Hannula — "Polarized Fractal Efficiency" (1994).
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback period for efficiency measurement.
+
+    Returns:
+        pd.Series of PFE values (-100 to +100), same index as input.
+    """
+    n = period
+    if n < 2:
+        raise ValueError(f"PFE period must be >= 2, got {n}")
+
+    close = series.values.astype(float)
+    length = len(close)
+    result = np.full(length, np.nan)
+
+    for i in range(n, length):
+        c_now = close[i]
+        c_prev = close[i - n]
+        net = np.sqrt((c_now - c_prev) ** 2 + n ** 2)
+
+        gross = 0.0
+        for j in range(i - n + 1, i + 1):
+            diff = close[j] - close[j - 1]
+            gross += np.sqrt(diff ** 2 + 1.0)
+
+        if gross > 0:
+            eff = net / gross
+            pfe_val = 100.0 * eff * (1.0 if c_now >= c_prev else -1.0)
+            result[i] = pfe_val
+
+    return pd.Series(result, index=series.index)
+
+
+# === Arnaud Legoux Moving Average (ALMA) ===
+
+
+def alma(series: pd.Series, period: int = 9, offset: float = 0.85,
+         sigma: float = 6.0) -> pd.Series:
+    """Arnaud Legoux Moving Average — Gaussian-weighted zero-lag MA.
+
+    Uses a Gaussian (normal distribution) weighting function with
+    adjustable offset to eliminate lag while maintaining smoothness.
+    Unlike EMAs (which lag ~period/2 bars), ALMA can achieve near-zero
+    lag without introducing the whipsaw of standard zero-lag attempts.
+
+    Formula:
+        w[j] = exp(-((j - m)²) / (2 × σ²))
+        m = offset × (period - 1)
+        σ = period / sigma
+        ALMA = Σ w[j] × price[i-(period-1)+j] / Σ w[j]
+
+    Reference: Arnaud Legoux & Dimitris Kouzis-Loukas (2009).
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback window size.
+        offset: Gaussian center position (0.0=full lag, 1.0=zero lag).
+        sigma: Gaussian width parameter (higher = smoother).
+
+    Returns:
+        pd.Series of ALMA values, same index as input.
+    """
+    if period < 2:
+        raise ValueError(f"ALMA period must be >= 2, got {period}")
+
+    m = offset * (period - 1)
+    s = period / sigma
+
+    # Precompute Gaussian weights (same for every window)
+    weights = np.zeros(period)
+    for j in range(period):
+        weights[j] = np.exp(-((j - m) ** 2) / (2.0 * s ** 2))
+    w_sum = weights.sum()
+
+    close = series.values.astype(float)
+    length = len(close)
+    result = np.full(length, np.nan)
+
+    for i in range(period - 1, length):
+        window = close[i - period + 1 : i + 1]
+        alma_val = np.dot(window, weights) / w_sum
+        result[i] = alma_val
+
+    return pd.Series(result, index=series.index)
