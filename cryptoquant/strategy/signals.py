@@ -2758,3 +2758,156 @@ def decycler(series: pd.Series, cutoff_period: int) -> pd.Series:
         )
 
     return pd.Series(decycler_vals, index=series.index)
+
+
+# === Laguerre RSI (Ehlers) ===
+
+
+def laguerre_rsi(
+    series: pd.Series,
+    period: int = 14,
+    gamma: float = 0.5,
+) -> pd.Series:
+    """Laguerre RSI — RSI with reduced lag via 4-pole Laguerre filter.
+
+    Standard RSI uses Wilder's smoothing (EMA with alpha=1/period),
+    introducing 5-8 bar lag.  Laguerre RSI applies a 4-pole gamma
+    filter to the price, then computes RSI on the filtered FIR series.
+    This produces earlier signals during trend transitions while
+    maintaining smoothness.
+
+    Algorithm (Ehlers, 2002):
+
+      L0_t = (1-γ)·price_t + γ·L0_{t-1}
+      L1_t = -γ·L0_t + L0_{t-1} + γ·L1_{t-1}
+      L2_t = -γ·L1_t + L1_{t-1} + γ·L2_{t-1}
+      L3_t = -γ·L2_t + L2_{t-1} + γ·L3_{t-1}
+      FIR_t = (L0_t + 2·L1_t + 2·L2_t + L3_t) / 6
+
+      RSI computed on FIR using EMA smoothing of up/down moves.
+
+    Args:
+        series: Price series (typically close).
+        period: RSI EMA smoothing period (default 14).
+        gamma: Laguerre pole location (0 < γ < 1, default 0.5).
+
+    Returns:
+        pd.Series of Laguerre RSI values (0-100), same index as input.
+    """
+    if not 0 < gamma < 1:
+        raise ValueError(f"gamma must be in (0,1), got {gamma}")
+
+    price = series.values.astype(float)
+    n = len(price)
+
+    l0 = np.full(n, np.nan)
+    l1 = np.full(n, np.nan)
+    l2 = np.full(n, np.nan)
+    l3 = np.full(n, np.nan)
+
+    # Initialize filters with first close price
+    l0[0] = price[0]
+    l1[0] = price[0]
+    l2[0] = price[0]
+    l3[0] = price[0]
+
+    for i in range(1, n):
+        l0[i] = (1.0 - gamma) * price[i] + gamma * l0[i - 1]
+        l1[i] = -gamma * l0[i] + l0[i - 1] + gamma * l1[i - 1]
+        l2[i] = -gamma * l1[i] + l1[i - 1] + gamma * l2[i - 1]
+        l3[i] = -gamma * l2[i] + l2[i - 1] + gamma * l3[i - 1]
+
+    fir = (l0 + 2.0 * l1 + 2.0 * l2 + l3) / 6.0
+
+    # Compute RSI on FIR
+    d_fir = np.diff(fir, prepend=fir[0])
+    cu = np.where(d_fir > 0, d_fir, 0.0)
+    cd = np.where(d_fir < 0, -d_fir, 0.0)
+
+    # EMA smoothing via ewm
+    fir_series = pd.Series(fir, index=series.index)
+    cu_series = pd.Series(cu, index=series.index)
+    cd_series = pd.Series(cd, index=series.index)
+
+    alpha = 1.0 / period
+    cu_ema = cu_series.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+    cd_ema = cd_series.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
+
+    denom = cu_ema + cd_ema
+    denom = denom.replace(0, np.nan)
+    lrsi = 100.0 * cu_ema / denom
+
+    return lrsi
+
+
+# === VIDYA (Variable Index Dynamic Average) ===
+
+
+def vidya(
+    series: pd.Series,
+    vidya_period: int = 9,
+    cmo_period: int = 9,
+) -> pd.Series:
+    """VIDYA — Variable Index Dynamic Average (Chande).
+
+    Unlike KAMA (which uses Kaufman's Efficiency Ratio — a non-directional
+    noise measure), VIDYA uses the Chande Momentum Oscillator (CMO) as the
+    efficiency ratio.  CMO measures directional trend strength, meaning
+    VIDYA smooths LESS in strong directional trends (faster response) and
+    smooths MORE in choppy conditions (noise reduction).
+
+    Algorithm:
+
+      up_moves = Σ max(close_t - close_{t-1}, 0) over cmo_period
+      down_moves = Σ max(close_{t-1} - close_t, 0) over cmo_period
+      CMO = (up_moves - down_moves) / (up_moves + down_moves)  → [-1, 1]
+      alpha_t = 2/(vidya_period+1) · |CMO_t|
+      VIDYA_t = alpha_t · close_t + (1-alpha_t) · VIDYA_{t-1}
+
+    When CMO = 1 (pure uptrend): alpha = 2/(period+1), fastest tracking.
+    When CMO = 0 (choppy): α → 0, maximum smoothing (near-constant).
+
+    Args:
+        series: Price series (typically close).
+        vidya_period: Effective EMA period when CMO=1 (default 9).
+        cmo_period: Lookback for CMO calculation (default 9).
+
+    Returns:
+        pd.Series of VIDYA values, same index as input.
+    """
+    close = series.values.astype(float)
+    n = len(close)
+
+    # CMO: (Σup - Σdown) / (Σup + Σdown)
+    delta = np.diff(close, prepend=close[0])
+    up = np.where(delta > 0, delta, 0.0)
+    down = np.where(delta < 0, -delta, 0.0)
+
+    up_roll = pd.Series(up, index=series.index).rolling(cmo_period).sum()
+    down_roll = pd.Series(down, index=series.index).rolling(cmo_period).sum()
+    up_sum: np.ndarray = np.asarray(up_roll, dtype=float)  # type: ignore[arg-type]
+    down_sum: np.ndarray = np.asarray(down_roll, dtype=float)  # type: ignore[arg-type]
+
+    total = up_sum + down_sum
+    cmo = np.full(n, np.nan)
+    mask = total > 0
+    cmo[mask] = (up_sum[mask] - down_sum[mask]) / total[mask]
+    cmo[~mask] = 0.0  # No moves → zero momentum
+
+    # VIDYA recursion
+    vidya_vals = np.full(n, np.nan)
+    # Initialize: first valid CMO bar sets seed
+    first_valid = cmo_period  # where rolling sum first completes
+    if first_valid < n:
+        vidya_vals[first_valid - 1] = close[first_valid - 1]
+
+    sc = 2.0 / (vidya_period + 1.0)
+    for i in range(max(first_valid, 1), n):
+        if np.isnan(cmo[i]):
+            vidya_vals[i] = vidya_vals[i - 1]
+        else:
+            alpha = sc * abs(cmo[i])
+            alpha = min(alpha, 1.0)  # clamp for numerical safety
+            vidya_vals[i] = alpha * close[i] + (1.0 - alpha) * vidya_vals[i - 1]
+
+    return pd.Series(vidya_vals, index=series.index)

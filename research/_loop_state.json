@@ -1,47 +1,16 @@
 {
   "version": 1,
-  "state": "done",
-  "loop_started": "2026-06-28T13:16:01Z",
-  "loop_ended": "2026-06-28T14:33:58Z",
+  "state": "implement",
+  "loop_started": "2026-06-28T17:45:37Z",
+  "loop_ended": null,
   "date": "2026-06-28",
-  "candidates": ["tsi_trend", "dmi_cross_trend"],
-  "implemented": ["tsi_trend", "dmi_cross_trend"],
+  "candidates": ["laguerre_rsi_expansion", "vidya_crossover_expansion"],
+  "implemented": [],
   "backtest_queue": [],
-  "backtest_completed": [
-    {"strategy": "tsi_trend", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "1h", "result": "PASS|OOS_FAIL", "sharpe": 0.63, "trades": 79},
-    {"strategy": "tsi_trend", "class": "TSITrend", "symbol": "BTC/USDT", "timeframe": "4h", "result": "FAIL", "sharpe": 1.74, "trades": 12},
-    {"strategy": "tsi_trend", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "1h", "result": "FAIL", "sharpe": -0.17, "trades": 63},
-    {"strategy": "tsi_trend", "class": "TSITrend", "symbol": "ETH/USDT", "timeframe": "4h", "result": "FAIL", "sharpe": 0.28, "trades": 13},
-    {"strategy": "dmi_trend", "class": "DMITrend", "symbol": "BTC/USDT", "timeframe": "1h", "result": "PASS", "sharpe": 2.53, "trades": 197},
-    {"strategy": "dmi_trend", "class": "DMITrend", "symbol": "BTC/USDT", "timeframe": "4h", "result": "PASS|OOS_FAIL", "sharpe": 2.10, "trades": 38},
-    {"strategy": "dmi_trend", "class": "DMITrend", "symbol": "ETH/USDT", "timeframe": "1h", "result": "PASS", "sharpe": 1.61, "trades": 196},
-    {"strategy": "dmi_trend", "class": "DMITrend", "symbol": "ETH/USDT", "timeframe": "4h", "result": "PASS|OOS_FAIL", "sharpe": 1.23, "trades": 36}
-  ],
-  "passed": [
-    {"strategy": "McGinleyDynamicTrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 3.41, "trades": 244, "maxdd": 0.3, "return": 7.0},
-    {"strategy": "PVTTrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 2.86, "trades": 194, "maxdd": 0.4, "return": 5.9},
-    {"strategy": "DMITrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 2.53, "trades": 197, "maxdd": 0.6, "return": 5.1},
-    {"strategy": "McGinleyDynamicTrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 2.43, "trades": 254, "maxdd": 2.0, "return": 9.9},
-    {"strategy": "HMATrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 2.36, "trades": 228, "maxdd": 0.8, "return": 4.9},
-    {"strategy": "ADXSlopeTrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 2.13, "trades": 189, "maxdd": 1.1, "return": 4.4},
-    {"strategy": "KVOTrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 1.82, "trades": 167, "maxdd": 1.1, "return": 3.6},
-    {"strategy": "ALMATrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 1.76, "trades": 206, "maxdd": 1.0, "return": 3.7},
-    {"strategy": "DMITrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 1.61, "trades": 196, "maxdd": 2.4, "return": 7.0},
-    {"strategy": "DecyclerTrend", "symbol": "BTC/USDT", "tf": "1h", "sharpe": 1.28, "trades": 203, "maxdd": 1.3, "return": 2.7},
-    {"strategy": "PVTTrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 1.28, "trades": 193, "maxdd": 2.1, "return": 5.6},
-    {"strategy": "KVOTrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 1.12, "trades": 133, "maxdd": 2.2, "return": 4.3},
-    {"strategy": "ChaikinOscillatorTrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 0.91, "trades": 82, "maxdd": 1.9, "return": 3.7},
-    {"strategy": "MfiTrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 0.66, "trades": 99, "maxdd": 2.8, "return": 2.8},
-    {"strategy": "HMATrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": 0.56, "trades": 266, "maxdd": 4.7, "return": 2.8}
-  ],
+  "backtest_completed": [],
+  "passed": [],
   "close_calls": [],
-  "failed": [
-    {"strategy": "TSITrend", "symbol": "BTC/USDT", "tf": "4h", "sharpe": 1.74, "trades": 12, "reason": "trades=12 < 30 (min)"},
-    {"strategy": "TSITrend", "symbol": "ETH/USDT", "tf": "4h", "sharpe": 0.28, "trades": 13, "reason": "trades=13 < 30 (min), sharpe=0.28 < 0.5 (min)"},
-    {"strategy": "TSITrend", "symbol": "ETH/USDT", "tf": "1h", "sharpe": -0.17, "trades": 63, "reason": "sharpe=-0.17 < 0.5 (min)"}
-  ],
-  "oos_fail_count": 28,
-  "archived_count": 3,
+  "failed": [],
   "error": null,
-  "ticks": 6
+  "ticks": 1
 }
