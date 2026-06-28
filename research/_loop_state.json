@@ -1,16 +1,25 @@
 {
   "version": 1,
-  "state": "implement",
-  "loop_started": "2026-06-28T05:00:19Z",
+  "state": "backtest",
+  "loop_started": "2026-06-28T11:15:57Z",
   "loop_ended": null,
   "date": "2026-06-28",
-  "candidates": ["adx_slope", "qstick"],
-  "implemented": [],
-  "backtest_queue": [],
+  "candidates": ["hma_trend", "decycler_trend"],
+  "implemented": ["hma_trend", "decycler_trend"],
+  "backtest_queue": [
+    {"strategy": "research/backtest_hma_trend.py", "class": "HMATrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_hma_trend.py", "class": "HMATrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_hma_trend.py", "class": "HMATrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_hma_trend.py", "class": "HMATrend", "symbol": "ETH/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_decycler_trend.py", "class": "DecyclerTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_decycler_trend.py", "class": "DecyclerTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
+    {"strategy": "research/backtest_decycler_trend.py", "class": "DecyclerTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
+    {"strategy": "research/backtest_decycler_trend.py", "class": "DecyclerTrend", "symbol": "ETH/USDT", "timeframe": "4h"}
+  ],
   "backtest_completed": [],
   "passed": [],
   "close_calls": [],
   "failed": [],
   "error": null,
-  "ticks": 1
+  "ticks": 2
 }

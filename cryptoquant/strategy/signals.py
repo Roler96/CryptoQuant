@@ -2669,3 +2669,76 @@ def alma(series: pd.Series, period: int = 9, offset: float = 0.85,
         result[i] = alma_val
 
     return pd.Series(result, index=series.index)
+
+# === Ehlers Decycler (Butterworth 2-Pole Low-Pass Filter) ===
+
+
+def decycler(series: pd.Series, cutoff_period: int) -> pd.Series:
+    """Ehlers Decycler — 2-pole Butterworth low-pass filter.
+
+    Extracts the trend component from price by removing cycles
+    shorter than cutoff_period using a zero-phase-lag Butterworth
+    filter. The result has near-zero lag compared to MA-based
+    smoothing because it's a frequency-domain filter, not a
+    time-domain averager.
+
+    Computation (Ehlers, 2004):
+      1. Design 2-pole Butterworth low-pass filter at cutoff_period.
+      2. Apply filter to price -> Decycler = trend component.
+      3. The filter has zero phase lag at DC by design.
+
+    Args:
+        series: Price series (typically close).
+        cutoff_period: Cutoff period in bars. Cycles shorter than
+            this are attenuated; longer cycles (trend) pass through.
+
+    Returns:
+        pd.Series of Decycler values, same index as input.
+    """
+    if cutoff_period < 2:
+        raise ValueError(
+            f"Decycler cutoff_period must be >= 2, got {cutoff_period}"
+        )
+
+    close = series.values.astype(float)
+    n = len(close)
+
+    # 2-pole Butterworth low-pass filter via bilinear transform.
+    # Transfer function in s-domain: H(s) = 1 / (s² + √2·s + 1)
+    # Bilinear transform s = 2/T * (1-z⁻¹)/(1+z⁻¹) with T = 1:
+    #   H(z) = (b0 + b1·z⁻¹ + b2·z⁻²) / (1 + a1·z⁻¹ + a2·z⁻²)
+    # where c = 1/tan(π/cutoff_period) and d = 1 + √2·c + c²
+    omega = np.pi / cutoff_period
+    c = 1.0 / np.tan(omega)
+    c2 = c * c
+    SQRT2 = np.sqrt(2.0)
+    d = 1.0 + SQRT2 * c + c2
+
+    # Feed-forward coefficients (numerator)
+    b0 = 1.0 / d
+    b1 = 2.0 / d
+    b2 = 1.0 / d
+
+    # Feedback coefficients (denominator, sign convention: + in denominator)
+    # y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+    a1 = 2.0 * (1.0 - c2) / d
+    a2 = (1.0 - SQRT2 * c + c2) / d
+
+    decycler_vals = np.full(n, np.nan)
+
+    # Initialize filter state with the first two input values
+    # (standard practice for low-pass Butterworth filters)
+    if n >= 2:
+        decycler_vals[0] = close[0]
+        decycler_vals[1] = close[1]
+
+    for i in range(2, n):
+        decycler_vals[i] = (
+            b0 * close[i]
+            + b1 * close[i - 1]
+            + b2 * close[i - 2]
+            - a1 * decycler_vals[i - 1]
+            - a2 * decycler_vals[i - 2]
+        )
+
+    return pd.Series(decycler_vals, index=series.index)
