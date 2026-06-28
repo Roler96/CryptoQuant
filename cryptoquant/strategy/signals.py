@@ -100,6 +100,22 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
+def roc(series: pd.Series, period: int = 20) -> pd.Series:
+    """Rate of Change — raw momentum indicator.
+
+    Computes (close[t] - close[t-N]) / close[t-N] * 100.
+    Positive values indicate upward momentum, negative downward.
+
+    Args:
+        series: Price series (typically close).
+        period: Lookback period (default 20).
+
+    Returns:
+        pd.Series of percentage change, same index as input.
+    """
+    return series.pct_change(periods=period) * 100
+
+
 def macd(
     series: pd.Series,
     fast: int = 12,
