@@ -1,51 +1,53 @@
-# Candidate 2: PVT (Price Volume Trend) Trend
+# Candidate 2: MFI Trend (mfi_trend)
 
-**Date:** 2026-06-28
-**Loop:** 31
-**Source:** Internal pattern mining (cumulative volume family variant)
+## Source
+Sunday free search — Money Flow Index, volume-weighted RSI oscillator normalized to 0-100. Never tested in any previous loop.
 
-## Rationale
+## Strategy Concept
+**MFI threshold crossover + EMA200 trend filter (2 conditions)**
 
-PVT (Price Volume Trend) = cumulative sum of (volume × %price_change). Unlike OBV (which uses sign(close - prev_close) — binary accumulation), PVT uses the proportional price change — more granular, more signals.
+The Money Flow Index (MFI) is a volume-weighted RSI that oscillates between 0-100. It combines price direction with volume intensity — detecting whether money is flowing into or out of an asset. Unlike Force Index (which multiplies volume × price change and is unbounded), MFI is normalized to 0-100, making it timeframe/symbol agnostic — the key property that made BB %B universally robust in Loop 11.
 
-PVT is a middle ground between OBV (binary accumulation, rare zero-crosses) and Force Index (per-bar reset, many signals). The cumulative property + proportional weighting should produce 80-150 trades on 1h and 30-45 on 4h — right in the sweet spot.
+### Entry Logic
+- **Long:** MFI crosses above 50 AND close > EMA200
+- **Short:** MFI crosses below 50 AND close < EMA200
 
-OBV 4/4 clean sweep proved cumulative volume works. PVT is the natural extension: same accumulation mechanic, but with proportional weighting that should generate more nuanced signals.
+### Exit Logic
+- MFI crosses back through 50 (reverse signal)
+- Stop-loss: 2× ATR(14) trailing
+- Take-profit: 3× ATR(14)
 
-## Strategy Design
-
+### Default Parameters
+```python
+DEFAULT_PARAMS = {
+    "mfi_period": 14,
+    "mfi_threshold": 50,
+    "trend_period": 200,
+    "atr_period": 14,
+    "stop_mult": 2.0,
+    "take_profit_mult": 3.0,
+}
 ```
-Entry (LONG):  PVT crosses above SMA(PVT, 20) AND Close > EMA200
-Entry (SHORT): PVT crosses below SMA(PVT, 20) AND Close < EMA200
-Exit:          PVT crosses opposite SMA OR trailing stop at 2× ATR(14)
 
-Conditions: 2 (PVT-SMA crossover + EMA200 trend)
-```
-
-## Key Parameters
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| pvt_sma_long | 20 | Same as OBV SMA — proven 20-bar crossover |
-| pvt_sma_short | 5 | Exit signal line |
-| trend_period | 200 | Proven EMA200 trend filter |
-| atr_period | 14 | Standard ATR |
-| trailing_mult | 2.0 | Standard trailing stop |
-| min_bars | 150 | Allow sufficient warmup |
-
-## Expected Performance
-
-- **1h BTC:** 100-180 trades, Sharpe 1.5-2.5 (PVT more granular than OBV = more trades)
-- **1h ETH:** 100-180 trades, Sharpe 0.5-1.5 (cumulative property smooths ETH noise)
-- **4h BTC:** 30-45 trades, Sharpe 1.0-2.0 (proportional weighting should fire more than binary OBV)
-- **4h ETH:** 25-40 trades, Sharpe 0.5-1.5
+## Why This Should Work
+- Exactly 2 conditions (proven template — 80.4% pass rate)
+- **Normalized indicator (0-100)** — this is the key insight from Loop 11: normalized indicators (%B, Stochastic) achieve universal parameter robustness across all 4 combos. MFI shares this property.
+- Volume-weighted — incorporates volume information WITHOUT gating entry (multiplies signal strength rather than filtering). Loop 10 showed Force Index (volume × price change) succeeded where CLV (position-based) failed.
+- MFI crosses 50 frequently — the middle line is crossed ~5-10× more often than overbought/oversold thresholds (80/20). Should generate 50-200 trades/year.
+- Unlike Force Index (unbounded, requires parameter tuning), MFI's 0-100 normalization means mfi_threshold=50 works identically across BTC/ETH × 1h/4h with zero parameter changes.
 
 ## Anti-Pattern Check
+- ✅ Not ≥3 AND conditions (exactly 2)
+- ✅ Not mean reversion (trend filter + momentum oscillator = trend following)
+- ✅ Not CLV-based or candle pattern recognition
+- ✅ Not percentile-gated volume filter (MFI uses continuous volume weighting, not binary gate)
+- ✅ Not Ichimoku (no disguised AND gates)
+- ✅ Not acceleration-based — MFI is an oscillator, should work independently of 4h acceleration problems
+- ✅ Normalized indicator — should scale to 4h (key insight from Loop 11 BB %B success)
 
-- ✅ 2 AND conditions only
-- ✅ Not a raw price-extreme indicator
-- ✅ Not triple-smoothed
-- ✅ Cumulative volume family (proven)
-- ✅ Proportional weighting generates more signals than binary OBV
-- ✅ SMA crossover on cumulative line (not zero-cross of cumulative line — avoids TMF-style sparsity)
-- ✅ Not previously tested
+## Distinction from Previous Strategies
+- Not Force Index (unbounded, volume×price) — MFI is bounded 0-100 with formal money flow calculation
+- Not RSI (no volume) — MFI includes volume in raw money flow
+- Not Stochastic (price position in range) — MFI uses typical price × volume flow
+- Not BB %B (position within bands) — MFI measures cumulative money flow pressure
+- Not OBV (cumulative volume delta) — MFI is a bounded oscillator with overbought/oversold semantics

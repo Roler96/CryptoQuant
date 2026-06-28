@@ -1,48 +1,50 @@
-# Candidate 1: Chaikin Oscillator Trend
+# Candidate 1: TRIX Trend (trix_trend)
 
-**Date:** 2026-06-28
-**Loop:** 31
-**Source:** Internal pattern mining (cumulative volume family extension)
+## Source
+Sunday free search — TRIX triple-smoothed momentum oscillator, novel direction not tested in previous loops.
 
-## Rationale
+## Strategy Concept
+**TRIX crossover + EMA200 trend filter (2 conditions)**
 
-Chaikin Oscillator = EMA(3, A/D Line) - EMA(10, A/D Line) — measures the *momentum* of accumulation/distribution, not just the direction. This extends the proven cumulative volume family (OBV 4/4, ADLine 4/4 main gate) by adding an acceleration layer.
+TRIX (Triple Exponential Average) is a momentum oscillator that applies triple exponential smoothing to the price series, then computes the rate of change. A signal line (EMA of TRIX) provides crossover signals. The triple smoothing removes high-frequency noise while preserving genuine trend changes — generating cleaner signals than MACD or single-EMA crossovers.
 
-OBV and A/D Line worked because cumulative volume smooths ETH noise and generates sufficient 4h trades. Chaikin Oscillator zero-cross should fire MORE frequently than OBV SMA crossover because it measures rate-of-change of the accumulation line — earlier signal, higher trade count.
+### Entry Logic
+- **Long:** TRIX crosses above signal line AND close > EMA200
+- **Short:** TRIX crosses below signal line AND close < EMA200
 
-## Strategy Design
+### Exit Logic
+- TRIX crosses back through signal line (reverse signal)
+- Stop-loss: 2× ATR(14) trailing
+- Take-profit: 3× ATR(14)
 
+### Default Parameters
+```python
+DEFAULT_PARAMS = {
+    "trix_period": 15,
+    "signal_period": 9,
+    "trend_period": 200,
+    "atr_period": 14,
+    "stop_mult": 2.0,
+    "take_profit_mult": 3.0,
+}
 ```
-Entry (LONG):  Chaikin Oscillator crosses above 0 AND Close > EMA200
-Entry (SHORT): Chaikin Oscillator crosses below 0 AND Close < EMA200
-Exit:          Chaikin Oscillator crosses opposite direction OR trailing stop at 2× ATR(14)
 
-Conditions: 2 (zero-cross + EMA200 trend)
-```
-
-## Key Parameters
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| chaikin_fast | 3 | Standard Chaikin short period |
-| chaikin_slow | 10 | Standard Chaikin long period |
-| trend_period | 200 | Proven EMA200 trend filter |
-| atr_period | 14 | Standard ATR |
-| trailing_mult | 2.0 | Standard trailing stop |
-| min_bars | 150 | Allow sufficient warmup |
-
-## Expected Performance
-
-- **1h BTC:** 120-200 trades, Sharpe 1.5-2.5 (similar to OBV/ADLine)
-- **1h ETH:** 120-200 trades, Sharpe 0.5-1.5 (Chaikin smoother than per-bar volume, may survive ETH better)
-- **4h BTC:** 30-50 trades, Sharpe 1.0-2.0 (momentum of accumulation may fire faster than OBV SMA cross)
-- **4h ETH:** 25-40 trades, Sharpe 0.5-1.5
+## Why This Should Work
+- 2 conditions exactly (fits the proven template — 78% pass rate across 50 combos)
+- TRIX crossover is mechanical — rate-of-change of triple-smoothed price crosses its own EMA. Generates clean, infrequent signals
+- Triple smoothing removes crypto microstructure noise better than MACD (single EMA) or Stochastic (no smoothing)
+- Not acceleration-based (works differently from PSAR/SuperTrend) — may have different 4h behavior than previously tested indicators
 
 ## Anti-Pattern Check
+- ✅ Not ≥3 AND conditions (exactly 2)
+- ✅ Not mean reversion (trend filter + momentum oscillator = trend following)
+- ✅ Not CLV-based or candle pattern recognition
+- ✅ Not percentile-gated volume filter
+- ✅ Not Ichimoku (no disguised AND gates)
+- ⚠️ May be signal-sparse on 4h (triple smoothing compounds bar scarcity) — but TRIX period=15 is much shorter than KAMA's adaptive smoothing
 
-- ✅ 2 AND conditions only
-- ✅ Not a raw price-extreme indicator (safe for ETH)
-- ✅ Not triple-smoothed (only 3/10 EMA on A/D line = light smoothing)
-- ✅ Cumulative volume family (75% pass rate across 16 combos)
-- ✅ Not signal-sparse (zero-cross of EMA difference fires frequently)
-- ✅ Not previously tested
+## Distinction from Previous Strategies
+- Not MACD (single EMA smoothing) — TRIX uses THREE layers of smoothing
+- Not KAMA (adaptive smoothing) — TRIX uses fixed exponential smoothing
+- Not PSAR/SuperTrend (acceleration-based) — TRIX is rate-of-change based
+- Not Stochastic/RSI (%K/%D) — TRIX derives from triple-smoothed price, not price position in range

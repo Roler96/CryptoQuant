@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "timestamp": "2026-06-28T13:46:06.518514+00:00",
+    "strategy_file": "research/backtest_dmi_trend.py",
+    "class_name": "DMITrend",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "DMITrend",
+    "symbol": "BTC/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10425.43,
+    "total_return_pct": 4.25,
+    "annualized_return_pct": 4.25,
+    "sharpe_ratio": 2.1,
+    "sortino_ratio": 3.5,
+    "max_drawdown_pct": 0.48,
+    "max_drawdown_days": 72,
+    "volatility_annual_pct": 1.99,
+    "total_trades": 38,
+    "win_rate_pct": 50.0,
+    "profit_factor": 4.86,
+    "avg_win_pct": 5.55,
+    "avg_loss_pct": -1.14,
+    "avg_hold_hours": 226.3,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "close_call": false,
+    "reasons": [],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "DMITrend",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10278.65,
+      "total_return_pct": 2.79,
+      "annualized_return_pct": 4.0,
+      "sharpe_ratio": 2.07,
+      "sortino_ratio": 3.18,
+      "max_drawdown_pct": 0.22,
+      "max_drawdown_days": 65,
+      "volatility_annual_pct": 1.91,
+      "total_trades": 26,
+      "win_rate_pct": 50.0,
+      "profit_factor": 5.43,
+      "avg_win_pct": 5.21,
+      "avg_loss_pct": -0.96,
+      "avg_hold_hours": 231.5,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "DMITrend",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10159.57,
+      "total_return_pct": 1.6,
+      "annualized_return_pct": 5.42,
+      "sharpe_ratio": 2.45,
+      "sortino_ratio": 5.48,
+      "max_drawdown_pct": 0.19,
+      "max_drawdown_days": 28,
+      "volatility_annual_pct": 2.15,
+      "total_trades": 11,
+      "win_rate_pct": 63.6,
+      "profit_factor": 6.11,
+      "avg_win_pct": 5.43,
+      "avg_loss_pct": -1.56,
+      "avg_hold_hours": 233.8,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": -18.4,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 2.1,
+    "stress_sharpe": 2.06,
+    "sharpe_delta_pct": 1.9,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.7% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.69
+  }
+}
