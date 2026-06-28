@@ -1,11 +1,11 @@
-"""Tests for CMOTrend strategy."""
+"""Tests for VWAPATRTrend strategy."""
 import numpy as np
 import pandas as pd
 import pytest
 
 from cryptoquant.exceptions import StrategyError
-from cryptoquant.strategy.signals import cmo, ema
-from research.backtest_cmo_trend import CMOTrend
+from cryptoquant.strategy.signals import atr, vwap
+from research.backtest_vwap_atr import VWAPATRTrend
 
 
 def _make_flat_df(n: int = 500) -> pd.DataFrame:
@@ -25,13 +25,15 @@ def _make_flat_df(n: int = 500) -> pd.DataFrame:
 
 
 def _make_uptrend_df(n: int = 500) -> pd.DataFrame:
-    """Create trending data with strong price rise."""
+    """Create trending data with strong price rise and wide bars."""
     dates = pd.date_range("2024-01-01", periods=n, freq="1h")
     rng = np.random.default_rng(42)
     trend = np.linspace(100.0, 300.0, n)
     noise = rng.normal(0, 1.0, n)
     close = trend + noise
-    half_range = 1.0
+    # Alternating bar ranges: wide bars trigger ATR expansion
+    bar_range = np.where(np.arange(n) % 3 == 0, 8.0, 2.0)
+    half_range = bar_range / 2
     return pd.DataFrame(
         {
             "open": close - half_range * 0.3,
@@ -45,13 +47,14 @@ def _make_uptrend_df(n: int = 500) -> pd.DataFrame:
 
 
 def _make_downtrend_df(n: int = 500) -> pd.DataFrame:
-    """Create trending data with strong price decline."""
+    """Create trending data with strong price decline and wide bars."""
     dates = pd.date_range("2024-01-01", periods=n, freq="1h")
     rng = np.random.default_rng(42)
     trend = np.linspace(300.0, 100.0, n)
     noise = rng.normal(0, 1.0, n)
     close = trend + noise
-    half_range = 1.0
+    bar_range = np.where(np.arange(n) % 3 == 0, 8.0, 2.0)
+    half_range = bar_range / 2
     return pd.DataFrame(
         {
             "open": close + half_range * 0.3,
@@ -64,32 +67,34 @@ def _make_downtrend_df(n: int = 500) -> pd.DataFrame:
     )
 
 
-class TestCMOTrend:
-    """Tests for CMOTrend strategy."""
+class TestVWAPATRTrend:
+    """Tests for VWAPATRTrend strategy."""
 
     def test_initialization(self):
         """Strategy initializes with default params."""
-        s = CMOTrend({})
-        assert s.name == "CMOTrend"
-        assert s.params["cmo_period"] == 20
-        assert s.params["trend_period"] == 200
+        s = VWAPATRTrend({})
+        assert s.name == "VWAPATRTrend"
+        assert s.params["vwap_period"] == 20
+        assert s.params["atr_period"] == 14
+        assert s.params["expansion_mult"] == 1.5
 
     def test_custom_params(self):
         """Custom params override defaults."""
-        s = CMOTrend({"cmo_period": 14, "trend_period": 100})
-        assert s.params["cmo_period"] == 14
-        assert s.params["trend_period"] == 100
+        s = VWAPATRTrend({"vwap_period": 10, "expansion_mult": 2.0})
+        assert s.params["vwap_period"] == 10
+        assert s.params["expansion_mult"] == 2.0
+        assert s.params["atr_period"] == 14  # unchanged default
 
     def test_insufficient_bars(self):
         """Strategy raises StrategyError with too few bars."""
-        s = CMOTrend({})
+        s = VWAPATRTrend({})
         df = _make_flat_df(n=50)
         with pytest.raises(StrategyError):
             s.generate_signal(df)
 
     def test_flat_price_signal_valid(self):
         """Flat price produces valid signal format."""
-        s = CMOTrend({})
+        s = VWAPATRTrend({})
         df = _make_flat_df(n=500)
         signal = s.generate_signal(df)
         assert len(signal) == len(df)
@@ -97,8 +102,8 @@ class TestCMOTrend:
         assert set(signal.unique()).issubset({-1, 0, 1})
 
     def test_uptrend_generates_long_signal(self):
-        """Uptrend should generate long signals (CMO rises > 0 + close > EMA200)."""
-        s = CMOTrend({})
+        """Uptrend should generate long signals (close > VWAP + expansion)."""
+        s = VWAPATRTrend({})
         df = _make_uptrend_df(n=500)
         signal = s.generate_signal(df)
         assert len(signal) == len(df)
@@ -106,25 +111,22 @@ class TestCMOTrend:
 
     def test_downtrend_generates_short_signal(self):
         """Downtrend should generate short signals."""
-        s = CMOTrend({})
+        s = VWAPATRTrend({})
         df = _make_downtrend_df(n=500)
         signal = s.generate_signal(df)
         assert len(signal) == len(df)
         assert -1 in signal.values
 
-    def test_cmo_indicator_computes(self):
-        """CMO indicator produces valid [-100, 100] output."""
+    def test_vwap_indicator_computes(self):
+        """VWAP indicator produces valid output."""
         df = _make_uptrend_df(n=500)
-        result = cmo(df["close"], period=20)
+        result = vwap(df, period=20)
         assert len(result) == len(df)
-        valid = result.dropna()
-        assert len(valid) > 0
-        assert valid.max() <= 100
-        assert valid.min() >= -100
+        assert result.iloc[100:].notna().any()
 
-    def test_ema_indicator_computes(self):
-        """EMA indicator produces valid output."""
+    def test_atr_indicator_computes(self):
+        """ATR indicator produces valid output."""
         df = _make_uptrend_df(n=500)
-        result = ema(df["close"], period=200)
+        result = atr(df, period=14)
         assert len(result) == len(df)
-        assert result.iloc[250:].notna().any()
+        assert result.iloc[100:].notna().any()
