@@ -2535,3 +2535,33 @@ def mcginley_dynamic(
         md[i] = prev_md + adjustment
 
     return pd.Series(md, index=df.index)
+
+
+# === Qstick (Quantitative Candlestick Oscillator) ===
+
+
+def qstick(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Qstick — SMA of close-open difference (Chande's quantitative candlestick).
+
+    Qstick = SMA(close - open, N).  It measures the running average of
+    the candle's directional bias over N periods.  Positive Qstick means
+    the average candle closes above its open (buying pressure dominates).
+    Negative Qstick means selling pressure dominates.
+
+    Unlike momentum oscillators that compare close[t] vs close[t-N],
+    Qstick captures per-bar conviction — whether buyers or sellers
+    are winning bar-by-bar.
+
+    Reference: Tushar Chande — \"Beyond Technical Analysis\" (1997).
+
+    Args:
+        df: OHLCV DataFrame with columns [close, open].
+        period: SMA period for Qstick (default 14).
+
+    Returns:
+        pd.Series of Qstick values, same index as df.
+    """
+    close = df["close"]
+    open_ = df["open"]
+    diff = close - open_
+    return diff.rolling(period).mean()
