@@ -2417,3 +2417,121 @@ def rmi(
         {"rmi": rmi_vals, "signal": signal_series.values},
         index=df.index,
     )
+
+
+# === Klinger Volume Oscillator (KVO) ===
+
+
+def kvo(
+    df: pd.DataFrame,
+    fast: int = 34,
+    slow: int = 55,
+) -> pd.DataFrame:
+    """Klinger Volume Oscillator (KVO).
+
+    KVO uses Volume Force — a volume-directional measure that weights
+    volume by intra-bar price range and trend direction.  EMA(34, VF) -
+    EMA(55, VF) produces an oscillator that acts as a zero-line
+    crossover signal for volume-flow direction changes.
+
+    Volume Force: VF = Volume × Trend × |2 × DM/CM − 1| × 100
+      DM = high − low (bar range)
+      CM = rolling sum of DM over `slow` bars
+      Trend = +1 when typical price rises, −1 when it falls
+
+    Reference: Stephen Klinger — "Klinger Volume Oscillator" (1997).
+
+    Args:
+        df: OHLCV DataFrame with 'high', 'low', 'close', 'volume'.
+        fast: Fast EMA period (default 34).
+        slow: Slow EMA period (default 55).
+
+    Returns:
+        pd.DataFrame with columns [kvo, zero], same index as df.
+    """
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    volume = df["volume"]
+
+    # Trend direction: +1 when typical price rises, -1 when falls
+    typical = (high + low + close) / 3.0
+    trend = pd.Series(
+        np.where(typical.diff().fillna(0) >= 0, 1, -1),
+        index=df.index,
+        dtype=float,
+    )
+
+    # Bar range
+    bar_range = high - low
+
+    # Cumulative measure: rolling sum of bar ranges over slow period
+    cm = bar_range.rolling(slow, min_periods=1).sum()
+    cm = cm.clip(lower=1e-10)
+
+    # Volume Force
+    vf = volume * trend * np.abs(2.0 * bar_range / cm - 1.0) * 100.0
+
+    # Dual-EMA smoothing: KVO = EMA(fast, VF) - EMA(slow, VF)
+    ema_fast = vf.ewm(span=fast, adjust=False).mean()
+    ema_slow = vf.ewm(span=slow, adjust=False).mean()
+    kvo_val = ema_fast - ema_slow
+
+    return pd.DataFrame(
+        {"kvo": kvo_val, "zero": pd.Series(0.0, index=df.index)},
+        index=df.index,
+    )
+
+
+# === McGinley Dynamic ===
+
+
+def mcginley_dynamic(
+    df: pd.DataFrame,
+    period: int = 20,
+    k: float = 0.6,
+    price_col: str = "close",
+) -> pd.Series:
+    """McGinley Dynamic — self-adjusting moving average.
+
+    Unlike standard EMAs which use a fixed smoothing constant,
+    McGinley Dynamic adjusts its **response force** based on how
+    far price is from the current MA value.  It speeds up when price
+    moves away from the MA (strong trend) and slows down when price
+    hugs the MA (consolidation), reducing false crossovers during
+    choppy periods.
+
+    MD_t = MD_{t−1} + (Price − MD_{t−1}) / (k × N × (Price/MD_{t−1})^4)
+
+    Reference: John R. McGinley — "McGinley Dynamic" (1990).
+
+    Args:
+        df: OHLCV DataFrame.
+        period: Lookback period N (default 20).
+        k: Adjustment constant (0.6 = standard; 0.5 = more aggressive).
+        price_col: Column name for price (default 'close').
+
+    Returns:
+        pd.Series of McGinley Dynamic values, same index as df.
+    """
+    price = df[price_col].values.astype(np.float64)
+    n = len(price)
+
+    md = np.full(n, np.nan, dtype=np.float64)
+
+    if n < period:
+        return pd.Series(md, index=df.index)
+
+    # Seed with SMA over first `period` bars
+    md[period - 1] = np.mean(price[:period])
+
+    divisor = k * period
+    for i in range(period, n):
+        prev_md = md[i - 1]
+        if np.isnan(prev_md) or prev_md <= 0.0 or np.isnan(price[i]):
+            continue
+        ratio = price[i] / prev_md
+        adjustment = (price[i] - prev_md) / (divisor * ratio ** 4)
+        md[i] = prev_md + adjustment
+
+    return pd.Series(md, index=df.index)
