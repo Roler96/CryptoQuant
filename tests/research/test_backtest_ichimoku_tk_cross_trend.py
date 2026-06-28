@@ -1,10 +1,10 @@
-"""Tests for ElderRayTrend strategy."""
+"""Tests for IchimokuTKCrossTrend strategy."""
 import numpy as np
 import pandas as pd
 import pytest
 
 from cryptoquant.exceptions import StrategyError
-from research.backtest_elder_ray_trend import ElderRayTrend
+from research.backtest_ichimoku_tk_cross_trend import IchimokuTKCrossTrend
 
 
 def _make_flat_df(n: int = 500) -> pd.DataFrame:
@@ -25,34 +25,31 @@ def _make_flat_df(n: int = 500) -> pd.DataFrame:
     )
 
 
-def _make_strong_uptrend_df(n: int = 500) -> pd.DataFrame:
-    """Create data where Bull Power crosses from negative to positive.
+def _make_uptrend_crossing_df(n: int = 500) -> pd.DataFrame:
+    """Create data with uptrend + rolling highs that will trigger TK cross up.
 
-    First 200 bars: flat price, high barely above close → Bull Power hovers
-    near or slightly below zero (EMA of price near price ≈ high).
-    Remaining bars: strong uptrend with expanding highs → Bull Power
-    surges above zero creating a cross-up event.
+    Simulates a scenario where price rises gradually with expanding highs,
+    so Tenkan-sen (9-period mid-point) eventually crosses above Kijun-sen
+    (26-period mid-point).
     """
     dates = pd.date_range("2024-01-01", periods=n, freq="1h")
     rng = np.random.default_rng(42)
 
     close = np.zeros(n)
-    high = np.zeros(n)
     base = 100.0
     for i in range(n):
-        noise = rng.normal(0, 0.3)
-        if i < 200:
-            # Flat: high barely above close, Bull Power stays near zero
-            close[i] = base + noise * 0.5
-            high[i] = close[i] + 0.1  # tiny margin
+        # Steady uptrend with acceleration in second half
+        if i < 250:
+            base += 0.02
         else:
-            # Uptrend: expanding highs, Bull Power crosses up
-            base += 0.15
-            close[i] = base + noise
-            high[i] = close[i] + 3.0  # large gap → Bull Power >> 0
+            base += 0.10
+        noise = rng.normal(0, 0.5)
+        close[i] = base + noise
 
+    # Expanding range in the acceleration phase to push Tenkan ahead of Kijun
+    high = np.maximum(close + 1.0, close + np.linspace(1, 5, n))
     low = close - 0.8
-    open_ = close - 0.3
+    open_ = close - 0.2
     return pd.DataFrame(
         {
             "open": open_,
@@ -65,33 +62,25 @@ def _make_strong_uptrend_df(n: int = 500) -> pd.DataFrame:
     )
 
 
-def _make_strong_downtrend_df(n: int = 500) -> pd.DataFrame:
-    """Create data where Bear Power crosses from positive to negative.
-
-    First 200 bars: flat price, low barely below close → Bear Power hovers
-    near zero. Remaining bars: downtrend with expanding lows → Bear Power
-    plunges below zero creating a cross-down event.
-    """
+def _make_downtrend_crossing_df(n: int = 500) -> pd.DataFrame:
+    """Create data with downtrend + rolling lows that will trigger TK cross down."""
     dates = pd.date_range("2024-01-01", periods=n, freq="1h")
     rng = np.random.default_rng(42)
 
     close = np.zeros(n)
-    low = np.zeros(n)
     base = 200.0
     for i in range(n):
-        noise = rng.normal(0, 0.3)
-        if i < 200:
-            # Flat: low barely below close, Bear Power stays near zero
-            close[i] = base + noise * 0.5
-            low[i] = close[i] - 0.1  # tiny margin
+        if i < 250:
+            base -= 0.02
         else:
-            # Downtrend: expanding lows, Bear Power crosses down
-            base -= 0.15
-            close[i] = base + noise
-            low[i] = close[i] - 3.0  # large gap → Bear Power << 0
+            base -= 0.10
+        noise = rng.normal(0, 0.5)
+        close[i] = base + noise
 
+    # Expanding range downward in the acceleration phase
+    low = np.minimum(close - 1.0, close - np.linspace(1, 5, n))
     high = close + 0.8
-    open_ = close + 0.3
+    open_ = close + 0.2
     return pd.DataFrame(
         {
             "open": open_,
@@ -104,29 +93,33 @@ def _make_strong_downtrend_df(n: int = 500) -> pd.DataFrame:
     )
 
 
-class TestElderRayTrend:
-    """Tests for the ElderRayTrend strategy."""
+class TestIchimokuTKCrossTrend:
+    """Tests for the IchimokuTKCrossTrend strategy."""
 
     def test_default_params_instantiation(self):
         """Strategy can be instantiated with default parameters."""
-        s = ElderRayTrend()
-        assert s.name == "ElderRayTrend"
+        s = IchimokuTKCrossTrend()
+        assert s.name == "IchimokuTKCrossTrend"
         assert s.timeframe == "1h"
         assert s.min_bars == 200
         assert s.version == "1.0.0"
-        assert s.params["ema_period"] == 13
+        assert s.params["tenkan_period"] == 9
+        assert s.params["kijun_period"] == 26
         assert s.params["trend_period"] == 200
 
     def test_custom_params_instantiation(self):
         """Strategy can be instantiated with custom parameters."""
-        s = ElderRayTrend(params={"ema_period": 20, "trend_period": 100})
-        assert s.params["ema_period"] == 20
+        s = IchimokuTKCrossTrend(params={
+            "tenkan_period": 7, "kijun_period": 22, "trend_period": 100
+        })
+        assert s.params["tenkan_period"] == 7
+        assert s.params["kijun_period"] == 22
         assert s.params["trend_period"] == 100
 
     def test_generate_signal_returns_correct_shape(self):
         """generate_signal() returns Series with correct shape and types."""
         df = _make_flat_df(500)
-        s = ElderRayTrend()
+        s = IchimokuTKCrossTrend()
         signal = s.generate_signal(df)
 
         assert isinstance(signal, pd.Series)
@@ -136,8 +129,8 @@ class TestElderRayTrend:
 
     def test_signal_values_valid(self):
         """Signal values are only -1, 0, 1."""
-        df = _make_strong_uptrend_df(500)
-        s = ElderRayTrend()
+        df = _make_uptrend_crossing_df(500)
+        s = IchimokuTKCrossTrend()
         signal = s.generate_signal(df)
         unique_vals = set(signal.unique())
         assert unique_vals.issubset({-1, 0, 1})
@@ -145,7 +138,7 @@ class TestElderRayTrend:
     def test_insufficient_bars_raises(self):
         """Short DataFrame raises StrategyError via preprocess."""
         df = _make_flat_df(150)
-        s = ElderRayTrend()
+        s = IchimokuTKCrossTrend()
         with pytest.raises(StrategyError):
             s.generate_signal(df)
 
@@ -155,20 +148,20 @@ class TestElderRayTrend:
             {"close": [100.0] * 500},
             index=pd.date_range("2024-01-01", periods=500, freq="1h"),
         )
-        s = ElderRayTrend()
+        s = IchimokuTKCrossTrend()
         with pytest.raises(StrategyError):
             s.generate_signal(df)
 
     def test_uptrend_produces_long_signals(self):
-        """Strong uptrend data should produce long signals."""
-        df = _make_strong_uptrend_df(500)
-        s = ElderRayTrend()
+        """Uptrend crossing data should produce long signals."""
+        df = _make_uptrend_crossing_df(500)
+        s = IchimokuTKCrossTrend()
         signal = s.generate_signal(df)
         assert (signal == 1).any()
 
     def test_downtrend_produces_short_signals(self):
-        """Strong downtrend data should produce short signals."""
-        df = _make_strong_downtrend_df(500)
-        s = ElderRayTrend()
+        """Downtrend crossing data should produce short signals."""
+        df = _make_downtrend_crossing_df(500)
+        s = IchimokuTKCrossTrend()
         signal = s.generate_signal(df)
         assert (signal == -1).any()
