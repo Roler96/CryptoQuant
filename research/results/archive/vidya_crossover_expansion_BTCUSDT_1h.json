@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-28T18:16:22.517589+00:00",
+    "strategy_file": "research/backtest_vidya_crossover_expansion.py",
+    "class_name": "VIDYACrossoverExpansion",
+    "bars": 8760,
+    "date_range": "2025-06-25 02:00:00 \u2192 2026-06-25 01:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "VIDYACrossoverExpansion",
+    "symbol": "BTC/USDT",
+    "timeframe": "1h",
+    "initial_capital": 10000,
+    "final_equity": 9877.33,
+    "total_return_pct": -1.23,
+    "annualized_return_pct": -1.23,
+    "sharpe_ratio": -0.56,
+    "sortino_ratio": -0.24,
+    "max_drawdown_pct": 3.52,
+    "max_drawdown_days": 204,
+    "volatility_annual_pct": 2.16,
+    "total_trades": 59,
+    "win_rate_pct": 39.0,
+    "profit_factor": 0.79,
+    "avg_win_pct": 3.96,
+    "avg_loss_pct": -3.2,
+    "avg_hold_hours": 145.2,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "sharpe=-0.56 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "VIDYACrossoverExpansion",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9981.89,
+      "total_return_pct": -0.18,
+      "annualized_return_pct": -0.26,
+      "sharpe_ratio": -0.11,
+      "sortino_ratio": -0.05,
+      "max_drawdown_pct": 2.51,
+      "max_drawdown_days": 94,
+      "volatility_annual_pct": 2.2,
+      "total_trades": 45,
+      "win_rate_pct": 37.8,
+      "profit_factor": 0.96,
+      "avg_win_pct": 4.3,
+      "avg_loss_pct": -2.73,
+      "avg_hold_hours": 132.3,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "VIDYACrossoverExpansion",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9882.03,
+      "total_return_pct": -1.18,
+      "annualized_return_pct": -3.88,
+      "sharpe_ratio": -1.9,
+      "sortino_ratio": -0.75,
+      "max_drawdown_pct": 1.44,
+      "max_drawdown_days": 56,
+      "volatility_annual_pct": 2.06,
+      "total_trades": 14,
+      "win_rate_pct": 35.7,
+      "profit_factor": 0.42,
+      "avg_win_pct": 3.47,
+      "avg_loss_pct": -4.55,
+      "avg_hold_hours": 159.2,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 0.0,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -0.56,
+    "stress_sharpe": -0.63,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 8759 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

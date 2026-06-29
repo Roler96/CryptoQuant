@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-28T18:16:21.443989+00:00",
+    "strategy_file": "research/backtest_laguerre_rsi_expansion.py",
+    "class_name": "LaguerreRSIExpansion",
+    "bars": 8760,
+    "date_range": "2025-06-25 02:00:00 \u2192 2026-06-25 01:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "LaguerreRSIExpansion",
+    "symbol": "ETH/USDT",
+    "timeframe": "1h",
+    "initial_capital": 10000,
+    "final_equity": 9755.4,
+    "total_return_pct": -2.45,
+    "annualized_return_pct": -2.45,
+    "sharpe_ratio": -0.56,
+    "sortino_ratio": -0.46,
+    "max_drawdown_pct": 4.99,
+    "max_drawdown_days": 225,
+    "volatility_annual_pct": 4.24,
+    "total_trades": 227,
+    "win_rate_pct": 35.7,
+    "profit_factor": 0.87,
+    "avg_win_pct": 4.07,
+    "avg_loss_pct": -2.59,
+    "avg_hold_hours": 37.3,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "sharpe=-0.56 < 0.5 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "LaguerreRSIExpansion",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9972.58,
+      "total_return_pct": -0.27,
+      "annualized_return_pct": -0.39,
+      "sharpe_ratio": -0.07,
+      "sortino_ratio": -0.06,
+      "max_drawdown_pct": 4.03,
+      "max_drawdown_days": 116,
+      "volatility_annual_pct": 4.36,
+      "total_trades": 155,
+      "win_rate_pct": 36.8,
+      "profit_factor": 0.98,
+      "avg_win_pct": 4.41,
+      "avg_loss_pct": -2.61,
+      "avg_hold_hours": 38.1,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "LaguerreRSIExpansion",
+      "symbol": "ETH/USDT",
+      "timeframe": "1h",
+      "initial_capital": 10000,
+      "final_equity": 9774.45,
+      "total_return_pct": -2.26,
+      "annualized_return_pct": -7.32,
+      "sharpe_ratio": -1.89,
+      "sortino_ratio": -1.52,
+      "max_drawdown_pct": 3.75,
+      "max_drawdown_days": 95,
+      "volatility_annual_pct": 3.96,
+      "total_trades": 72,
+      "win_rate_pct": 31.9,
+      "profit_factor": 0.63,
+      "avg_win_pct": 3.4,
+      "avg_loss_pct": -2.52,
+      "avg_hold_hours": 34.6,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 0.0,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": -0.56,
+    "stress_sharpe": -0.7,
+    "sharpe_delta_pct": 0.0,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 8759 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}

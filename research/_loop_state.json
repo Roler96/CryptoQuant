@@ -1,10 +1,10 @@
 {
   "version": 1,
   "state": "implement",
-  "loop_started": "2026-06-28T17:45:37Z",
+  "loop_started": "2026-06-29T00:45:35Z",
   "loop_ended": null,
-  "date": "2026-06-28",
-  "candidates": ["laguerre_rsi_expansion", "vidya_crossover_expansion"],
+  "date": "2026-06-29",
+  "candidates": ["eom_trend", "dpo_expansion"],
   "implemented": [],
   "backtest_queue": [],
   "backtest_completed": [],

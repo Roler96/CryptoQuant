@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "timestamp": "2026-06-28T20:16:16.558777+00:00",
+    "strategy_file": "research/backtest_ichimoku_tk_cross_trend.py",
+    "class_name": "IchimokuTKCrossTrend",
+    "bars": 2190,
+    "date_range": "2025-06-25 04:00:00 \u2192 2026-06-25 00:00:00",
+    "lookback_days": 365,
+    "exchange": "okx"
+  },
+  "main": {
+    "label": "full_sample",
+    "strategy_name": "IchimokuTKCrossTrend",
+    "symbol": "ETH/USDT",
+    "timeframe": "4h",
+    "initial_capital": 10000,
+    "final_equity": 10580.06,
+    "total_return_pct": 5.8,
+    "annualized_return_pct": 5.8,
+    "sharpe_ratio": 1.49,
+    "sortino_ratio": 2.07,
+    "max_drawdown_pct": 0.64,
+    "max_drawdown_days": 106,
+    "volatility_annual_pct": 3.83,
+    "total_trades": 12,
+    "win_rate_pct": 41.7,
+    "profit_factor": 5.14,
+    "avg_win_pct": 28.37,
+    "avg_loss_pct": -3.94,
+    "avg_hold_hours": 716.3,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": false,
+    "close_call": false,
+    "reasons": [
+      "trades=12 < 30 (min)"
+    ],
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    },
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "oos": {
+    "is": {
+      "label": "IS",
+      "strategy_name": "IchimokuTKCrossTrend",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10505.77,
+      "total_return_pct": 5.06,
+      "annualized_return_pct": 7.3,
+      "sharpe_ratio": 1.65,
+      "sortino_ratio": 4.79,
+      "max_drawdown_pct": 0.4,
+      "max_drawdown_days": 106,
+      "volatility_annual_pct": 4.33,
+      "total_trades": 6,
+      "win_rate_pct": 50.0,
+      "profit_factor": 7.74,
+      "avg_win_pct": 38.27,
+      "avg_loss_pct": -4.95,
+      "avg_hold_hours": 998.7,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "oos": {
+      "label": "OOS",
+      "strategy_name": "IchimokuTKCrossTrend",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "initial_capital": 10000,
+      "final_equity": 10118.93,
+      "total_return_pct": 1.19,
+      "annualized_return_pct": 4.02,
+      "sharpe_ratio": 1.48,
+      "sortino_ratio": 0.0,
+      "max_drawdown_pct": 0.39,
+      "max_drawdown_days": 76,
+      "volatility_annual_pct": 2.68,
+      "total_trades": 4,
+      "win_rate_pct": 75.0,
+      "profit_factor": 4.1,
+      "avg_win_pct": 10.52,
+      "avg_loss_pct": -7.71,
+      "avg_hold_hours": 627.0,
+      "commission": 0.0005,
+      "slippage": 0.0005
+    },
+    "sharpe_degradation_pct": 10.3,
+    "oos_passed": false,
+    "overfit_warning": false
+  },
+  "commission_sensitivity": {
+    "baseline_bps": 5,
+    "stress_bps": 10,
+    "baseline_sharpe": 1.49,
+    "stress_sharpe": 1.48,
+    "sharpe_delta_pct": 0.7,
+    "fragile": false
+  },
+  "bias_check": {
+    "bias_detected": false,
+    "bias_detail": "signal mismatch: 0.0% of 2189 bars differ after 1-bar shift",
+    "mismatch_rate_pct": 0.0
+  }
+}
