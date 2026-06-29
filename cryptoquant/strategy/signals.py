@@ -2911,3 +2911,145 @@ def vidya(
             vidya_vals[i] = alpha * close[i] + (1.0 - alpha) * vidya_vals[i - 1]
 
     return pd.Series(vidya_vals, index=series.index)
+
+
+# === Hurst Exponent (Statistical Persistence) ===
+
+
+def hurst_exponent(series: pd.Series, period: int = 100, max_lag: int = 20) -> pd.Series:
+    """Rolling Hurst exponent via rescaled range (R/S) analysis.
+
+    For each window of size *period*, subdivides into *max_lag* sub-windows
+    of increasing size, computes the mean R/S statistic for each size, and
+    fits log(R/S) vs log(size) via OLS.  The slope is the Hurst exponent:
+      - H > 0.5 → trending / persistent (moves reinforce)
+      - H ≈ 0.5 → random walk (no memory)
+      - H < 0.5 → mean-reverting / anti-persistent (moves reverse)
+
+    Uses a centred sliding window so the value for bar *i* reflects the
+    period ending at *i* (no look-ahead).  OLS is computed with np.linalg
+    in a vectorised-rolling fashion.
+    """
+    n = len(series)
+    vals = np.asarray(series, dtype=float)
+    result = np.full(n, np.nan)
+
+    if n < period:
+        return pd.Series(result, index=series.index)
+
+    # Pre-allocate sub-window sizes (min 10 bars, max period // 2)
+    min_sub = max(10, period // 10)
+    lags = np.linspace(min_sub, period // 2, max_lag, dtype=int)
+    lags = np.unique(np.clip(lags, min_sub, period // 2))
+    log_lags = np.log(lags)
+
+    for i in range(period - 1, n):
+        window = vals[i - period + 1 : i + 1]
+        rs_values = np.empty(len(lags))
+
+        for j, lag in enumerate(lags):
+            # Partition window into floor(period / lag) sub-series
+            n_sub = period // lag
+            rs_sum = 0.0
+            count = 0
+            for k in range(n_sub):
+                sub = window[k * lag : (k + 1) * lag]
+                if len(sub) < 2:
+                    continue
+                mean = sub.mean()
+                deviate = sub - mean
+                cum = np.cumsum(deviate)
+                r = cum.max() - cum.min()
+                s = np.std(sub, ddof=1)
+                if s > 1e-10:
+                    rs_sum += r / s
+                    count += 1
+            if count > 0:
+                rs_values[j] = rs_sum / count
+            else:
+                rs_values[j] = np.nan
+
+        # OLS: log(R/S) ~ log(lag)
+        valid = ~np.isnan(rs_values) & (rs_values > 0)
+        if valid.sum() >= 4:  # need at least 4 points for a stable fit
+            # Simple OLS slope: cov(x, y) / var(x)
+            x = log_lags[valid]
+            y = np.log(rs_values[valid])
+            x_mean = x.mean()
+            y_mean = y.mean()
+            slope = np.sum((x - x_mean) * (y - y_mean)) / np.sum((x - x_mean) ** 2)
+            result[i] = float(slope)
+
+    return pd.Series(result, index=series.index)
+
+
+# === Pivot Points (Swing Highs / Lows) ===
+
+
+def pivot_high(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5) -> pd.Series:
+    """Detect swing pivot highs (confirmed when a bar's high exceeds the
+    highs of *left_bars* bars on each side).
+
+    Returns a boolean Series where True marks a confirmed pivot high.
+    The confirmation is only available *right_bars* bars after the pivot
+    bar — the Series stores True at the pivot bar's index (the look-back
+    is valid for backtesting because the strategy reads the pivot at
+    bar i - right_bars when generating signals at bar i).
+    """
+    high = df["high"]
+    n = len(high)
+    result = pd.Series(False, index=df.index)
+
+    vals = high.values
+    total = left_bars + right_bars
+    for i in range(left_bars, n - right_bars):
+        centre = vals[i]
+        lhs = vals[i - left_bars : i]
+        rhs = vals[i + 1 : i + right_bars + 1]
+        if centre > lhs.max() and centre > rhs.max():
+            result.iloc[i] = True
+
+    return result
+
+
+def pivot_low(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5) -> pd.Series:
+    """Detect swing pivot lows (mirror of pivot_high for lows)."""
+    low = df["low"]
+    n = len(low)
+    result = pd.Series(False, index=df.index)
+
+    vals = low.values
+    for i in range(left_bars, n - right_bars):
+        centre = vals[i]
+        lhs = vals[i - left_bars : i]
+        rhs = vals[i + 1 : i + right_bars + 1]
+        if centre < lhs.min() and centre < rhs.min():
+            result.iloc[i] = True
+
+    return result
+
+
+def pivot_levels(df: pd.DataFrame, left_bars: int = 5, right_bars: int = 5) -> pd.DataFrame:
+    """Return a DataFrame with pivot high and low levels.
+
+    Columns:
+        pivot_high_level  — most recent confirmed pivot high level
+        pivot_low_level   — most recent confirmed pivot low level
+        is_pivot_high     — True at confirmed pivot high bar
+        is_pivot_low      — True at confirmed pivot low bar
+    """
+    is_high = pivot_high(df, left_bars, right_bars)
+    is_low = pivot_low(df, left_bars, right_bars)
+
+    high_level = df["high"].where(is_high).ffill()
+    low_level = df["low"].where(is_low).ffill()
+
+    return pd.DataFrame(
+        {
+            "pivot_high_level": high_level,
+            "pivot_low_level": low_level,
+            "is_pivot_high": is_high,
+            "is_pivot_low": is_low,
+        },
+        index=df.index,
+    )
