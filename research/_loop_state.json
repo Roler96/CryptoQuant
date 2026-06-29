@@ -1,25 +1,35 @@
 {
   "version": 1,
-  "state": "backtest",
-  "loop_started": "2026-06-29T00:45:35Z",
-  "loop_ended": null,
+  "state": "done",
+  "loop_started": "2026-06-29T03:45:16Z",
+  "loop_ended": "2026-06-29T04:48:00Z",
   "date": "2026-06-29",
-  "candidates": ["eom_trend", "dpo_expansion"],
-  "implemented": ["eom_trend", "dpo_expansion"],
-  "backtest_queue": [
-    {"strategy": "research/backtest_eom_trend.py", "class": "EOMTrend", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_eom_trend.py", "class": "EOMTrend", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_eom_trend.py", "class": "EOMTrend", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_eom_trend.py", "class": "EOMTrend", "symbol": "ETH/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_dpo_expansion.py", "class": "DPOExpansion", "symbol": "BTC/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_dpo_expansion.py", "class": "DPOExpansion", "symbol": "BTC/USDT", "timeframe": "4h"},
-    {"strategy": "research/backtest_dpo_expansion.py", "class": "DPOExpansion", "symbol": "ETH/USDT", "timeframe": "1h"},
-    {"strategy": "research/backtest_dpo_expansion.py", "class": "DPOExpansion", "symbol": "ETH/USDT", "timeframe": "4h"}
+  "candidates": ["hurst_trend_filter", "pivot_breakout_atr"],
+  "implemented": ["hurst_trend_filter", "pivot_breakout_atr"],
+  "backtest_queue": [],
+  "backtest_completed": [
+    {"strategy": "hurst_trend_filter", "class": "HurstTrendFilter", "symbol": "BTC/USDT", "timeframe": "1h", "gate_passed": true, "oos_passed": true},
+    {"strategy": "hurst_trend_filter", "class": "HurstTrendFilter", "symbol": "BTC/USDT", "timeframe": "4h", "gate_passed": true, "oos_passed": true},
+    {"strategy": "hurst_trend_filter", "class": "HurstTrendFilter", "symbol": "ETH/USDT", "timeframe": "1h", "gate_passed": true, "oos_passed": true},
+    {"strategy": "hurst_trend_filter", "class": "HurstTrendFilter", "symbol": "ETH/USDT", "timeframe": "4h", "gate_passed": true, "oos_passed": true},
+    {"strategy": "pivot_breakout_atr", "class": "PivotBreakoutATR", "symbol": "BTC/USDT", "timeframe": "1h", "gate_passed": true, "oos_passed": false},
+    {"strategy": "pivot_breakout_atr", "class": "PivotBreakoutATR", "symbol": "ETH/USDT", "timeframe": "1h", "gate_passed": true, "oos_passed": false},
+    {"strategy": "pivot_breakout_atr", "class": "PivotBreakoutATR", "symbol": "BTC/USDT", "timeframe": "4h", "gate_passed": false, "oos_passed": false},
+    {"strategy": "pivot_breakout_atr", "class": "PivotBreakoutATR", "symbol": "ETH/USDT", "timeframe": "4h", "gate_passed": false, "oos_passed": false}
   ],
-  "backtest_completed": [],
-  "passed": [],
+  "passed": [
+    {"strategy": "HurstTrendFilter", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 7.72, "trades": 683, "maxdd": 0.12, "oos": true},
+    {"strategy": "HurstTrendFilter", "symbol": "BTC/USDT", "timeframe": "4h", "sharpe": 4.10, "trades": 167, "maxdd": 0.15, "oos": true},
+    {"strategy": "HurstTrendFilter", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 6.52, "trades": 652, "maxdd": 1.80, "oos": true},
+    {"strategy": "HurstTrendFilter", "symbol": "ETH/USDT", "timeframe": "4h", "sharpe": 3.69, "trades": 185, "maxdd": 0.51, "oos": true},
+    {"strategy": "PivotBreakoutATR", "symbol": "BTC/USDT", "timeframe": "1h", "sharpe": 2.83, "trades": 50, "maxdd": 0.56, "oos": false},
+    {"strategy": "PivotBreakoutATR", "symbol": "ETH/USDT", "timeframe": "1h", "sharpe": 2.16, "trades": 66, "maxdd": 1.86, "oos": false}
+  ],
   "close_calls": [],
-  "failed": [],
+  "failed": [
+    {"strategy": "PivotBreakoutATR", "symbol": "BTC/USDT", "timeframe": "4h", "reason": "trades=22 < 30"},
+    {"strategy": "PivotBreakoutATR", "symbol": "ETH/USDT", "timeframe": "4h", "reason": "trades=24 < 30"}
+  ],
   "error": null,
-  "ticks": 2
+  "ticks": 5
 }
