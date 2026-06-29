@@ -56,9 +56,9 @@ class StateManager:
         data["saved_at"] = datetime.now(UTC).isoformat()
         data["checksum"] = checksum
 
-        with open(tmp_path, "w") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        tmp_path.rename(path)
+        tmp_path.replace(path)
 
     def load(self, strategy_name: str, symbol: str) -> EngineState | None:
         path = self._state_path(strategy_name, symbol)
@@ -69,7 +69,7 @@ class StateManager:
                 continue
 
             try:
-                with open(backup_path) as f:
+                with open(backup_path, encoding="utf-8") as f:
                     data = json.load(f)
 
                 stored_checksum = data.pop("checksum", None)

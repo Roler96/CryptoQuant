@@ -1,6 +1,8 @@
 """Trade journal — JSONL format, thread-safe."""
+from contextlib import contextmanager
 import json
-from datetime import datetime
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -17,24 +19,21 @@ class TradeJournal:
 
     def record(self, trade_data: dict) -> None:
         """Append a trade record (thread-safe)."""
-        import fcntl
+        record = dict(trade_data)
+        record["recorded_at"] = datetime.now(UTC).isoformat()
 
-        trade_data["recorded_at"] = datetime.utcnow().isoformat()
-
-        with open(self.journal_path, "a") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                f.write(json.dumps(trade_data) + "\n")
+        with open(self.journal_path, "a+", encoding="utf-8") as f:
+            with _locked_file(f):
+                f.seek(0, os.SEEK_END)
+                f.write(json.dumps(record) + "\n")
                 f.flush()
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def load_all(self) -> list[dict]:
         """Load all trade records."""
         if not self.journal_path.exists():
             return []
         trades = []
-        with open(self.journal_path) as f:
+        with open(self.journal_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     trades.append(json.loads(line))
@@ -63,3 +62,26 @@ class TradeJournal:
             "best_trade": max(trades, key=lambda t: t.get("pnl_pct", 0)) if trades else None,
             "worst_trade": min(trades, key=lambda t: t.get("pnl_pct", 0)) if trades else None,
         }
+
+
+@contextmanager
+def _locked_file(file_obj):
+    """Lock a journal file across supported platforms."""
+    if os.name == "nt":
+        import msvcrt
+
+        file_obj.seek(0)
+        msvcrt.locking(file_obj.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            file_obj.seek(0)
+            msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
