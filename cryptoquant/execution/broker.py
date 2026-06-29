@@ -155,6 +155,60 @@ class Broker(BrokerABC):
             self._handle_ccxt_error(e, f"get_ticker({symbol})")
             raise
 
+    def normalize_order_amount(
+        self, symbol: str, amount: float, price: float | None = None
+    ) -> float:
+        """Apply exchange precision and minimum amount/cost checks."""
+        if amount <= 0:
+            raise OrderRejectedError(f"Invalid order amount: {amount}")
+
+        try:
+            precise_amount = float(self.exchange.amount_to_precision(symbol, amount))
+        except Exception:
+            precise_amount = amount
+
+        if precise_amount <= 0:
+            raise OrderRejectedError(
+                f"Order amount {amount} rounded to zero by exchange precision"
+            )
+
+        market = self._get_market(symbol)
+        limits = market.get("limits", {}) if market else {}
+        amount_limits = limits.get("amount", {}) or {}
+        cost_limits = limits.get("cost", {}) or {}
+
+        min_amount = amount_limits.get("min")
+        if min_amount is not None and precise_amount < float(min_amount):
+            raise OrderRejectedError(
+                f"Order amount {precise_amount} below exchange min {min_amount}"
+            )
+
+        min_cost = cost_limits.get("min")
+        if min_cost is not None and price is not None:
+            notional = precise_amount * price
+            if notional < float(min_cost):
+                raise OrderRejectedError(
+                    f"Order notional {notional:.8f} below exchange min cost {min_cost}"
+                )
+
+        return precise_amount
+
+    def _get_market(self, symbol: str) -> dict:
+        try:
+            market = self.exchange.market(symbol)
+            if market:
+                return market
+        except Exception:
+            pass
+
+        try:
+            self.exchange.load_markets()
+            market = self.exchange.market(symbol)
+            return market or {}
+        except Exception:
+            logger.warning(f"Could not load market metadata for {symbol}")
+            return {}
+
     @retry_on_network(max_retries=3, base_delay=1.0)
     def market_buy(self, symbol: str, amount: float) -> Order:
         logger.info(f"MARKET BUY {symbol}: amount={amount}")

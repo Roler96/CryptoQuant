@@ -27,6 +27,13 @@ class BrokerABC(ABC):
         ...
 
     @abstractmethod
+    def normalize_order_amount(
+        self, symbol: str, amount: float, price: float | None = None
+    ) -> float:
+        """Round and validate base-asset order amount for this broker."""
+        ...
+
+    @abstractmethod
     def market_buy(self, symbol: str, amount: float) -> Order:
         """Execute a market buy order."""
         ...

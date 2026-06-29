@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from cryptoquant.exceptions import OrderRejectedError
 from cryptoquant.execution.broker import Broker
 from cryptoquant.execution.order import Order, OrderSide
 
@@ -88,6 +89,42 @@ class TestMarketOrders:
         mock_exchange.create_market_sell_order.return_value = _make_order(side="sell")
         order = broker.market_sell("BTC/USDT", 0.1)
         assert order.side == OrderSide.SELL
+
+
+class TestNormalizeOrderAmount:
+    def test_applies_exchange_precision(self, broker, mock_ccxt):
+        _, mock_exchange = mock_ccxt
+        mock_exchange.amount_to_precision.return_value = "0.1234"
+        mock_exchange.market.return_value = {
+            "limits": {"amount": {"min": 0.001}, "cost": {"min": 10.0}}
+        }
+
+        amount = broker.normalize_order_amount("BTC/USDT", 0.123456, price=100000.0)
+
+        assert amount == 0.1234
+        mock_exchange.amount_to_precision.assert_called_once_with(
+            "BTC/USDT", 0.123456
+        )
+
+    def test_rejects_below_min_amount(self, broker, mock_ccxt):
+        _, mock_exchange = mock_ccxt
+        mock_exchange.amount_to_precision.return_value = "0.0001"
+        mock_exchange.market.return_value = {
+            "limits": {"amount": {"min": 0.001}, "cost": {"min": 10.0}}
+        }
+
+        with pytest.raises(OrderRejectedError, match="below exchange min"):
+            broker.normalize_order_amount("BTC/USDT", 0.0001, price=100000.0)
+
+    def test_rejects_below_min_cost(self, broker, mock_ccxt):
+        _, mock_exchange = mock_ccxt
+        mock_exchange.amount_to_precision.return_value = "0.001"
+        mock_exchange.market.return_value = {
+            "limits": {"amount": {"min": 0.0001}, "cost": {"min": 10.0}}
+        }
+
+        with pytest.raises(OrderRejectedError, match="below exchange min cost"):
+            broker.normalize_order_amount("BTC/USDT", 0.001, price=1000.0)
 
 
 class TestGetPosition:

@@ -2,7 +2,7 @@
 import time
 
 from cryptoquant.config import PaperTradingConfig
-from cryptoquant.exceptions import InsufficientFundsError
+from cryptoquant.exceptions import InsufficientFundsError, OrderRejectedError
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderSide, OrderStatus, OrderType, Position
 
@@ -33,6 +33,7 @@ class PaperBroker(BrokerABC):
         self._latency_ms = (
             latency_ms if latency_ms is not None else config.latency_ms
         )
+        self._prices: dict[str, float] = {}
         self._default_price = default_price
         self._positions: dict[str, Position] = {}
         self._orders: dict[str, Order] = {}
@@ -45,13 +46,38 @@ class PaperBroker(BrokerABC):
     def get_balance(self, quote: str = "USDT") -> float:
         return self._balance.get(quote, 0.0)
 
+    def update_price(self, symbol: str, price: float) -> None:
+        """Update simulated market price for a symbol."""
+        if price <= 0:
+            return
+        self._prices[symbol] = price
+        pos = self._positions.get(symbol)
+        if pos is not None:
+            pos.current_price = price
+            if pos.entry_price > 0:
+                pos.unrealized_pnl = (price / pos.entry_price - 1) * 100
+                pos.unrealized_pnl_abs = (price - pos.entry_price) * pos.amount
+
     def get_ticker(self, symbol: str) -> dict:
+        price = self._prices.get(symbol, self._default_price)
         return {
-            "bid": self._default_price,
-            "ask": self._default_price,
-            "last": self._default_price,
+            "bid": price,
+            "ask": price,
+            "last": price,
             "timestamp": int(time.time() * 1000),
         }
+
+    def normalize_order_amount(
+        self, symbol: str, amount: float, price: float | None = None
+    ) -> float:
+        if amount <= 0:
+            raise OrderRejectedError(f"Invalid order amount: {amount}")
+        normalized = round(amount, 8)
+        if normalized <= 0:
+            raise OrderRejectedError(
+                f"Order amount {amount} rounded to zero by paper precision"
+            )
+        return normalized
 
     def _sleep_latency(self) -> None:
         if self._latency_ms > 0:

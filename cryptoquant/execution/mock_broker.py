@@ -1,6 +1,7 @@
 """Mock broker for testing and CI — deterministic responses, no network calls."""
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderSide, OrderStatus, OrderType, Position
+from cryptoquant.exceptions import OrderRejectedError
 
 
 class MockBroker(BrokerABC):
@@ -44,6 +45,14 @@ class MockBroker(BrokerABC):
             "last": self._default_price,
             "timestamp": 0,
         }
+
+    def normalize_order_amount(
+        self, symbol: str, amount: float, price: float | None = None
+    ) -> float:
+        self._log("normalize_order_amount", symbol=symbol, amount=amount, price=price)
+        if amount <= 0:
+            raise OrderRejectedError(f"Invalid order amount: {amount}")
+        return round(amount, 8)
 
     def market_buy(self, symbol: str, amount: float) -> Order:
         self._log("market_buy", symbol=symbol, amount=amount)

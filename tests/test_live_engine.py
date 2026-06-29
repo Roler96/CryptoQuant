@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
+from cryptoquant.data.quality import QualityReport
 from cryptoquant.engine.live import LiveEngine, TickAction
+from cryptoquant.exceptions import DataValidationError
 from cryptoquant.execution.order import (
     Order,
     OrderSide,
@@ -55,6 +57,9 @@ def mock_broker():
     broker.can_short = False
     broker.get_balance.return_value = 10000.0
     broker.get_position.return_value = None
+    broker.normalize_order_amount.side_effect = (
+        lambda symbol, amount, price=None: round(amount, 8)
+    )
     return broker
 
 
@@ -74,6 +79,7 @@ def mock_data_feed():
         index=dates,
     )
     data_feed.fetch.return_value = df
+    data_feed.last_quality_report = None
     return data_feed
 
 
@@ -139,6 +145,8 @@ class TestLiveEngineTick:
         result = engine.tick()
         assert result.action == TickAction.ENTRY_LONG
         mock_broker.market_buy.assert_called_once()
+        amount = mock_broker.market_buy.call_args.args[1]
+        assert amount == pytest.approx(5000.0 / 110.0)
 
     def test_exit_on_reverse_signal(
         self, mock_broker, mock_data_feed, mock_state_mgr
@@ -185,6 +193,30 @@ class TestLiveEngineTick:
         assert result.action == TickAction.SKIP
         assert "insufficient data" in result.reason
 
+    def test_skip_on_data_validation_error(self, engine, mock_data_feed, mock_broker):
+        mock_data_feed.fetch.side_effect = DataValidationError("gap detected")
+
+        result = engine.tick()
+
+        assert result.action == TickAction.SKIP
+        assert "data error" in result.reason
+        mock_broker.market_buy.assert_not_called()
+
+    def test_skip_on_unhealthy_quality_report(self, engine, mock_data_feed, mock_broker):
+        mock_data_feed.last_quality_report = QualityReport(
+            is_healthy=False,
+            gap_count=0,
+            stale_bars=1,
+            outlier_count=0,
+            volume_anomaly_count=0,
+        )
+
+        result = engine.tick()
+
+        assert result.action == TickAction.SKIP
+        assert result.reason == "data quality unhealthy"
+        mock_broker.market_buy.assert_not_called()
+
     def test_cooldown_skips_ticks(self, engine, mock_broker):
         engine._cooldown_remaining = 2
         result = engine.tick()
@@ -217,6 +249,120 @@ class TestPositionSizing:
     def test_calculate_without_risk_manager(self, engine):
         amount = engine._calculate_position_size(10000.0)
         assert amount == 5000.0
+
+    def test_quote_to_base_amount(self, engine):
+        amount = engine._quote_to_base_amount(5500.0, 110.0)
+        assert amount == pytest.approx(50.0)
+
+    def test_drawdown_multiplier_reduces_position_size(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        from cryptoquant.risk.manager import RiskManager
+
+        risk_mgr = RiskManager(initial_balance=10000.0)
+        risk_mgr._peak_balance = 10000.0
+        risk_mgr.update_balance(8800.0)
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=BuySignalStrategy(),
+            data_feed=mock_data_feed,
+            risk_manager=risk_mgr,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+
+        amount = engine._calculate_position_size(8800.0, mock_data_feed.fetch.return_value)
+        assert amount == pytest.approx(4312.0)
+
+
+class TestRiskManagerHooks:
+    def test_entry_records_risk_position(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        from cryptoquant.risk.manager import RiskManager
+
+        risk_mgr = RiskManager(initial_balance=10000.0)
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=BuySignalStrategy(),
+            data_feed=mock_data_feed,
+            risk_manager=risk_mgr,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+        mock_broker.get_position.return_value = None
+        mock_broker.market_buy.return_value = _make_order(filled=1.0, amount=1.0)
+
+        result = engine.tick()
+
+        assert result.action == TickAction.ENTRY_LONG
+        assert risk_mgr.get_positions() == {"BTC/USDT": "long"}
+
+    def test_entry_skips_when_broker_rejects_amount(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        from cryptoquant.exceptions import OrderRejectedError
+
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=BuySignalStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+        mock_broker.get_position.return_value = None
+        mock_broker.normalize_order_amount.side_effect = OrderRejectedError(
+            "below exchange min"
+        )
+
+        result = engine.tick()
+
+        assert result.action == TickAction.SKIP
+        assert "order rejected" in result.reason
+        mock_broker.market_buy.assert_not_called()
+
+    def test_exit_records_risk_stats(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        from cryptoquant.risk.manager import RiskManager
+
+        risk_mgr = RiskManager(initial_balance=10000.0)
+        risk_mgr.record_entry("BTC/USDT", "long")
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=SellSignalStrategy(),
+            data_feed=mock_data_feed,
+            risk_manager=risk_mgr,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+        )
+        position = Position(
+            symbol="BTC/USDT",
+            side="long",
+            amount=1.0,
+            entry_price=100.0,
+            current_price=110.0,
+            unrealized_pnl=10.0,
+            unrealized_pnl_abs=10.0,
+            timestamp=1704067200000,
+        )
+        mock_broker.get_position.return_value = position
+        mock_broker.get_balance.side_effect = [10000.0, 10000.0, 10100.0, 10100.0]
+        mock_broker.market_sell.return_value = _make_order(
+            side="sell", filled=1.0, amount=1.0
+        )
+        mock_broker.market_sell.return_value.price = 110.0
+
+        result = engine.tick()
+
+        assert result.action == TickAction.EXIT
+        stats = risk_mgr.get_daily_stats()
+        assert stats.total_trades == 1
+        assert stats.wins == 1
+        assert stats.total_pnl_abs == pytest.approx(100.0)
 
 
 class TestPartialFill:

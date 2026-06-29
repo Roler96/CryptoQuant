@@ -178,8 +178,10 @@ class RiskManager:
     def position_size(self, balance: float, price: float, **kwargs) -> float:
         """Calculate position size. Delegates to Sizer."""
         if self.sizer:
-            return self.sizer.calculate(balance, price, **kwargs)
-        return balance * 0.98
+            amount = self.sizer.calculate(balance, price, **kwargs)
+        else:
+            amount = balance * 0.98
+        return amount * self.position_size_multiplier(balance)
 
     def record_entry(self, symbol: str, side: str) -> None:
         self._positions[symbol] = side

@@ -91,3 +91,4 @@ temp/
 .sisyphus*
 .codebuddy/
 .omo/*
+/research/data_cache

@@ -3,6 +3,7 @@ import pytest
 
 from cryptoquant.execution.mock_broker import MockBroker
 from cryptoquant.execution.order import OrderSide, OrderStatus, Position
+from cryptoquant.exceptions import OrderRejectedError
 
 
 class TestMockBroker:
@@ -51,6 +52,17 @@ class TestMockBroker:
         assert order.side == OrderSide.BUY
         assert order.status == OrderStatus.CLOSED
         assert order.filled == 1.0
+
+    def test_normalize_order_amount_logs_and_rounds(self):
+        broker = MockBroker()
+        amount = broker.normalize_order_amount("BTC/USDT", 0.123456789, price=100.0)
+        assert amount == pytest.approx(0.12345679)
+        assert broker.call_log[-1]["method"] == "normalize_order_amount"
+
+    def test_normalize_order_amount_rejects_non_positive(self):
+        broker = MockBroker()
+        with pytest.raises(OrderRejectedError):
+            broker.normalize_order_amount("BTC/USDT", 0.0)
 
     def test_market_sell_returns_closed_order(self):
         broker = MockBroker()

@@ -5,7 +5,7 @@ import pytest
 
 from cryptoquant.execution.order import OrderSide, OrderStatus
 from cryptoquant.execution.paper_broker import PaperBroker
-from cryptoquant.exceptions import InsufficientFundsError
+from cryptoquant.exceptions import InsufficientFundsError, OrderRejectedError
 
 
 class TestPaperBroker:
@@ -47,6 +47,35 @@ class TestPaperBroker:
         assert pos.side == "long"
         broker.market_sell("BTC/USDT", 10.0)
         assert broker.get_position("BTC/USDT") is None
+
+    def test_update_price_drives_ticker_and_position_pnl(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            latency_ms=0,
+        )
+        broker.market_buy("BTC/USDT", 10.0)
+        broker.update_price("BTC/USDT", 110.0)
+
+        ticker = broker.get_ticker("BTC/USDT")
+        pos = broker.get_position("BTC/USDT")
+        assert ticker["last"] == pytest.approx(110.0)
+        assert pos is not None
+        assert pos.current_price == pytest.approx(110.0)
+        assert pos.unrealized_pnl == pytest.approx(10.0)
+        assert pos.unrealized_pnl_abs == pytest.approx(100.0)
+
+    def test_normalize_order_amount_rounds_to_paper_precision(self):
+        broker = PaperBroker()
+        assert broker.normalize_order_amount("BTC/USDT", 0.123456789) == pytest.approx(
+            0.12345679
+        )
+
+    def test_normalize_order_amount_rejects_non_positive(self):
+        broker = PaperBroker()
+        with pytest.raises(OrderRejectedError):
+            broker.normalize_order_amount("BTC/USDT", 0.0)
 
     def test_insufficient_balance_rejection(self):
         broker = PaperBroker(
