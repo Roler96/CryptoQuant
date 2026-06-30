@@ -37,10 +37,34 @@ class DataConfig(BaseSettings):
     fetch: FetchConfig = FetchConfig()
 
 
+class RiskConfig(BaseSettings):
+    """Risk management configuration."""
+    max_positions: int = 3
+    max_daily_trades: int = 20
+    max_daily_loss_pct: float = 5.0
+    max_daily_loss_abs: float = 500.0
+    max_per_trade_risk_pct: float = 2.0
+    max_drawdown_pct: float = 20.0
+    min_balance: float = 50.0
+    emergency_cooldown_minutes: int = 60
+    drawdown_tier1_pct: float = 10.0
+    drawdown_tier2_pct: float = 15.0
+    drawdown_tier3_pct: float = 20.0
+    tier_cooldown_minutes: int = 30
+
+
 class TradingConfig(BaseSettings):
     """Trading configuration."""
     default_quote: str = "USDT"
     min_order_usdt: float = Field(default=10.0, gt=0)
+    max_order_usdt: float = Field(default=1000.0, gt=0)
+    order_timeout: int = Field(default=30, ge=5)
+    cooldown_bars: int = Field(default=1, ge=0)
+    account_type: str = "spot"
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+    max_hold_hours: float | None = None
+    strategy: str = ""
     sizer_method: str = "atr"
     sizer_config: dict = Field(default_factory=lambda: {
         "base_risk_pct": 10.0,
@@ -81,6 +105,7 @@ class AppConfig(BaseSettings):
     exchange: ExchangeConfig = ExchangeConfig()
     data: DataConfig = DataConfig()
     trading: TradingConfig = TradingConfig()
+    risk: RiskConfig = RiskConfig()
     paper_trading: PaperTradingConfig = PaperTradingConfig()
     logging: LoggingConfig = LoggingConfig()
     alert: AlertConfig = AlertConfig()

@@ -9,7 +9,6 @@ from loguru import logger
 
 from cryptoquant.data.live_feed import LiveDataFeed
 from cryptoquant.engine.exit_logic import (
-    ExitCheck,
     check_signal_reverse,
     check_stop_loss,
     check_take_profit,
@@ -18,8 +17,9 @@ from cryptoquant.engine.exit_logic import (
 )
 from cryptoquant.engine.state import EngineState, StateManager
 from cryptoquant.exceptions import DataError, OrderRejectedError
-from cryptoquant.execution.broker import Broker
+from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus, Position
+from cryptoquant.monitor.journal import TradeJournal
 from cryptoquant.strategy.base import Strategy
 
 
@@ -50,11 +50,12 @@ class LiveEngine:
     3. Check risk management
     4. Execute orders via Broker
     5. Persist state
+    6. Reconcile exchange state on restart (crash recovery)
     """
 
     def __init__(
         self,
-        broker: Broker,
+        broker: BrokerABC,
         strategy: Strategy,
         data_feed: LiveDataFeed,
         risk_manager=None,
@@ -69,6 +70,8 @@ class LiveEngine:
         take_profit_pct: float | None = None,
         max_hold_hours: float | None = None,
         sizer=None,
+        reconcile_on_start: bool = True,
+        journal: TradeJournal | None = None,
     ):
         self.broker = broker
         self.strategy = strategy
@@ -85,11 +88,15 @@ class LiveEngine:
         self.take_profit_pct = take_profit_pct
         self.max_hold_hours = max_hold_hours
         self.sizer = sizer
+        self.journal = journal
 
         self._running = False
         self._cooldown_remaining = 0
         self._trades_count = 0
         self._total_pnl_pct = 0.0
+        self._active_order_ids: list[str] = []
+        self._tick_counter: int = 0
+        self._last_bar_ts: int = 0
 
         # Restore state if exists
         saved = self.state_mgr.load(strategy.name, symbol)
@@ -98,6 +105,57 @@ class LiveEngine:
             self._trades_count = saved.total_trades
             self._total_pnl_pct = saved.total_pnl_pct
             self._initial_capital = saved.initial_capital
+            self._active_order_ids = saved.active_order_ids or []
+
+        # Reconcile exchange state (cancel stale orders, sync positions)
+        if reconcile_on_start and self.symbol and getattr(self.broker, "exchange_name", "") != "paper":
+            self._reconcile()
+
+    def _reconcile(self) -> None:
+        """Reconcile local state with exchange on engine startup.
+
+        Cancel stale open orders, fetch actual positions, and sync risk manager.
+        This ensures crash recovery consistency.
+        """
+        logger.info(f"Reconciling exchange state for {self.strategy.name} on {self.symbol}...")
+
+        # 1. Cancel any stale open orders (they won't fill after restart anyway)
+        try:
+            stale_count = self.broker.cancel_all_orders(self.symbol)
+            if stale_count > 0:
+                logger.warning(
+                    f"Reconciliation: cancelled {stale_count} stale open orders "
+                    f"for {self.symbol}"
+                )
+        except Exception as e:
+            logger.error(f"Reconciliation: failed to cancel stale orders: {e}")
+
+        self._active_order_ids = []
+
+        # 2. Fetch actual exchange position
+        try:
+            position = self.broker.get_position(self.symbol)
+        except Exception as e:
+            logger.error(f"Reconciliation: failed to fetch position: {e}")
+            position = None
+
+        # 3. Sync risk manager if we have an active position
+        if position is not None and position.amount > 0 and self.risk_manager:
+            pos_in_risk = self.symbol in self.risk_manager.get_positions()
+            if not pos_in_risk:
+                logger.warning(
+                    f"Reconciliation: found open position {position.side} "
+                    f"{position.amount} on exchange but not in risk manager. "
+                    f"Restoring risk state."
+                )
+                self.risk_manager.record_entry(self.symbol, position.side)
+
+            logger.info(
+                f"Reconciliation complete: position={position.side} "
+                f"amount={position.amount}"
+            )
+        elif position is None or position.amount <= 0:
+            logger.info("Reconciliation complete: no open position on exchange")
 
     def tick(self) -> TickResult:
         """Execute one decision loop.
@@ -105,9 +163,16 @@ class LiveEngine:
         Returns:
             TickResult describing this tick's outcome.
         """
+        self._tick_counter += 1
+        corr_id = f"tick-{self._tick_counter}"
+        self._last_corr_id = corr_id
         timestamp = int(datetime.now(UTC).timestamp() * 1000)
 
-        # 0. Cooldown check
+        # 0. Daily reset check (midnight UTC)
+        if self.risk_manager:
+            self.risk_manager.check_daily_reset()
+
+        # 1. Cooldown check
         if self._cooldown_remaining > 0:
             self._cooldown_remaining -= 1
             return TickResult(
@@ -160,20 +225,29 @@ class LiveEngine:
 
         self._update_simulated_price(df)
 
-        # 2. Generate signal
-        try:
-            signals = self.strategy.generate_signal(df)
-            signal = int(signals.iloc[-1])
-        except Exception as e:
-            logger.error(f"Signal generation failed: {e}")
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=0,
-                reason=f"signal error: {e}",
-                order=None,
-                balance=self._get_balance(),
-                timestamp=timestamp,
-            )
+        # 1.5. Skip signal generation if no new bar since last tick.
+        #      Still check exits and update risk state every poll.
+        latest_bar_ts = int(df.index[-1].timestamp() * 1000)
+        is_new_bar = latest_bar_ts != self._last_bar_ts
+        self._last_bar_ts = latest_bar_ts
+
+        if not is_new_bar:
+            signal = 0  # no new signal without a new bar
+        else:
+            # 2. Generate signal (only when a new bar has closed)
+            try:
+                signals = self.strategy.generate_signal(df)
+                signal = int(signals.iloc[-1])
+            except Exception as e:
+                logger.error(f"Signal generation failed: {e}")
+                return TickResult(
+                    action=TickAction.SKIP,
+                    signal=0,
+                    reason=f"signal error: {e}",
+                    order=None,
+                    balance=self._get_balance(),
+                    timestamp=timestamp,
+                )
 
         # 3. Check current position (broker is source of truth)
         try:
@@ -236,11 +310,11 @@ class LiveEngine:
             time_check = check_time_exit(
                 position.timestamp, now_ms, max_hold_ms
             )
-            # Preserve original behavior: only check signal reverse for longs
+            # Signal reverse: exit short on long signal, exit long on short signal
             if position.side == "long":
                 signal_check = check_signal_reverse(signal, 1)
             else:
-                signal_check = ExitCheck(False, "")
+                signal_check = check_signal_reverse(signal, -1)
 
             exit_check = determine_exit(
                 sl_check, tp_check, time_check, signal_check
@@ -284,7 +358,9 @@ class LiveEngine:
             action=TickAction.NOOP,
             signal=signal if signal == -1 else 0,
             reason=(
-                "no signal"
+                "no new bar"
+                if not is_new_bar
+                else "no signal"
                 if signal == 0
                 else "short not allowed in spot"
             ),
@@ -355,9 +431,17 @@ class LiveEngine:
             else:
                 order = self.broker.market_sell(self.symbol, order_amount)
 
+            # Track active order
+            if order.is_open or order.is_partially_filled:
+                self._active_order_ids.append(order.id)
+
             # Wait for fill
             if order.is_open or order.is_partially_filled:
                 order = self._wait_and_handle_fill(order)
+
+            # Clean up order tracking
+            if order.id in self._active_order_ids:
+                self._active_order_ids.remove(order.id)
 
             logger.info(f"ENTER {side.upper()}: {order.filled} @ {order.price}")
             if self.risk_manager and order.filled > 0:
@@ -450,14 +534,43 @@ class LiveEngine:
                     self.symbol, position.amount
                 )
 
+            # Track active order
+            if order.is_open or order.is_partially_filled:
+                self._active_order_ids.append(order.id)
+
             # Wait for fill
             if order.is_open or order.is_partially_filled:
                 order = self._wait_and_handle_fill(order)
+
+            # Clean up order tracking
+            if order.id in self._active_order_ids:
+                self._active_order_ids.remove(order.id)
 
             self._trades_count += 1
             self._cooldown_remaining = self.cooldown_bars
             balance_after = self._get_balance()
             self._record_risk_exit(position, order, balance_before, balance_after)
+
+            # Journal the completed trade
+            if self.journal:
+                exit_price = order.price or position.current_price
+                if position.side == "long":
+                    pnl_pct = (exit_price / position.entry_price - 1) * 100 if position.entry_price > 0 else 0
+                else:
+                    pnl_pct = (1 - exit_price / position.entry_price) * 100 if position.entry_price > 0 else 0
+                self.journal.record({
+                    "symbol": self.symbol,
+                    "side": position.side,
+                    "entry_price": position.entry_price,
+                    "exit_price": exit_price,
+                    "amount": position.amount,
+                    "pnl_pct": round(pnl_pct, 4),
+                    "pnl_abs": round(balance_after - balance_before, 4),
+                    "exit_reason": exit_reason,
+                    "entry_time": position.timestamp,
+                    "exit_time": timestamp,
+                    "strategy": self.strategy.name,
+                })
 
             return TickResult(
                 action=TickAction.EXIT,
@@ -546,25 +659,30 @@ class LiveEngine:
         self.risk_manager.record_exit(self.symbol, pnl_pct, pnl_abs)
         self.risk_manager.update_balance(balance_after, calibrate=True)
 
-    def run(self, interval: int = 60):
+    def run(self, interval: int = 60, heartbeat_ticks: int = 60):
         """Start live trading loop.
 
         Args:
             interval: tick interval in seconds (multiple of K-line period).
+            heartbeat_ticks: log engine status every N ticks (0 = disabled).
         """
         import signal as os_signal
 
         self._running = True
+        broker_name = getattr(self.broker, "exchange_name", "unknown")
+        broker_testnet = getattr(self.broker, "testnet", None)
+        broker_account = getattr(self.broker, "account_type", "n/a")
         logger.info(
             f"LiveEngine started: {self.strategy.name} on {self.symbol}, "
-            f"interval={interval}s, testnet={self.broker.testnet}, "
-            f"account={self.broker.account_type}"
+            f"interval={interval}s, broker={broker_name}, "
+            f"testnet={broker_testnet}, account={broker_account}"
         )
 
         os_signal.signal(os_signal.SIGINT, self._handle_shutdown)
         os_signal.signal(os_signal.SIGTERM, self._handle_shutdown)
 
         consecutive_errors = 0
+        last_heartbeat_at = 0.0
 
         try:
             while self._running:
@@ -573,9 +691,16 @@ class LiveEngine:
                     self._save_state()
                     consecutive_errors = 0
 
+                    # Periodic heartbeat
+                    if heartbeat_ticks > 0:
+                        now_ts = time.time()
+                        if now_ts - last_heartbeat_at >= heartbeat_ticks * interval:
+                            self._log_heartbeat()
+                            last_heartbeat_at = now_ts
+
                     if result.action != TickAction.NOOP:
                         logger.info(
-                            f"Tick: {result.action.value} | {result.reason}"
+                            f"[{self._last_corr_id}] Tick: {result.action.value} | {result.reason}"
                         )
 
                 except Exception as e:
@@ -610,6 +735,40 @@ class LiveEngine:
         """Manually stop the engine."""
         self._running = False
 
+    def _log_heartbeat(self) -> None:
+        """Log structured engine status for monitoring."""
+        try:
+            balance = self._get_balance()
+            position = self.broker.get_position(self.symbol)
+            has_pos = position is not None and position.amount > 0
+
+            status = {
+                "tick": self._tick_counter,
+                "balance": round(balance, 2),
+                "has_position": has_pos,
+                "position_side": position.side if has_pos else "",
+                "trades": self._trades_count,
+                "pnl_pct": round(self._total_pnl_pct, 2),
+                "active_orders": len(self._active_order_ids),
+            }
+
+            if self.risk_manager:
+                stats = self.risk_manager.get_daily_stats()
+                status["daily_trades"] = stats.total_trades
+                status["daily_pnl_pct"] = round(stats.total_pnl_pct, 2)
+                tier = self.risk_manager.current_tier(balance)
+                status["drawdown_tier"] = tier.value
+
+            logger.info(
+                f"[HEARTBEAT] tick={status['tick']} "
+                f"bal={status['balance']:.2f} "
+                f"pos={'Y' if has_pos else 'N'} "
+                f"trades={status['trades']} "
+                f"pnl={status['pnl_pct']:+.2f}%"
+            )
+        except Exception as e:
+            logger.warning(f"Heartbeat failed: {e}")
+
     def _save_state(self):
         """Save current state to file."""
         try:
@@ -635,7 +794,7 @@ class LiveEngine:
                 position_entry_time=(
                     position.timestamp if position else 0
                 ),
-                active_order_ids=[],
+                active_order_ids=list(self._active_order_ids),
                 total_trades=self._trades_count,
                 total_pnl_pct=self._total_pnl_pct,
                 last_signal=0,

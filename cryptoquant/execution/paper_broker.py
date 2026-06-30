@@ -27,6 +27,7 @@ class PaperBroker(BrokerABC):
             quote: initial_balance if initial_balance is not None else config.initial_balance
         }
         self._quote = quote
+        self.exchange_name = "paper"
         self._slippage = (
             slippage_bps if slippage_bps is not None else config.slippage_bps
         ) / 10_000

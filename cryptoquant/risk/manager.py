@@ -383,3 +383,20 @@ class RiskManager:
 
     def get_positions(self) -> dict[str, str]:
         return dict(self._positions)
+
+    def check_daily_reset(self) -> bool:
+        """Check if day changed and auto-reset daily stats.
+
+        Call this at start of each tick. Returns True if reset occurred.
+        """
+        today = date.today().isoformat()
+        if self._daily_stats.date != today:
+            prev_date = self._daily_stats.date
+            logger.info(
+                f"Daily reset: {prev_date} → {today}. "
+                f"Yesterday: {self._daily_stats.total_trades} trades, "
+                f"PnL {self._daily_stats.total_pnl_pct:+.2f}%"
+            )
+            self.reset_daily(self._daily_stats.current_balance)
+            return True
+        return False

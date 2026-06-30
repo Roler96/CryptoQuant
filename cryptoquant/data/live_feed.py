@@ -1,5 +1,7 @@
 """Live data feed for real-time trading."""
 
+import time as _time
+
 import pandas as pd
 from loguru import logger
 
@@ -57,7 +59,7 @@ class LiveDataFeed:
                         f"{self._last_quality_report}"
                     )
         self.store.save(df, self.exchange, self.symbol, self.timeframe)
-        self._last_fetch_ts = int(df.index[-1].timestamp() * 1000)
+        self._last_fetch_ts = int(_time.time() * 1000)
         return df
 
     @property

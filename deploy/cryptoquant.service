@@ -1,0 +1,27 @@
+[Unit]
+Description=CryptoQuant Live Trading Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cryptoquant
+Group=cryptoquant
+WorkingDirectory=/opt/cryptoquant
+EnvironmentFile=/opt/cryptoquant/.env
+ExecStart=/opt/cryptoquant/.venv/bin/python /opt/cryptoquant/live_runner.py --symbol BTC/USDT --timeframe 1h --interval 60
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/opt/cryptoquant/logs/stdout.log
+StandardError=append:/opt/cryptoquant/logs/stderr.log
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/cryptoquant/data /opt/cryptoquant/logs /opt/cryptoquant/state
+ReadOnlyPaths=/opt/cryptoquant
+
+[Install]
+WantedBy=multi-user.target

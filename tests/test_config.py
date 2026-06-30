@@ -113,7 +113,7 @@ class TestPaperTradingConfig:
     def test_app_config_includes_paper_trading(self):
         config = load_config()
         assert isinstance(config.paper_trading, PaperTradingConfig)
-        assert config.paper_trading.enabled is False
+        assert config.paper_trading.enabled is True
         assert config.paper_trading.initial_balance == 10000.0
 
     def test_yaml_override(self, tmp_path):

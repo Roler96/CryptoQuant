@@ -249,6 +249,7 @@ class Broker(BrokerABC):
             self._handle_ccxt_error(e, f"limit_sell({symbol})")
             raise
 
+    @retry_on_network(max_retries=2, base_delay=0.5)
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         try:
             self.exchange.cancel_order(order_id, symbol)
@@ -257,6 +258,7 @@ class Broker(BrokerABC):
             self._handle_ccxt_error(e, f"cancel_order({order_id})")
             return False
 
+    @retry_on_network(max_retries=2, base_delay=0.5)
     def cancel_all_orders(self, symbol: str) -> int:
         try:
             orders = self.exchange.fetch_open_orders(symbol)

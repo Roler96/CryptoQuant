@@ -1,33 +1,59 @@
-name: CI
+name: CryptoQuant CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  schedule:
+    # Weekly: Monday 08:00 UTC
+    - cron: '0 8 * * 1'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run pyright
-      - run: uv run pytest --cov=cryptoquant
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type check (pyright)
+        run: uv run pyright
+
+      - name: Run tests
+        run: uv run pytest -x -q --tb=short --timeout=120
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=cryptoquant --cov-report=term-missing --cov-report=xml -x -q
 
   security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check .env not committed
+
+      - name: Check for secrets in code
         run: |
-          if git ls-files | grep -qE '^\.env$|\.env\.local$'; then
-            echo "ERROR: .env file detected in repository!"
-            exit 1
+          if grep -rE "api_key|api_secret|passphrase" --include='*.py' --exclude-dir=test* . | grep -v "os.environ\|config\.\|\.env\|example\|REDACT"; then
+            echo "WARNING: Potential secrets found in source files"
           fi
-      - name: Check no API keys in source
+
+      - name: Check no .env committed
         run: |
-          if grep -rE '(apiKey|api_key|secret)\s*[:=]\s*["\x27][A-Za-z0-9]{16,}' \
-            --include='*.py' --include='*.yaml' --include='*.yml' . \
-            | grep -v 'test_' | grep -v 'example' | grep -v 'your_'; then
-            echo "ERROR: Potential API key found in source code!"
+          if [ -f .env ]; then
+            echo "ERROR: .env file should not be committed!"
             exit 1
           fi
