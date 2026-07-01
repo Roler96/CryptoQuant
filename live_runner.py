@@ -36,7 +36,8 @@ def build_argparser() -> argparse.ArgumentParser:
         "--symbol", default="BTC/USDT", help="Trading symbol (default: BTC/USDT)"
     )
     p.add_argument(
-        "--timeframe", default="1h", help="OHLCV timeframe (default: 1h)"
+        "--timeframe", default=None,
+        help="OHLCV timeframe (default: from config trading.default_timeframe)"
     )
     p.add_argument(
         "--interval", type=int, default=60,
@@ -197,6 +198,9 @@ def main():
     store = OHLCVStore(db_path)
     fetch_cfg = config.data.fetch
     okx_cfg = config.exchange.okx
+
+    # --timeframe from CLI or fall back to config default
+    timeframe = args.timeframe or getattr(config.trading, "default_timeframe", "1h")
     fetcher = OHLCVFetcher(
         exchange=exchange_name,
         testnet=okx_cfg.testnet,
@@ -208,12 +212,12 @@ def main():
         store=store,
         exchange=exchange_name,
         symbol=args.symbol,
-        timeframe=args.timeframe,
+        timeframe=timeframe,
         strict_validation=True,
         quality_check=True,
         fail_on_quality=False,
     )
-    logger.info(f"Data feed: {args.symbol} {args.timeframe}")
+    logger.info(f"Data feed: {args.symbol} {timeframe}")
 
     # 5. Initialize risk manager
     risk_cfg = config.risk
@@ -246,9 +250,13 @@ def main():
 
     # 7.5. Pre-fetch data so freshness check passes on first startup.
     #      Also seeds PaperBroker with a real market price.
+    #      Lookback scales with timeframe: more bars needed for shorter timeframes.
     try:
         logger.info("Pre-fetching data for startup validation...")
-        df_initial = data_feed.fetch(lookback=200)
+        # Scale lookback: need enough bars to satisfy min_bars + warmup
+        tf_map = {"1m": 3000, "3m": 2000, "5m": 1000, "15m": 500, "30m": 400, "1h": 200, "4h": 200}
+        lookback = tf_map.get(timeframe, 500)
+        df_initial = data_feed.fetch(lookback=lookback)
         if not df_initial.empty:
             last_price = float(df_initial["close"].iloc[-1])
             update_price = getattr(broker, "update_price", None)

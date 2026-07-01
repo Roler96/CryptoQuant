@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "timestamp": "2026-06-30T09:36:34.081321+00:00",
+    "strategy_file": "strategies/hurst_trend_filter.py",
+    "class_name": "HurstTrendFilter",
+    "bars": 25920,
+    "date_range": "2026-04-01 09:35:00 \u2192 2026-06-30 09:30:00",
+    "lookback_days": 90,
+    "exchange": "okx",
+    "grid_search": {
+      "param_names": [
+        "hurst_threshold",
+        "hurst_exit"
+      ],
+      "combinations_tested": 4,
+      "best_params": {
+        "hurst_threshold": 0.58,
+        "hurst_exit": 0.42
+      }
+    }
+  },
+  "main": {
+    "label": "grid_hurst_threshold=0.58_hurst_exit=0.42",
+    "strategy_name": "HurstTrendFilter",
+    "symbol": "BTC/USDT",
+    "timeframe": "5m",
+    "initial_capital": 10000,
+    "final_equity": 10182.93,
+    "total_return_pct": 1.83,
+    "annualized_return_pct": 7.63,
+    "sharpe_ratio": 4.07,
+    "sortino_ratio": 9.78,
+    "max_drawdown_pct": 0.36,
+    "max_drawdown_days": 24,
+    "volatility_annual_pct": 1.81,
+    "total_trades": 1670,
+    "win_rate_pct": 22.2,
+    "profit_factor": 1.26,
+    "avg_win_pct": 0.48,
+    "avg_loss_pct": -0.11,
+    "avg_hold_hours": 1.2,
+    "commission": 0.0005,
+    "slippage": 0.0005
+  },
+  "gate": {
+    "passed": true,
+    "criteria": {
+      "min_trades": 30,
+      "min_sharpe": 0.5,
+      "max_maxdd": 30.0
+    }
+  }
+}

@@ -56,6 +56,7 @@ class RiskConfig(BaseSettings):
 class TradingConfig(BaseSettings):
     """Trading configuration."""
     default_quote: str = "USDT"
+    default_timeframe: str = "5m"
     min_order_usdt: float = Field(default=10.0, gt=0)
     max_order_usdt: float = Field(default=1000.0, gt=0)
     order_timeout: int = Field(default=30, ge=5)
@@ -79,8 +80,9 @@ class PaperTradingConfig(BaseSettings):
     """Paper trading simulation configuration."""
     enabled: bool = False
     initial_balance: float = 10000.0
-    slippage_bps: float = 5.0
-    latency_ms: int = 500
+    slippage_bps: float = 3.0
+    latency_ms: int = 300
+    commission_bps: float = 5.0
 
 
 class AlertConfig(BaseSettings):

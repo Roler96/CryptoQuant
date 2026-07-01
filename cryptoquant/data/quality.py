@@ -8,7 +8,13 @@ import pandas as pd
 
 @dataclass
 class QualityReport:
-    """Summary of data quality checks."""
+    """Summary of data quality checks.
+
+    is_healthy: True when there are no data integrity issues
+    (gaps, stale bars).  Market anomalies (outliers, volume spikes)
+    are flagged separately and do NOT make the data unhealthy —
+    they are normal in crypto markets.
+    """
 
     is_healthy: bool
     gap_count: int
@@ -25,14 +31,21 @@ class DataQualityChecker:
         self.df = df
 
     def check(self) -> QualityReport:
-        """Run all quality checks and return a summary report."""
+        """Run all quality checks and return a summary report.
+
+        is_healthy is False only when there are data INTEGRITY issues
+        (gaps, stale bars). Market anomalies (outliers, volume spikes)
+        are reported but do NOT block trading — they are normal crypto
+        behaviour.
+        """
         gaps = self.detect_gaps()
         stale = self.detect_stale()
         outliers = self.detect_outliers()
         volume = self.detect_volume_anomalies()
 
-        total_issues = len(gaps) + len(stale) + len(outliers) + len(volume)
-        is_healthy = total_issues == 0
+        # Only data integrity issues make data unhealthy
+        integrity_issues = len(gaps) + len(stale)
+        is_healthy = integrity_issues == 0
 
         return QualityReport(
             is_healthy=is_healthy,

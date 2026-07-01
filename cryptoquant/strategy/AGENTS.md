@@ -1,39 +1,28 @@
-# cryptoquant/strategy/ — Strategy Framework
+# cryptoquant/strategy/signals.py — Technical Indicators
 
 ## OVERVIEW
 
-Strategy base class and technical indicator library. All strategies subclass `Strategy` and implement `generate_signal()`.
-
-## STRUCTURE
-
-```
-strategy/
-├── base.py      # Strategy ABC — interface + preprocessing (92 lines)
-├── signals.py   # Technical indicators — pure numpy/pandas (287 lines)
-└── __init__.py
-```
+Pure numpy/pandas technical indicator library. No external dependencies (no ta-lib, etc.). All indicators return `pd.Series` or `pd.DataFrame` with the same index as input.
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Create new strategy | `base.py` | Subclass `Strategy`, set `DEFAULT_PARAMS`, implement `generate_signal()` |
-| Add indicator | `signals.py` | Return `pd.Series` or `pd.DataFrame`, same index as input |
-| Change preprocessing | `base.py` | `preprocess()` checks columns + min_bars |
-| Signal utilities | `signals.py` | `crossover()`, `crossunder()`, `rolling_max/min()` |
+| Add new indicator | `signals.py` | Function signature: `(series, **params) -> pd.Series` |
+| Find existing indicator | `signals.py` | Search by function name |
+| Test indicator | `tests/test_signals.py` | Basic smoke tests + edge cases |
+| Use in strategy | `from cryptoquant.strategy.signals import x` | Import in strategy file |
 
 ## CONVENTIONS
 
-- **Signal values**: `1` = long, `-1` = short, `0` = flat. Return `pd.Series` same length as input.
-- **Parameters**: Define in `DEFAULT_PARAMS` dict. Access via `self.params["key"]`. Override in constructor.
-- **Timeframe**: Set as class variable `timeframe = "1h"`. Used by engines for bar-to-hours conversion.
-- **min_bars**: Set as class variable. `preprocess()` raises `StrategyError` if `len(df) < min_bars`.
-- **Indicators**: Pure functions, no side effects. Input: `pd.Series` or `pd.DataFrame`. Output: same.
+- **Input**: `pd.Series` for single-line indicators, `pd.DataFrame` for multi-column (OHLCV).
+- **Output**: `pd.Series` or `pd.DataFrame`, same index length as input (NaN for warmup bars).
+- **Naming**: lowercase_with_underscores. Descriptive: `ema`, `bollinger_bands`, `hurst_exponent`.
+- **Params**: keyword arguments with defaults. Period/lookback params named `period` or `window`.
+- **No side effects**: indicators are pure functions. They do NOT modify the input DataFrame.
 
 ## ANTI-PATTERNS
 
-- **DO NOT** hardcode parameters in `generate_signal()` — always use `self.params`.
-- **DO NOT** call `super().__init__()` in subclass — `Strategy.__init__()` handles params merging.
-- **DO NOT** return signals with different index than input DataFrame — engines assume alignment.
-- **DO NOT** use external indicator libraries (ta-lib, etc.) — `signals.py` is self-contained.
-- **DO NOT** modify input DataFrame in indicators — return new Series/DataFrame.
+- **DO NOT** add ta-lib or any external dependency — keep it pure numpy/pandas.
+- **DO NOT** return different-length Series — NaN-pad the warmup bars.
+- **DO NOT** hardcode indicator parameters in strategy files — pass from `self.params`.

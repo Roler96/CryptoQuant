@@ -20,6 +20,7 @@ class PaperBroker(BrokerABC):
         quote: str = "USDT",
         slippage_bps: float | None = None,
         latency_ms: int | None = None,
+        commission_bps: float | None = None,
         default_price: float = 50000.0,
     ):
         config = PaperTradingConfig()
@@ -34,6 +35,10 @@ class PaperBroker(BrokerABC):
         self._latency_ms = (
             latency_ms if latency_ms is not None else config.latency_ms
         )
+        self._commission = (
+            commission_bps if commission_bps is not None
+            else getattr(config, "commission_bps", 5.0)
+        ) / 10_000
         self._prices: dict[str, float] = {}
         self._default_price = default_price
         self._positions: dict[str, Position] = {}
@@ -116,7 +121,8 @@ class PaperBroker(BrokerABC):
         self._sleep_latency()
         ticker = self.get_ticker(symbol)
         price = float(ticker["last"])
-        cost = amount * price * (1 + self._slippage)
+        trade_value = amount * price
+        cost = trade_value * (1 + self._slippage) + trade_value * self._commission
         if self._balance[self._quote] < cost:
             raise InsufficientFundsError(
                 f"Insufficient balance: {self._balance[self._quote]:.4f} < {cost:.4f}"
@@ -154,7 +160,8 @@ class PaperBroker(BrokerABC):
             raise InsufficientFundsError(
                 f"Insufficient position: {pos.amount if pos else 0:.4f} < {amount:.4f}"
             )
-        proceeds = amount * price * (1 - self._slippage)
+        trade_value = amount * price
+        proceeds = trade_value * (1 - self._slippage) - trade_value * self._commission
         self._balance[self._quote] += proceeds
         pos.amount -= amount
         if pos.amount <= 0:

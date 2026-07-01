@@ -9,12 +9,13 @@ exchange:
 data:
   db_path: data/cryptoquant.db
   fetch:
-    max_candles_per_request: 300
+    max_candles_per_request: 1000
     chunk_days: 7
     timeout_ms: 30000
 
 trading:
   default_quote: USDT
+  default_timeframe: 5m
   min_order_usdt: 10.0
   max_order_usdt: 1000.0
   order_timeout: 30
@@ -42,8 +43,9 @@ risk:
 paper_trading:
   enabled: true
   initial_balance: 10000.0
-  slippage_bps: 5.0
-  latency_ms: 500
+  slippage_bps: 3.0
+  latency_ms: 300
+  commission_bps: 5.0
 
 logging:
   level: INFO

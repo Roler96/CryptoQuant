@@ -78,19 +78,19 @@ class SpringReversal(Strategy):
         bb_high: float = 0.60         BB %B upper bound (exclusive)
     """
 
-    timeframe = "1h"
-    min_bars = 300  # for SMA200 calculation
+    timeframe = "5m"
+    min_bars = 500  # 500 * 5m = ~42h, enough for SMA200 + warmup
     version = "1.3.0"
 
     DEFAULT_PARAMS = {
         # Signal generation
-        "lookback": 20,
+        "lookback": 40,          # Was 20 on 1h; 40 * 5m = 200min
         "vol_mult": 1.5,
         "close_pct": 0.5,
         # Exit parameters
-        "stop_pct": 3.0,
-        "target_pct": 2.75,
-        "hold_hours": 32,
+        "stop_pct": 1.5,         # Tighter on 5m (more noise)
+        "target_pct": 1.5,       # Tighter target
+        "hold_hours": 8,         # Was 32h on 1h; 8h on 5m = ~96 bars
         "commission": 0.0005,
         # Regime filters
         "sma200_filter": True,

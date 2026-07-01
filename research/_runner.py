@@ -34,6 +34,9 @@ from cryptoquant.data.store import OHLCVStore
 from cryptoquant.engine.backtest import BacktestEngine
 from cryptoquant.engine.types import BacktestResult
 from cryptoquant.risk.sizer import ATRSizer
+from cryptoquant.engine.slippage import ATRSlippage
+from cryptoquant.engine.latency import RandomLatency
+from cryptoquant.engine.commission import TieredCommission
 
 # ─── GATE CONSTANTS ──────────────────────────────────────────────
 
@@ -41,6 +44,8 @@ MIN_TRADES = 30          # Minimum trades for statistical significance
 SHARPE_MIN = 0.5         # Minimum Sharpe ratio
 MAXDD_MAX = 30.0         # Maximum drawdown % (absolute)
 OOS_RATIO = 0.3          # Out-of-sample portion (last 30%)
+OOS_LOCKBOX_START = "2024-06-01"  # True holdout start (never used for training)
+OOS_LOCKBOX_END = "2026-06-30"    # True holdout end
 COMMISSION_DEFAULT = 0.0005  # 5 bps
 COMMISSION_STRESS = 0.001    # 10 bps
 COMMISSION_DELTA_WARN = 0.30  # 30% Sharpe degradation = fragile
@@ -65,6 +70,10 @@ def parse_args():
     p.add_argument("--max-hold-bars", type=int, default=None, help="Max hold bars (time exit)")
     p.add_argument("--db-path", default="data/cryptoquant.db", help="SQLite DB path")
     p.add_argument("--no-oos", action="store_true", help="Skip OOS split validation")
+    p.add_argument("--oos-lockbox", action="store_true",
+                   help=f"Use true holdout lockbox ({OOS_LOCKBOX_START} → {OOS_LOCKBOX_END}) "
+                        "instead of last-30% split. This data must NEVER be used for "
+                        "training or parameter optimization.")
     p.add_argument("--no-commission-stress", action="store_true", help="Skip commission sensitivity test")
     p.add_argument("--no-bias-check", action="store_true", help="Skip look-ahead bias check")
     p.add_argument("--param-grid", default=None, help="JSON string: {'param': [v1,v2], ...} for grid search")
@@ -172,6 +181,9 @@ def _run_single_backtest(
         slippage=slippage,
         use_lows_for_stops=True,
         sizer=sizer,
+        slippage_model=ATRSlippage(atr_period=14, multiplier=0.2, max_slippage=0.003),
+        latency_model=RandomLatency(min_bars=0, max_bars=1, seed=42),
+        commission_model=TieredCommission(vip=False),
     )
 
     result = engine.run(
@@ -211,16 +223,44 @@ def _run_oos_backtest(
     strategy_cls: type,
     args: argparse.Namespace,
 ) -> dict | None:
-    """Run OOS validation: IS (first 70%) vs OOS (last 30%)."""
-    split_idx = int(len(df) * (1 - OOS_RATIO))
-    if split_idx < max(strategy_cls.min_bars * 2, 100):
-        print(f"[runner] OOS skipped: not enough data ({len(df)} bars, need {strategy_cls.min_bars * 2})")
-        return None
+    """Run OOS validation: IS (first 70%) vs OOS (last 30%), or lockbox.
 
-    df_is = df.iloc[:split_idx]
-    df_oos = df.iloc[split_idx:]
+    In lockbox mode (--oos-lockbox), OOS = fixed date range reserved as
+    true holdout. IS = all data before the lockbox. This prevents the
+    last-30% split from leaking future information into training when
+    strategies are iterated over time.
+    """
+    use_lockbox = getattr(args, "oos_lockbox", False)
 
-    print(f"[runner] OOS split: IS={len(df_is)} bars, OOS={len(df_oos)} bars")
+    if use_lockbox:
+        lockbox_start = pd.Timestamp(OOS_LOCKBOX_START, tz="UTC")
+        lockbox_end = pd.Timestamp(OOS_LOCKBOX_END, tz="UTC")
+
+        if df.index.tz is None:
+            df = df.tz_localize("UTC")
+        elif df.index.tz is not None and str(df.index.tz) != "UTC":
+            df = df.tz_convert("UTC")
+
+        df_is = df[df.index < lockbox_start]
+        df_oos = df[(df.index >= lockbox_start) & (df.index <= lockbox_end)]
+
+        if len(df_is) < 100 or len(df_oos) < 30:
+            print(f"[runner] Lockbox OOS skipped: IS={len(df_is)} bars, OOS={len(df_oos)} bars (insufficient)")
+            return None
+
+        print(f"[runner] Lockbox OOS: IS={len(df_is)} bars (before {OOS_LOCKBOX_START}), "
+              f"OOS={len(df_oos)} bars ({OOS_LOCKBOX_START} → {OOS_LOCKBOX_END})")
+        print("[runner] ⚠ LOCKBOX ACTIVE: OOS data is true holdout — do NOT use for training.")
+    else:
+        split_idx = int(len(df) * (1 - OOS_RATIO))
+        if split_idx < max(strategy_cls.min_bars * 2, 100):
+            print(f"[runner] OOS skipped: not enough data ({len(df)} bars, need {strategy_cls.min_bars * 2})")
+            return None
+
+        df_is = df.iloc[:split_idx]
+        df_oos = df.iloc[split_idx:]
+
+        print(f"[runner] OOS split: IS={len(df_is)} bars, OOS={len(df_oos)} bars")
 
     strategy_is = strategy_cls()
     strategy_is.timeframe = args.timeframe
