@@ -31,6 +31,23 @@ class AlwaysBuy(Strategy):
         return signal
 
 
+class AlwaysSell(Strategy):
+    """Always short — enters at bar 0."""
+    timeframe = "1h"
+    min_bars = 10
+    DEFAULT_PARAMS = {}
+
+    @property
+    def name(self) -> str:
+        return "AlwaysSell"
+
+    def generate_signal(self, df: pd.DataFrame) -> pd.Series:
+        df = self.preprocess(df)
+        signal = pd.Series(0, index=df.index, dtype=int)
+        signal.iloc[0] = -1
+        return signal
+
+
 class NeverTrade(Strategy):
     timeframe = "1h"
     min_bars = 10
@@ -292,3 +309,37 @@ class TestKnownScenarios:
         result = engine.run(df, NeverTrade())
         assert result.metrics.total_return_pct == 0.0
         assert result.metrics.total_trades == 0
+
+
+class TestStopLossTakeProfit:
+    """Regression tests for SL/TP price calculation (short-side bug fix)."""
+
+    def test_sl_tp_does_not_produce_absurd_returns(self, engine):
+        """SL=2% should not produce +998% returns (short SL was calculated wrong)."""
+        df = _make_df(200, trend="flat")
+        strategy = AlwaysSell()
+        result = engine.run(df, strategy, stop_loss_pct=2.0, take_profit_pct=4.0)
+        # With bug: short SL was below entry → instant "profit" → absurd returns
+        # After fix: should be reasonable
+        assert result.metrics.total_return_pct < 50, (
+            f"Absurd return: {result.metrics.total_return_pct:.1f}% — "
+            f"SL/TP short-side calculation may still be broken"
+        )
+        assert result.metrics.total_trades < 100, (
+            f"Too many trades: {result.metrics.total_trades} — "
+            f"SL/TP may be triggering spuriously"
+        )
+
+    def test_short_sl_is_above_entry(self, engine):
+        """For shorts, SL price must be ABOVE entry (stop out when price rises)."""
+        df = _make_df(100, trend="down")
+        strategy = AlwaysSell()
+        result = engine.run(df, strategy, stop_loss_pct=5.0, take_profit_pct=10.0)
+        for trade in result.trades:
+            if trade.side == "short":
+                # Short SL price = entry * (1 + 5/100) >= entry_price
+                # We verify indirectly: no trade should have absurd positive PnL from bad SL
+                assert trade.pnl_pct < 20, (
+                    f"Suspicious short PnL: {trade.pnl_pct:.1f}% — "
+                    f"SL may be calculated below entry (old bug)"
+                )
