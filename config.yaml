@@ -9,7 +9,7 @@ exchange:
 data:
   db_path: data/cryptoquant.db
   fetch:
-    max_candles_per_request: 1000
+    max_candles_per_request: 300
     chunk_days: 7
     timeout_ms: 30000
 
@@ -24,7 +24,7 @@ trading:
   stop_loss_pct: null
   take_profit_pct: null
   max_hold_hours: null
-  strategy: bb_upper_breakout
+  strategy: atr_breakout_trend
 
 risk:
   max_positions: 3
