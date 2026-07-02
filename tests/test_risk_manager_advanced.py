@@ -2,9 +2,7 @@
 
 import time
 from datetime import date, timedelta
-from unittest.mock import patch
 
-import pytest
 
 from cryptoquant.risk.manager import DrawdownTier, RiskManager
 
@@ -43,7 +41,7 @@ class TestDailyReset:
 
         # Simulate date change
         tomorrow = date.today() + timedelta(days=1)
-        tomorrow_str = tomorrow.isoformat()
+        tomorrow.isoformat()
 
         # Force the daily stats date to yesterday
         rm._daily_stats.date = (date.today() - timedelta(days=1)).isoformat()

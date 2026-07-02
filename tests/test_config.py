@@ -98,8 +98,8 @@ class TestPaperTradingConfig:
         config = PaperTradingConfig()
         assert config.enabled is False
         assert config.initial_balance == 10000.0
-        assert config.slippage_bps == 5.0
-        assert config.latency_ms == 500
+        assert config.slippage_bps == 3.0
+        assert config.latency_ms == 300
 
     def test_custom_values(self):
         config = PaperTradingConfig(
