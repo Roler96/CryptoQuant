@@ -91,7 +91,7 @@ class StateManager:
                 )
                 continue
 
-        logger.error(
+        logger.info(
             f"All backups failed for {strategy_name}/{symbol}. Starting fresh."
         )
         return None
