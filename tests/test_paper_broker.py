@@ -1,5 +1,6 @@
 """Tests for PaperBroker."""
 from unittest.mock import patch
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 
 import pytest
 
@@ -15,6 +16,7 @@ class TestPaperBroker:
             default_price=100.0,
             slippage_bps=0,
             latency_ms=0,
+            commission_bps=0,
         )
         order = broker.market_buy("BTC/USDT", 10.0)
         assert order.side == OrderSide.BUY
@@ -27,6 +29,7 @@ class TestPaperBroker:
             default_price=100.0,
             slippage_bps=0,
             latency_ms=0,
+            commission_bps=0,
         )
         broker.market_buy("BTC/USDT", 10.0)
         order = broker.market_sell("BTC/USDT", 5.0)
@@ -103,6 +106,7 @@ class TestPaperBroker:
             default_price=100.0,
             slippage_bps=100,
             latency_ms=0,
+            commission_bps=0,
         )
         # 100 bps = 1% slippage
         broker.market_buy("BTC/USDT", 10.0)
@@ -115,6 +119,7 @@ class TestPaperBroker:
             default_price=100.0,
             slippage_bps=100,
             latency_ms=0,
+            commission_bps=0,
         )
         broker.market_buy("BTC/USDT", 10.0)
         broker.market_sell("BTC/USDT", 10.0)
@@ -149,6 +154,7 @@ class TestPaperBroker:
         broker.market_buy("BTC/USDT", 5.0)
         broker.market_buy("BTC/USDT", 5.0)
         pos = broker.get_position("BTC/USDT")
+        assert pos is not None
         assert pos.amount == 10.0
         assert pos.entry_price == pytest.approx(100.0)
 

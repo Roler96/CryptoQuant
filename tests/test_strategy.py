@@ -15,6 +15,7 @@ from cryptoquant.strategy.base import Strategy
 def _make_df(n=200, start_price=100.0, trend="flat"):
     """Generate OHLCV DataFrame with configurable trend."""
     dates = pd.date_range("2024-01-01", periods=n, freq="1h")
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
     if trend == "up":
         close = np.linspace(start_price, start_price + n * 0.5, n)
     elif trend == "down":

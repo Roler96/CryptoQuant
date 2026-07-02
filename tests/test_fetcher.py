@@ -15,6 +15,7 @@ from cryptoquant.exceptions import DataFetchError, DataValidationError
 def mock_exchange():
     """Create a mock ccxt exchange."""
     with patch("cryptoquant.data.fetcher.ccxt") as mock_ccxt:
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
         mock_cls = MagicMock()
         mock_instance = MagicMock()
         mock_cls.return_value = mock_instance

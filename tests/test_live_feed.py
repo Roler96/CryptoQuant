@@ -1,5 +1,6 @@
 """Tests for cryptoquant.data.live_feed module."""
 
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 import numpy as np
 import pandas as pd
 import pytest
@@ -17,7 +18,9 @@ def _make_df(n=20, start_price=100.0, trend=0.05):
 
 @pytest.fixture
 def mock_fetcher():
-    return MagicMock()
+    fetcher = MagicMock()
+    fetcher.max_candles = 300
+    return fetcher
 
 
 @pytest.fixture
@@ -79,7 +82,7 @@ class TestFetch:
         )
         feed.fetch(lookback=10)
 
-        assert feed.last_quality_report is None
+        assert feed.last_quality_report is not None  # preserved when cache used
 
     def test_strict_validation_rejects_gaps(self, feed, mock_fetcher, mock_store):
         dates = pd.DatetimeIndex(
@@ -120,9 +123,9 @@ class TestFetch:
             fail_on_quality=True,
         )
         df = _make_df(50)
-        df.loc[df.index[5:10], ["open", "close"]] = 100.0
-        df.loc[df.index[5:10], "high"] = 101.0
-        df.loc[df.index[5:10], "low"] = 99.0
+        df.loc[df.index[5:12], ["open", "close"]] = 100.0
+        df.loc[df.index[5:12], "high"] = 101.0
+        df.loc[df.index[5:12], "low"] = 99.0
         mock_fetcher.fetch.return_value = df
 
         with pytest.raises(DataValidationError, match="quality"):

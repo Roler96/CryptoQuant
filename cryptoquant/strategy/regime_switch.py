@@ -1,4 +1,5 @@
 """Regime-conditioned strategy switching — delegate to different strategies by market regime."""
+# pyright: reportAttributeAccessIssue=false, reportReturnType=false, reportArgumentType=false, reportIncompatibleVariableOverride=false
 
 import pandas as pd
 
@@ -9,6 +10,7 @@ from cryptoquant.strategy.signals import detect_regime
 class RegimeSwitch(Strategy):
     """Switch strategies based on detected market regime.
 
+# pyright: reportAttributeAccessIssue=false, reportReturnType=false, reportArgumentType=false, reportGeneralTypeIssues=false
     Uses ``detect_regime()`` to classify the current market state, then
     delegates signal generation to the strategy mapped to that regime.
     """

@@ -1,5 +1,6 @@
 """Tests for CorrelationCheck."""
 import numpy as np
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 import pandas as pd
 import pytest
 

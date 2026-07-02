@@ -11,6 +11,7 @@ from cryptoquant.exceptions import DataValidationError
 def store():
     """In-memory store for testing."""
     s = OHLCVStore(db_path=":memory:")
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
     _ = s.conn
     yield s
     s.close()

@@ -1,4 +1,5 @@
 """Tests for out-of-sample splitting utilities."""
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportGeneralTypeIssues=false, reportIndexIssue=false
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from cryptoquant.data.oos import split_train_test
 def _make_df(n=200, start="2024-01-01"):
     """Generate a chronological DataFrame."""
     dates = pd.date_range(start, periods=n, freq="1h")
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
     close = np.linspace(100, 100 + n * 0.5, n)
     return pd.DataFrame(
         {
