@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from cryptoquant.strategy.base import Strategy
-from cryptoquant.strategy.signals import atr, rsi, sma, ema, hurst_exponent
+from cryptoquant.strategy.signals import atr, rsi, sma, hurst_exponent
 
 
 class HurstRSITrend(Strategy):

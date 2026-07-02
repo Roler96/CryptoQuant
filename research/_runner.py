@@ -32,7 +32,6 @@ import pandas as pd
 from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.store import OHLCVStore
 from cryptoquant.engine.backtest import BacktestEngine
-from cryptoquant.engine.types import BacktestResult
 from cryptoquant.risk.sizer import ATRSizer
 from cryptoquant.engine.slippage import ATRSlippage
 from cryptoquant.engine.latency import RandomLatency

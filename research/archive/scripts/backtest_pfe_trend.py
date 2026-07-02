@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from cryptoquant.strategy.base import Strategy
-from cryptoquant.strategy.signals import atr, ema, pfe
+from cryptoquant.strategy.signals import ema, pfe
 
 
 class PFETrend(Strategy):

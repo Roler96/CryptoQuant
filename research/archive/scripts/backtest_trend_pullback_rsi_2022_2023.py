@@ -115,7 +115,7 @@ print(f"  {'Avg Hold (h)':<22} {mi.avg_hold_hours:>12.1f} {mo.avg_hold_hours:>12
 print(f"  {'Volatility (ann)%':<22} {mi.volatility_annual_pct:>12.2f} {mo.volatility_annual_pct:>12.2f} {m.volatility_annual_pct:>12.2f}")
 
 # Assessment
-print(f"\n─── Verdict ───")
+print("\n─── Verdict ───")
 if mo.sharpe_ratio > 0.5 and mo.max_drawdown_pct < 30 and mo.total_trades >= 30:
     deg = (mi.sharpe_ratio - mo.sharpe_ratio) / mi.sharpe_ratio * 100 if mi.sharpe_ratio > 0 else 0
     print(f"  OOS PASS: Sharpe {mo.sharpe_ratio:.2f}, MaxDD {mo.max_drawdown_pct:.1f}%, Trades {mo.total_trades}")
@@ -124,7 +124,7 @@ if mo.sharpe_ratio > 0.5 and mo.max_drawdown_pct < 30 and mo.total_trades >= 30:
     else:
         print(f"  Stable: {deg:.0f}% Sharpe change IS→OOS (OK)")
 else:
-    print(f"  OOS FAIL:")
+    print("  OOS FAIL:")
     if mo.sharpe_ratio < 0.5:
         print(f"    - Sharpe {mo.sharpe_ratio:.2f} < 0.5 threshold")
     if mo.max_drawdown_pct > 30:

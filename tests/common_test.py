@@ -1,9 +1,8 @@
-from cryptoquant.data.fetcher import OHLCVFetcher, validate_ohlcv
-from cryptoquant.exceptions import DataFetchError, DataValidationError
+from cryptoquant.data.fetcher import OHLCVFetcher
 
 def main():
     fetcher = OHLCVFetcher()
-    df = fetcher.fetch("BTC/USDT", limit=10)
+    fetcher.fetch("BTC/USDT", limit=10)
 
 
 if __name__ == '__main__':
