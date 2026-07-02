@@ -121,7 +121,7 @@ class AppConfig(BaseSettings):
 _config_cache: AppConfig | None = None
 
 
-def load_config(config_path: str | None = None, *, use_cache: bool = True) -> AppConfig:
+def load_config(config_path: str | Path | None = None, *, use_cache: bool = True) -> AppConfig:
     """Load configuration from YAML + .env overlay.
 
     Uses pydantic-settings for type safety, auto-conversion, and env override.

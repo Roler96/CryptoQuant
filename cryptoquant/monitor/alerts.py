@@ -102,6 +102,8 @@ class AlertHandler:
 
     def _send_webhook(self, payload: dict) -> None:
         """Send alert via webhook."""
+        if not self.webhook_url:
+            return
         try:
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(

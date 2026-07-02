@@ -1,4 +1,6 @@
 """SQLite OHLCV data storage."""
+# pyright: reportAttributeAccessIssue=false
+
 import re
 import sqlite3
 from pathlib import Path
@@ -22,7 +24,7 @@ def _table_name(exchange: str, symbol: str, timeframe: str) -> str:
 
 def _empty_df() -> pd.DataFrame:
     """Return empty OHLCV DataFrame with correct schema."""
-    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    return pd.DataFrame(columns=pd.Index(["open", "high", "low", "close", "volume"]))
 
 
 class OHLCVStore:

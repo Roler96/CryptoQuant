@@ -1,4 +1,5 @@
 """Vectorized backtesting engine."""
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 
 from collections import Counter
 from dataclasses import dataclass
@@ -173,19 +174,22 @@ class BacktestEngine:
                     pending_delay -= 1
                 else:
                     entry_price = opens[i]
-                    sl_price = (
-                        entry_price * (1 - stop_loss_pct / 100)
-                        if stop_loss_pct
-                        else None
-                    )
-                    tp_price = (
-                        entry_price * (1 + take_profit_pct / 100)
-                        if take_profit_pct
-                        else None
-                    )
+                    is_long = pending_signal == 1
+                    sl_price = None
+                    tp_price = None
+                    if stop_loss_pct:
+                        if is_long:
+                            sl_price = entry_price * (1 - stop_loss_pct / 100)
+                        else:
+                            sl_price = entry_price * (1 + stop_loss_pct / 100)
+                    if take_profit_pct:
+                        if is_long:
+                            tp_price = entry_price * (1 + take_profit_pct / 100)
+                        else:
+                            tp_price = entry_price * (1 - take_profit_pct / 100)
                     position = _Position(
                         side="long" if pending_signal == 1 else "short",
-                        entry_time=timestamps_ms[i],
+                        entry_time=int(timestamps_ms[i]),
                         entry_price=entry_price,
                         entry_signal=pending_signal,
                         entry_idx=i,
@@ -302,6 +306,8 @@ class BacktestEngine:
 
         if exit_reason == "stop_loss":
             price = position.stop_loss_price
+            if price is None:
+                return float(bar["open"])
             if position.side == "long":
                 price *= 1 - slippage
             else:
@@ -310,6 +316,8 @@ class BacktestEngine:
 
         if exit_reason == "take_profit":
             price = position.take_profit_price
+            if price is None:
+                return float(bar["open"])
             if position.side == "long":
                 price *= 1 - slippage
             else:

@@ -76,7 +76,7 @@ class LiveDataFeed:
                     self.symbol, self.timeframe, start=since_ms, end=now_ms
                 )
         except Exception:
-            df_new = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            df_new = pd.DataFrame(columns=pd.Index(["open", "high", "low", "close", "volume"]))
 
         # If no new data but cache exists, return cached tail
         if df_new.empty and self._df_cache is not None and not self._df_cache.empty:
@@ -95,9 +95,13 @@ class LiveDataFeed:
             df_merged.sort_index(inplace=True)
             if len(df_merged) > lookback * 3:
                 df_merged = df_merged.iloc[-(lookback * 2):]
-            self._df_cache = df_merged
+            self._df_cache = pd.DataFrame(df_merged)
         else:
             self._df_cache = df_new.copy()
+
+        # Defensive: both branches above set _df_cache, but pyright can't narrow through if/else
+        if self._df_cache is None:
+            return df_new
 
         # 3. Quality check
         if self.quality_check:

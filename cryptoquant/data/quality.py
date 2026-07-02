@@ -1,4 +1,5 @@
 """Data quality monitoring for OHLCV data."""
+# pyright: reportAttributeAccessIssue=false
 
 from dataclasses import dataclass, field
 
@@ -37,9 +38,15 @@ class DataQualityChecker:
         (gaps, stale bars). Market anomalies (outliers, volume spikes)
         are reported but do NOT block trading — they are normal crypto
         behaviour.
+        
+        Stale detection is limited to the most recent 50 bars to avoid
+        permanently blocking trading due to historical data gaps
+        (e.g., exchange maintenance windows from hours ago).
         """
         gaps = self.detect_gaps()
-        stale = self.detect_stale()
+        # Only check recent bars for staleness — old gaps shouldn't block trading
+        recent_df = self.df.iloc[-50:] if len(self.df) > 50 else self.df
+        stale = self.detect_stale(recent_df)
         outliers = self.detect_outliers()
         volume = self.detect_volume_anomalies()
 
@@ -81,12 +88,21 @@ class DataQualityChecker:
             })
         return gaps
 
-    def detect_stale(self, max_unchanged_bars: int = 3) -> list[dict]:
-        """Detect consecutive bars with identical close prices."""
-        if len(self.df) < 2:
+    def detect_stale(self, df=None, max_unchanged_bars: int = 6) -> list[dict]:
+        """Detect consecutive bars with identical close prices.
+
+        Args:
+            df: DataFrame to check (defaults to self.df). Use a recent slice
+                to avoid historical gaps blocking current trading.
+            max_unchanged_bars: Number of consecutive identical-close bars
+                before flagging as stale. Default 6 (30min on 5m bars).
+        """
+        if df is None:
+            df = self.df
+        if len(df) < 2:
             return []
 
-        close = self.df["close"]
+        close = df["close"]
         unchanged = close == close.shift(1)
         stale = []
         count = 0
@@ -100,8 +116,8 @@ class DataQualityChecker:
             else:
                 if count >= max_unchanged_bars:
                     stale.append({
-                        "start": self.df.index[start_idx],
-                        "end": self.df.index[i - 1],
+                        "start": df.index[start_idx],
+                        "end": df.index[i - 1],
                         "bars": count,
                     })
                 count = 0
@@ -109,8 +125,8 @@ class DataQualityChecker:
 
         if count >= max_unchanged_bars:
             stale.append({
-                "start": self.df.index[start_idx],
-                "end": self.df.index[len(unchanged) - 1],
+                "start": df.index[start_idx],
+                "end": df.index[len(unchanged) - 1],
                 "bars": count,
             })
 

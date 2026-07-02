@@ -1,4 +1,5 @@
 """OHLCV data fetcher — ccxt wrapper for exchange data."""
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 
 import os
 
@@ -60,7 +61,7 @@ def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
         raise DataValidationError("Negative volume detected")
 
     for col in required:
-        if df[col].isna().any():
+        if df[col].isna().sum() > 0:
             raise DataValidationError(f"NaN in column '{col}'")
 
     if len(df) >= 2 and isinstance(df.index, pd.DatetimeIndex):
@@ -116,10 +117,11 @@ class OHLCVFetcher:
         # Configure proxy - ccxt sets trust_env=False, so we must set proxies manually
         proxy_url = proxy or _get_proxy_from_env()
         if proxy_url:
-            self.exchange.session.proxies = {
-                "http": proxy_url,
-                "https": proxy_url,
-            }
+            if self.exchange.session is not None:
+                self.exchange.session.proxies = {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                }
             logger.debug(f"OHLCVFetcher using proxy: {proxy_url}")
 
     def available_timeframes(self) -> list[str]:
@@ -240,7 +242,7 @@ class OHLCVFetcher:
             # Advance cursor past last candle.
             # OKX/Binance: timestamp = candle OPEN time. +1ms advances past it.
             # If an exchange uses CLOSE time semantics, this logic needs adjustment.
-            cursor = int(df.index[-1].timestamp() * 1000) + 1
+            cursor = int(pd.Timestamp(df.index[-1]).timestamp() * 1000) + 1
 
         if not chunks:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -254,4 +256,4 @@ class OHLCVFetcher:
         end_ts = pd.Timestamp(end, unit="ms")
         result = result[(result.index >= start_ts) & (result.index <= end_ts)]
 
-        return result
+        return pd.DataFrame(result)

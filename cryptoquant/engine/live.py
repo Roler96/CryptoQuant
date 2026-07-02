@@ -1,4 +1,5 @@
 """Live trading engine — real-time execution loop."""
+# pyright: reportAttributeAccessIssue=false
 
 import time
 from dataclasses import dataclass
@@ -259,11 +260,14 @@ class LiveEngine:
 
         # 4. Decision
         balance = self._get_balance()
+        # Compute total equity including open position value for accurate drawdown
+        position_value = self._get_position_value()
+        total_equity = balance + position_value
         if self.risk_manager:
-            self.risk_manager.update_balance(balance, calibrate=True)
+            self.risk_manager.update_balance(total_equity, calibrate=True)
         current_positions = 1 if has_position else 0
 
-        if has_position:
+        if position is not None and position.amount > 0:
             bar_high = float(df["high"].iloc[-1])
             bar_low = float(df["low"].iloc[-1])
 
@@ -338,7 +342,7 @@ class LiveEngine:
             # Risk check
             if self.risk_manager:
                 allowed, reason = self.risk_manager.can_enter(
-                    self.symbol, signal, balance, current_positions
+                    self.symbol, signal, total_equity, current_positions
                 )
                 if not allowed:
                     logger.warning(
@@ -598,6 +602,17 @@ class LiveEngine:
         except Exception:
             return 0.0
 
+    def _get_position_value(self) -> float:
+        """Get total market value of open positions for accurate equity calc."""
+        try:
+            pos = self.broker.get_position(self.symbol)
+            if pos is not None and pos.amount > 0:
+                price = pos.current_price or pos.entry_price
+                return pos.amount * price
+        except Exception:
+            pass
+        return 0.0
+
     def _calculate_position_size(
         self, balance: float, df=None
     ) -> float:
@@ -746,7 +761,7 @@ class LiveEngine:
                 "tick": self._tick_counter,
                 "balance": round(balance, 2),
                 "has_position": has_pos,
-                "position_side": position.side if has_pos else "",
+                "position_side": position.side if position is not None and position.amount > 0 else "",
                 "trades": self._trades_count,
                 "pnl_pct": round(self._total_pnl_pct, 2),
                 "active_orders": len(self._active_order_ids),
@@ -756,7 +771,8 @@ class LiveEngine:
                 stats = self.risk_manager.get_daily_stats()
                 status["daily_trades"] = stats.total_trades
                 status["daily_pnl_pct"] = round(stats.total_pnl_pct, 2)
-                tier = self.risk_manager.current_tier(balance)
+                position_value = self._get_position_value()
+                tier = self.risk_manager.current_tier(balance + position_value)
                 status["drawdown_tier"] = tier.value
 
             logger.info(

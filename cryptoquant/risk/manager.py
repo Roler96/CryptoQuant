@@ -140,6 +140,7 @@ class RiskManager:
         if self._daily_stats.daily_pnl_pct < -self.max_daily_loss_pct:
             return False, f"daily loss limit ({self.max_daily_loss_pct}%) exceeded"
 
+        current_drawdown = 0.0
         if self._peak_balance > 0:
             current_drawdown = (current_balance / self._peak_balance - 1) * 100
             if abs(current_drawdown) > self.max_drawdown_pct:

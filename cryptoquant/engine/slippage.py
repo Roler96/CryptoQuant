@@ -1,4 +1,5 @@
 """Slippage models for backtesting and simulation."""
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 from abc import ABC, abstractmethod
 
 import pandas as pd

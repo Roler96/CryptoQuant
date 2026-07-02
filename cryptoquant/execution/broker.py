@@ -37,7 +37,7 @@ def retry_on_network(
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            last_error = None
+            last_error: BaseException | None = None
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
@@ -56,7 +56,9 @@ def retry_on_network(
                             f"All {max_retries} retries exhausted for "
                             f"{func.__name__}: {e}"
                         )
-            raise last_error
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("retry_on_network: unreachable — no error captured")
 
         return wrapper
 
