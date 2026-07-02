@@ -25,13 +25,19 @@ COPY cryptoquant/ cryptoquant/
 COPY strategies/ strategies/
 COPY config.yaml ./
 COPY live_runner.py ./
+COPY deploy/healthcheck.py deploy/healthcheck.py
 
 # Create runtime directories
 RUN mkdir -p /app/data /app/logs /app/state
 
-# Health check
-HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# Run as non-root user
+RUN useradd -m -s /bin/bash app && chown -R app:app /app
+USER app
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Health check — verifies state file freshness (engine alive = state saves periodically)
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 --start-period=180s \
+    CMD python deploy/healthcheck.py
 
 # Run live trader
-CMD ["uv", "run", "python", "live_runner.py"]
+CMD ["python", "live_runner.py"]
