@@ -43,9 +43,9 @@ risk:
 paper_trading:
   enabled: true
   initial_balance: 10000.0
-  slippage_bps: 3.0
+  slippage_bps: 1.0
   latency_ms: 300
-  commission_bps: 5.0
+  commission_bps: 10.0
 
 logging:
   level: INFO
