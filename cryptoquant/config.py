@@ -80,9 +80,9 @@ class PaperTradingConfig(BaseSettings):
     """Paper trading simulation configuration."""
     enabled: bool = False
     initial_balance: float = 10000.0
-    slippage_bps: float = 3.0
+    slippage_bps: float = 1.0
     latency_ms: int = 300
-    commission_bps: float = 5.0
+    commission_bps: float = 10.0
 
 
 class AlertConfig(BaseSettings):

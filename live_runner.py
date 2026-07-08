@@ -166,10 +166,12 @@ def main():
             quote=config.trading.default_quote,
             slippage_bps=config.paper_trading.slippage_bps,
             latency_ms=config.paper_trading.latency_ms,
+            commission_bps=config.paper_trading.commission_bps,
         )
         logger.info(
             f"PaperBroker initialized: balance={config.paper_trading.initial_balance} "
             f"{config.trading.default_quote}, slippage={config.paper_trading.slippage_bps}bps, "
+            f"commission={config.paper_trading.commission_bps}bps, "
             f"latency={config.paper_trading.latency_ms}ms"
         )
     else:
