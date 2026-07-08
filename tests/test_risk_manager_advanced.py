@@ -143,7 +143,7 @@ class TestEmergencyStop:
 
     def test_emergency_cooldown_expires(self):
         rm = make_risk_manager()
-        rm.emergency_cooldown_minutes = 0
+        rm.emergency_cooldown_minutes = 1
         rm._trigger_emergency("test")
         assert rm.is_emergency_stop() is True
 
