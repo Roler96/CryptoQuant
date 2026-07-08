@@ -1,6 +1,7 @@
 """Tests for AlertHandler rate limiting and deduplication."""
 
 import time
+from unittest.mock import patch
 
 from cryptoquant.monitor.alerts import AlertHandler
 
@@ -49,8 +50,9 @@ class TestAlertHandler:
             alert_levels=("CRITICAL",),
         )
         msg = FakeMessage("INFO", "info msg")
-        # Should be silently ignored (no webhook call)
-        handler(msg)
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            handler(msg)
+            mock_urlopen.assert_not_called()
 
     def test_rate_limit_enforced(self):
         handler = AlertHandler(

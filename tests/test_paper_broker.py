@@ -127,6 +127,33 @@ class TestPaperBroker:
         # Final balance = 10000 - 1010 + 990 = 9980
         assert broker.get_balance("USDT") == pytest.approx(9980.0)
 
+    def test_commission_applied_to_buy(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            latency_ms=0,
+            commission_bps=100,
+        )
+        # 100 bps = 1% commission
+        broker.market_buy("BTC/USDT", 10.0)
+        # Cost = 10 * 100 + 1000 * 0.01 = 1010
+        assert broker.get_balance("USDT") == pytest.approx(8990.0)
+
+    def test_commission_applied_to_sell(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            latency_ms=0,
+            commission_bps=100,
+        )
+        broker.market_buy("BTC/USDT", 10.0)
+        broker.market_sell("BTC/USDT", 10.0)
+        # Buy cost = 1010, sell proceeds = 1000 - 10 = 990
+        # Round trip charges commission on BOTH fills: 10000 - 1010 + 990 = 9980
+        assert broker.get_balance("USDT") == pytest.approx(9980.0)
+
     def test_latency_sleep(self):
         broker = PaperBroker(
             initial_balance=10000.0,

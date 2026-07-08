@@ -125,39 +125,43 @@ class TestBacktestEngine:
         df.iloc[10, df.columns.get_loc("low")] = df.iloc[10]["close"] * 0.90
 
         result = engine.run(df, AlwaysBuy(), stop_loss_pct=5.0)
-        if result.trades:
-            assert result.trades[0].exit_reason == "stop_loss"
+        assert result.trades, "AlwaysBuy with a 10% low spike must produce a trade"
+        assert result.trades[0].exit_reason == "stop_loss"
 
     def test_take_profit_triggered_by_high(self, engine):
+        # Uptrend gains 0.5/bar from ~100: a 2% TP is reached long before
+        # the data ends, so the exit reason must be take_profit exactly.
         df = _make_df(50, trend="up")
         result = engine.run(df, AlwaysBuy(), take_profit_pct=2.0)
-        if result.trades:
-            assert result.trades[0].exit_reason in (
-                "take_profit",
-                "signal_reverse",
-                "end_of_data",
-            )
+        assert result.trades, "AlwaysBuy in an uptrend must produce a trade"
+        assert result.trades[0].exit_reason == "take_profit"
 
     def test_time_exit(self, engine):
+        # Flat market, no SL/TP: only max_hold_bars can close the position
+        # before the data ends (50 bars >> 5-bar hold).
         df = _make_df(50, trend="flat")
         result = engine.run(df, AlwaysBuy(), max_hold_bars=5)
-        if result.trades:
-            assert result.trades[0].exit_reason in ("time_exit", "end_of_data")
+        assert result.trades, "AlwaysBuy with max_hold_bars must produce a trade"
+        assert result.trades[0].exit_reason == "time_exit"
 
     def test_end_of_data_force_close(self, engine):
+        # AlwaysBuy never reverses and has no SL/TP: the only possible exit
+        # is the forced close on the last bar.
         df = _make_df(50, trend="up")
         result = engine.run(df, AlwaysBuy())
-        if result.trades:
-            last_trade = result.trades[-1]
-            assert last_trade.exit_reason in ("end_of_data", "signal_reverse")
+        assert result.trades, "AlwaysBuy must produce a trade"
+        assert result.trades[-1].exit_reason == "end_of_data"
 
     def test_equity_curve_no_trades(self, engine):
         df = _make_df(50, trend="flat")
         result = engine.run(df, NeverTrade())
         assert (result.equity_curve == 10000).all()
 
-    def test_commission_reduces_pnl(self):
-        df = _make_df(50, trend="up")
+    def test_commission_is_charged_per_side(self):
+        # Flat prices: entry fill == exit fill, so 1% per-side commission
+        # must reduce net PnL by exactly 2% (entry + exit), matching
+        # PaperBroker's per-fill semantics.
+        df = _make_df(50, trend="flat")
         engine_no_fee = BacktestEngine(commission=0.0, slippage=0.0)
         engine_with_fee = BacktestEngine(commission=0.01, slippage=0.0)
 
@@ -169,12 +173,31 @@ class TestBacktestEngine:
         )
 
         assert result_no_fee.trades and result_with_fee.trades
-        # Round-trip commission of 1% should reduce net PnL by exactly 1%.
         assert (
             result_with_fee.trades[0].pnl_pct
-            == pytest.approx(result_no_fee.trades[0].pnl_pct - 1.0, abs=1e-6)
+            == pytest.approx(result_no_fee.trades[0].pnl_pct - 2.0, abs=1e-4)
         )
-        assert result_with_fee.trades[0].pnl_pct < result_no_fee.trades[0].pnl_pct
+
+    def test_entry_slippage_applied(self):
+        # Flat prices, no commission: 1% per-side slippage costs ~2% on a
+        # long round trip (pay up at entry, sell down at exit).
+        df = _make_df(50, trend="flat")
+        engine_no_slip = BacktestEngine(commission=0.0, slippage=0.0)
+        engine_slip = BacktestEngine(commission=0.0, slippage=0.01)
+
+        result_no_slip = engine_no_slip.run(
+            df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
+        )
+        result_slip = engine_slip.run(
+            df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
+        )
+
+        assert result_no_slip.trades and result_slip.trades
+        # (1-s)/(1+s) - 1 ~ -2s for small s: 1% slippage -> ~-1.98%
+        expected = ((1 - 0.01) / (1 + 0.01) - 1) * 100
+        assert result_slip.trades[0].pnl_pct == pytest.approx(
+            result_no_slip.trades[0].pnl_pct + expected, abs=1e-4
+        )
 
     def test_commission_zero_same_as_no_commission(self):
         df = _make_df(50, trend="up")
@@ -210,10 +233,10 @@ class TestBacktestEngine:
         result = engine.run(
             df, BuyThenSell({"buy_bar": 5, "sell_bar": 15})
         )
-        if result.trades:
-            trade = result.trades[0]
-            assert trade.mae_pct <= 0
-            assert trade.mfe_pct >= 0
+        assert result.trades, "BuyThenSell must produce a trade"
+        trade = result.trades[0]
+        assert trade.mae_pct <= 0
+        assert trade.mfe_pct >= 0
 
 
 class TestDrawdownCurve:
@@ -256,11 +279,11 @@ class TestTradesToDataframe:
         result = engine.run(
             df, BuyThenSell({"buy_bar": 5, "sell_bar": 50})
         )
-        if result.trades:
-            trades_df = trades_to_dataframe(result.trades)
-            assert isinstance(trades_df, pd.DataFrame)
-            assert "pnl_pct" in trades_df.columns
-            assert "exit_reason" in trades_df.columns
+        assert result.trades, "BuyThenSell must produce a trade"
+        trades_df = trades_to_dataframe(result.trades)
+        assert isinstance(trades_df, pd.DataFrame)
+        assert "pnl_pct" in trades_df.columns
+        assert "exit_reason" in trades_df.columns
 
     def test_empty_trades(self):
         result = trades_to_dataframe([])
@@ -301,8 +324,8 @@ class TestKnownScenarios:
     def test_bull_market_profits(self, engine):
         df = _make_df(200, trend="up")
         result = engine.run(df, AlwaysBuy())
-        if result.trades:
-            assert result.metrics.total_return_pct > 0
+        assert result.trades, "AlwaysBuy in a bull market must produce a trade"
+        assert result.metrics.total_return_pct > 0
 
     def test_never_trades_zero_return(self, engine):
         df = _make_df(100, trend="up")

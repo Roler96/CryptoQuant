@@ -126,8 +126,9 @@ class TestATRBreakoutTrend:
         # EMA(300) stays far above price, blocking all long entries.
         df = _make_breakout_df(600, "down")
         # Override the breakout to be upward but price still below EMA
-        df["high"].iloc[-100] = df["close"].iloc[-100] + 20.0
-        df["low"].iloc[-100] = df["close"].iloc[-100] - 10.0
+        idx = df.index[-100]
+        df.loc[idx, "high"] = df.loc[idx, "close"] + 20.0
+        df.loc[idx, "low"] = df.loc[idx, "close"] - 10.0
         s = ATRBreakoutTrend(params={"trend_ema": 300, "expansion_mult": 0.5})
         signal = s.generate_signal(df)
         assert not (signal == 1).any(), (

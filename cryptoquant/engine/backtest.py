@@ -54,6 +54,10 @@ class BacktestEngine:
     Stop loss: checked against bar low/high (not close).
     Stop priority: stop_loss > take_profit > time_exit > signal_reverse.
     Compound returns model.
+
+    Cost semantics (matches PaperBroker): ``commission`` and ``slippage``
+    are PER-SIDE fractions — both are applied to the entry fill and again
+    to the exit fill, so a round trip pays ~2x each.
     """
 
     def __init__(
@@ -173,8 +177,14 @@ class BacktestEngine:
                 if pending_delay > 0:
                     pending_delay -= 1
                 else:
-                    entry_price = opens[i]
                     is_long = pending_signal == 1
+                    entry_slip = self.slippage_model.calculate(
+                        df.iloc[i], "long" if is_long else "short"
+                    )
+                    # Entry fills against you: longs pay up, shorts sell down.
+                    entry_price = opens[i] * (
+                        (1 + entry_slip) if is_long else (1 - entry_slip)
+                    )
                     sl_price = None
                     tp_price = None
                     if stop_loss_pct:
@@ -368,11 +378,17 @@ class BacktestEngine:
                 / position.entry_price
             ) * 100
 
-        # Round-trip commission is subtracted from gross trade PnL.
-        commission_value = self.commission_model.calculate(
+        # Commission is charged per side (entry fill + exit fill), matching
+        # PaperBroker and real exchange fee schedules.
+        entry_commission = self.commission_model.calculate(
             position.entry_price, 1.0, position.side, is_maker=False
         )
-        commission_pct = commission_value / position.entry_price * 100
+        exit_commission = self.commission_model.calculate(
+            exit_price, 1.0, position.side, is_maker=False
+        )
+        commission_pct = (
+            (entry_commission + exit_commission) / position.entry_price * 100
+        )
         pnl_pct -= commission_pct
 
         return Trade(

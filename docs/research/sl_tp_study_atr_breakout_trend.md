@@ -1,5 +1,12 @@
 # ATRBreakoutTrend — SL/TP Study (2026-07-08)
 
+> **Engine semantics note (2026-07-08, post-study):** BacktestEngine costs
+> were changed from once-per-round-trip to PER-SIDE (entry+exit, matching
+> PaperBroker). Tables below predate the fix — all variants share the same
+> (understated) friction, so the *relative* conclusions stand unchanged.
+> Post-fix baseline at real account fees (taker 10bps/side + 1bps slip/side):
+> **Sharpe 1.92, return 99%, MaxDD 19.8%, PF 1.33** (1y, full compounding).
+
 **Verdict: keep `stop_loss_pct: null` and `take_profit_pct: null` in config.**
 
 Data: OKX BTC/USDT 5m, 365 days (2025-07-08 → 2026-07-08), 105,120 bars, zero gaps.

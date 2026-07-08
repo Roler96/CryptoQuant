@@ -384,9 +384,13 @@ class TestPartialFill:
 
 
 class TestStatePersistence:
-    def test_save_state(self, engine, mock_broker):
+    def test_save_state(self, engine, mock_broker, mock_state_mgr):
         mock_broker.get_position.return_value = None
         engine._save_state()
+        restored = mock_state_mgr.load(engine.strategy.name, engine.symbol)
+        assert restored is not None
+        assert restored.strategy_name == engine.strategy.name
+        assert restored.has_position is False
 
     def test_restore_state(
         self, mock_broker, mock_data_feed, mock_state_mgr

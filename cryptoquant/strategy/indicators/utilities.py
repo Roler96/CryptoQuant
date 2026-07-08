@@ -20,7 +20,7 @@ def crossover(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
     Returns: 1 at crossover points, 0 elsewhere.
     """
     above = series_a > series_b
-    prev_above = above.shift(1).fillna(False).astype(bool)
+    prev_above = above.shift(1, fill_value=False)
     cross = above & ~prev_above
     return cross.astype(int)
 
@@ -32,7 +32,7 @@ def crossunder(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
     Returns: -1 at crossunder points, 0 elsewhere.
     """
     below = series_a < series_b
-    prev_below = below.shift(1).fillna(False).astype(bool)
+    prev_below = below.shift(1, fill_value=False)
     cross = below & ~prev_below
     return cross.astype(int) * -1
 
