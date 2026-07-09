@@ -32,6 +32,21 @@ PERIODS_PER_YEAR = {
 
 BAR_HOURS = {tf: (365 * 24) / p for tf, p in PERIODS_PER_YEAR.items()}
 
+# Bars of history handed to the sizer at each entry — mirrors the live feed
+# window (OHLCVFetcher max_candles=300) so backtest sizing sees the same
+# history depth as live trading.
+SIZER_LOOKBACK_BARS = 300
+
+
+def _index_to_ms(index: pd.Index) -> np.ndarray:
+    """Convert a DatetimeIndex to Unix-ms int64, handling ms/us/ns dtypes."""
+    dtype_unit = str(index.dtype)
+    if dtype_unit == "datetime64[ms]":
+        return index.astype("int64")
+    if dtype_unit == "datetime64[us]":
+        return index.astype("int64") // 1_000
+    return index.astype("int64") // 1_000_000
+
 
 @dataclass
 class _Position:
@@ -101,11 +116,18 @@ class BacktestEngine:
         )
 
         current_equity = self.initial_capital
+        timestamps_ms = _index_to_ms(df.index) if self.sizer is not None else None
         for trade in trades:
             trade.symbol = symbol
             if self.sizer is not None:
+                # History up to (not including) the entry bar — the entry
+                # fills at that bar's open, so only prior bars are known.
+                entry_pos = int(np.searchsorted(timestamps_ms, trade.entry_time))
+                history = df.iloc[max(0, entry_pos - SIZER_LOOKBACK_BARS) : entry_pos]
                 position_size = self.sizer.calculate(
-                    current_equity, trade.entry_price
+                    current_equity,
+                    trade.entry_price,
+                    df=history if not history.empty else None,
                 )
                 trade.pnl_abs = position_size * trade.pnl_pct / 100
             else:
@@ -161,14 +183,7 @@ class BacktestEngine:
         highs = df["high"].values
         lows = df["low"].values
         closes = df["close"].values
-        # Convert DatetimeIndex to milliseconds based on dtype
-        dtype_unit = str(df.index.dtype)
-        if dtype_unit == "datetime64[ms]":
-            timestamps_ms = df.index.astype("int64")
-        elif dtype_unit == "datetime64[us]":
-            timestamps_ms = df.index.astype("int64") // 1_000
-        else:  # datetime64[ns] or other
-            timestamps_ms = df.index.astype("int64") // 1_000_000
+        timestamps_ms = _index_to_ms(df.index)
 
         n = len(df)
 

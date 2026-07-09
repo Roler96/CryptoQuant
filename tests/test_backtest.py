@@ -310,6 +310,37 @@ class TestSizerIntegration:
         assert result.trades
         assert result.trades[0].pnl_abs <= 10000
 
+    def test_backtest_passes_history_to_sizer(self):
+        df = _make_df(100, trend="up")
+        received = []
+
+        class SpySizer(FixedSizer):
+            def calculate(self, balance, price, df=None, **kwargs):
+                received.append(df)
+                return super().calculate(balance, price, **kwargs)
+
+        engine = BacktestEngine(initial_capital=10000, sizer=SpySizer(risk_pct=50.0))
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
+        assert result.trades
+        assert received and received[0] is not None
+        # History ends at the bar before entry — entry bar itself is unknown
+        # at fill time (order fills at its open).
+        entry_ts = pd.Timestamp(result.trades[0].entry_time, unit="ms")
+        assert received[0].index[-1] < entry_ts
+
+    def test_atr_sizer_scales_with_volatility(self):
+        df = _make_df(300, trend="up")
+        sizer = ATRSizer(base_risk_pct=10.0, atr_period=14, max_pct=100.0)
+        engine = BacktestEngine(initial_capital=10000, sizer=sizer)
+        result = engine.run(df, BuyThenSell({"buy_bar": 250, "sell_bar": 260}))
+        assert result.trades
+        trade = result.trades[0]
+        implied_size = trade.pnl_abs / (trade.pnl_pct / 100)
+        # With history now passed through, sizing is ATR-based — not the
+        # flat base_risk_pct fallback.
+        fallback_size = 10000 * 10.0 / 100
+        assert implied_size != pytest.approx(fallback_size, rel=1e-3)
+
     def test_backtest_without_sizer_uses_full_capital(self):
         df = _make_df(100, trend="up")
         engine = BacktestEngine(initial_capital=10000)

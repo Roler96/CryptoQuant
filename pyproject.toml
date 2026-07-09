@@ -24,6 +24,10 @@ dev = [
 perf = [
     "numba>=0.59.0,<1.0.0",
 ]
+dashboard = [
+    "plotly>=5.20,<6.0",
+    "streamlit>=1.38,<2.0",
+]
 
 [tool.ruff]
 line-length = 100
@@ -33,6 +37,7 @@ exclude = ["research", ".venv", "data", "logs", "state"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F403", "F405"]
 "**/signals.py" = ["F403"]
+"dashboard/**" = ["E402"]  # sys.path bootstrap precedes imports in Streamlit pages
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
