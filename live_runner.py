@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -63,6 +64,11 @@ def build_argparser() -> argparse.ArgumentParser:
         "--paper", action="store_true",
         help="Use PaperBroker (local simulation, no exchange API needed). "
              "Overrides config.paper_trading.enabled"
+    )
+    p.add_argument(
+        "--live", action="store_true",
+        help="Acknowledge LIVE trading risks. Required when testnet=false. "
+             "Without this flag, live (non-testnet) startup is blocked."
     )
     p.add_argument(
         "--no-reconcile", action="store_true",
@@ -154,6 +160,40 @@ def main():
     )
     logger.info("Logging initialized")
 
+    # 2.5. P0 SAFETY GATE — refuse non-testnet startup until P0 issues resolved.
+    #      See docs/review-2026-07-10.md for unresolved P0 items.
+    okx_cfg = config.exchange.okx
+    if not okx_cfg.testnet:
+        live_allowed = os.environ.get("LIVE_MODE_ALLOWED", "").lower() in (
+            "1", "true", "yes"
+        )
+
+        if not args.live and not live_allowed:
+            logger.error(
+                "LIVE MODE BLOCKED: P0 safety issues remain unresolved.\n"
+                "  Use --live flag or set LIVE_MODE_ALLOWED=true to acknowledge risks.\n"
+                "  See docs/review-2026-07-10.md for the list of unresolved P0 issues."
+            )
+            sys.exit(1)
+
+        # Config conflict: can't have paper_trading enabled in live mode
+        if config.paper_trading.enabled:
+            logger.error(
+                "CONFIG CONFLICT: testnet=false but paper_trading.enabled=true.\n"
+                "  Paper trading must be disabled for live mode.\n"
+                "  Set paper_trading.enabled: false in config.yaml"
+            )
+            sys.exit(1)
+
+        logger.warning(
+            "=" * 55 + "\n"
+            " LIVE MODE — REAL MONEY TRADING\n"
+            " P0 safety issues remain unresolved.\n"
+            " See docs/review-2026-07-10.md\n"
+            "=" * 55
+        )
+        time.sleep(5)
+
     # 3. Initialize broker
     paper_mode = args.paper or config.paper_trading.enabled
     exchange_name = config.exchange.default
@@ -188,8 +228,8 @@ def main():
         if not okx_cfg.testnet:
             logger.warning(
                 "=" * 50 + "\n"
-                " LIVE MODE — REAL MONEY TRADING\n"
-                " Confirm you want to proceed.\n" +
+                " LIVE BROKER INITIALIZED — REAL MONEY\n"
+                " P0 safety issues remain unresolved.\n" +
                 "=" * 50
             )
             # Allow 5 seconds for user to abort

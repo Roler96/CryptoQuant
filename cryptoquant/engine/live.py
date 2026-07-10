@@ -98,6 +98,7 @@ class LiveEngine:
         self._active_order_ids: list[str] = []
         self._tick_counter: int = 0
         self._last_bar_ts: int = 0
+        self._position_unknown: bool = False  # True when get_position() failed
 
         # Restore state if exists
         saved = self.state_mgr.load(strategy.name, symbol)
@@ -136,9 +137,14 @@ class LiveEngine:
         # 2. Fetch actual exchange position
         try:
             position = self.broker.get_position(self.symbol)
+            self._position_unknown = False
         except Exception as e:
-            logger.error(f"Reconciliation: failed to fetch position: {e}")
+            logger.error(
+                f"Reconciliation: failed to fetch position: {e} "
+                f"— position state UNKNOWN, new entries blocked"
+            )
             position = None
+            self._position_unknown = True
 
         # 3. Sync risk manager if we have an active position
         if position is not None and position.amount > 0 and self.risk_manager:
@@ -250,11 +256,18 @@ class LiveEngine:
                     timestamp=timestamp,
                 )
 
-        # 3. Check current position (broker is source of truth)
+        # 3. Check current position (broker is source of truth).
+        #    P0: Unknown != Flat — if position fetch fails, refuse new entries.
         try:
             position = self.broker.get_position(self.symbol)
-        except Exception:
+            self._position_unknown = False
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch position for {self.symbol}: {e} "
+                f"— treating position state as UNKNOWN"
+            )
             position = None
+            self._position_unknown = True
 
         has_position = position is not None and position.amount > 0
 
@@ -339,6 +352,21 @@ class LiveEngine:
 
         # Entry condition
         if signal in (1, -1) and (signal == 1 or self.broker.can_short):
+            # P0: Unknown position state — refuse new entries (fail-closed).
+            if self._position_unknown:
+                logger.warning(
+                    "Position state unknown (exchange query failed) "
+                    "— refusing new entry"
+                )
+                return TickResult(
+                    action=TickAction.SKIP,
+                    signal=signal,
+                    reason="position state unknown (exchange query failed)",
+                    order=None,
+                    balance=balance,
+                    timestamp=timestamp,
+                )
+
             # Risk check
             if self.risk_manager:
                 allowed, reason = self.risk_manager.can_enter(

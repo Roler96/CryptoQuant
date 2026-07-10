@@ -129,19 +129,28 @@ class TestNormalizeOrderAmount:
 
 class TestGetPosition:
     def test_spot_no_position(self, broker, mock_ccxt):
+        """Spot: no holdings → no position (even if exchange has free balance)."""
         _, mock_exchange = mock_ccxt
-        mock_exchange.fetch_balance.return_value = {"BTC": {"free": 0}}
+        # Even if exchange reports free balance, without strategy holdings it's None
+        mock_exchange.fetch_balance.return_value = {"BTC": {"free": 0.5}}
         pos = broker.get_position("BTC/USDT")
-        assert pos is None
+        assert pos is None  # P0: strategy has no recorded holdings
 
     def test_spot_has_position(self, broker, mock_ccxt):
+        """Spot: strategy holdings → position returned with correct entry price."""
         _, mock_exchange = mock_ccxt
-        mock_exchange.fetch_balance.return_value = {"BTC": {"free": 0.5}}
         mock_exchange.fetch_ticker.return_value = {"last": 50000.0, "timestamp": 0}
+        # Simulate a prior buy: 0.5 BTC at 48000
+        broker._strategy_holdings["BTC/USDT"] = {
+            "amount": 0.5,
+            "cost_basis": 48000.0,
+            "side": "long",
+        }
         pos = broker.get_position("BTC/USDT")
         assert pos is not None
         assert pos.amount == 0.5
         assert pos.side == "long"
+        assert pos.entry_price == 48000.0  # P0: correct entry price, not 0.0
 
 
 class TestCancelOrder:
