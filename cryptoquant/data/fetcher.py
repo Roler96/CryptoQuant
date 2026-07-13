@@ -109,7 +109,6 @@ class OHLCVFetcher:
             }
         )
         self.exchange_name = exchange
-        self.timeout = timeout
         self.max_candles = max(1, max_candles)
         if testnet:
             self.exchange.set_sandbox_mode(True)
