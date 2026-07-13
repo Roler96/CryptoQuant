@@ -16,7 +16,8 @@ class DogeDonchianTrend(Strategy):
 
     timeframe = "4h"
     min_bars = 181
-    version = "1.0.0"
+    version = "1.1.0"
+    signal_is_position = True
 
     DEFAULT_PARAMS = {
         "entry_bars": 120,

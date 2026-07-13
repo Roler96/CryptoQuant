@@ -239,6 +239,58 @@ class TestBacktestEngine:
         assert trade.mfe_pct >= 0
 
 
+class PositionStyle(Strategy):
+    """Persistent target-position signal: long bars 5-14, flat afterwards."""
+
+    timeframe = "1h"
+    min_bars = 10
+    signal_is_position = True
+    DEFAULT_PARAMS = {}
+
+    @property
+    def name(self) -> str:
+        return "PositionStyle"
+
+    def generate_signal(self, df: pd.DataFrame) -> pd.Series:
+        df = self.preprocess(df)
+        signal = pd.Series(0, index=df.index, dtype=int)
+        signal.iloc[5:15] = 1
+        return signal
+
+
+class TestSignalSemantics:
+    """Signal-based fills must not use price information that predates
+    the bar close which produced the signal."""
+
+    def test_position_signal_flat_closes_trade(self, engine):
+        df = _make_df(50, trend="up")
+        result = engine.run(df, PositionStyle())
+        assert len(result.trades) == 1
+        trade = result.trades[0]
+        assert trade.exit_reason == "signal_exit"
+        # Signal is 0 at bar 15 close -> exit fills at bar 16 open.
+        assert trade.exit_time == int(df.index[16].timestamp() * 1000)
+
+    def test_pulse_strategy_ignores_zero_signal(self, engine):
+        # AlwaysBuy emits a single pulse then zeros; without the
+        # signal_is_position opt-in the zeros must not close the position.
+        df = _make_df(50, trend="up")
+        result = engine.run(df, AlwaysBuy())
+        assert result.trades[-1].exit_reason == "end_of_data"
+
+    def test_signal_reverse_fills_next_open(self, engine):
+        # Sell signal computed on bar 15 close cannot fill at bar 15 open:
+        # the long must exit at bar 16 open and the short enter there too.
+        df = _make_df(50, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
+        long_trade = result.trades[0]
+        assert long_trade.exit_reason == "signal_reverse"
+        assert long_trade.exit_time == int(df.index[16].timestamp() * 1000)
+        short_trade = result.trades[1]
+        assert short_trade.side == "short"
+        assert short_trade.entry_time == int(df.index[16].timestamp() * 1000)
+
+
 class TestDrawdownCurve:
     def test_no_drawdown_flat(self):
         equity = pd.Series([100.0] * 10)

@@ -112,7 +112,14 @@ class BacktestEngine:
 
         signals = strategy.generate_signal(df)
         trades = self._simulate_positions(
-            df, signals, stop_loss_pct, take_profit_pct, max_hold_bars
+            df,
+            signals,
+            stop_loss_pct,
+            take_profit_pct,
+            max_hold_bars,
+            signal_is_position=bool(
+                getattr(strategy, "signal_is_position", False)
+            ),
         )
 
         current_equity = self.initial_capital
@@ -172,12 +179,14 @@ class BacktestEngine:
         stop_loss_pct: float | None,
         take_profit_pct: float | None,
         max_hold_bars: int | None,
+        signal_is_position: bool = False,
     ) -> list[Trade]:
         trades: list[Trade] = []
         position: _Position | None = None
         trade_id = 0
         pending_signal: int = 0
         pending_delay: int = 0
+        pending_exit_reason: str = ""
 
         opens = df["open"].values
         highs = df["high"].values
@@ -188,6 +197,35 @@ class BacktestEngine:
         n = len(df)
 
         for i in range(n):
+            # Fill a signal-based exit queued on the previous bar at this
+            # bar's open. The signal needs that bar's close, so the fill
+            # cannot happen earlier (matches live: order placed after the
+            # closed bar, filled at the next bar).
+            if position is not None and pending_exit_reason:
+                trade_id += 1
+                bar = pd.Series({
+                    "open": opens[i],
+                    "high": highs[i],
+                    "low": lows[i],
+                    "close": closes[i],
+                })
+                exit_price = self._get_exit_price(
+                    bar, pending_exit_reason, position
+                )
+                trade = self._create_trade(
+                    trade_id,
+                    position,
+                    i,
+                    timestamps_ms[i],
+                    exit_price,
+                    pending_exit_reason,
+                    highs,
+                    lows,
+                )
+                trades.append(trade)
+                position = None
+                pending_exit_reason = ""
+
             if position is None and pending_signal != 0:
                 if pending_delay > 0:
                     pending_delay -= 1
@@ -226,10 +264,7 @@ class BacktestEngine:
                     )
                     pending_signal = 0
 
-            if position is not None:
-                exit_triggered = False
-                exit_reason = ""
-
+            if position is not None and not pending_exit_reason:
                 sl_check = check_stop_loss(
                     position.side,
                     highs[i],
@@ -252,11 +287,16 @@ class BacktestEngine:
                 exit_check = determine_exit(
                     sl_check, tp_check, time_check, signal_check
                 )
-                if exit_check.should_exit:
-                    exit_triggered = True
-                    exit_reason = exit_check.reason
+                # Position-style strategies (signal = target position) close
+                # when the signal returns to 0; pulse-style strategies emit 0
+                # constantly, so this only applies when opted in.
+                signal_flat = (
+                    signal_is_position and int(signals.iloc[i]) == 0
+                )
 
-                if exit_triggered:
+                if exit_check.should_exit and exit_check.reason != "signal_reverse":
+                    # Price-triggered exits (stop/TP) fill intrabar; time
+                    # exits need no bar-close information. Same-bar fill.
                     trade_id += 1
                     bar = pd.Series({
                         "open": opens[i],
@@ -265,7 +305,7 @@ class BacktestEngine:
                         "close": closes[i],
                     })
                     exit_price = self._get_exit_price(
-                        bar, exit_reason, position
+                        bar, exit_check.reason, position
                     )
                     trade = self._create_trade(
                         trade_id,
@@ -273,14 +313,21 @@ class BacktestEngine:
                         i,
                         timestamps_ms[i],
                         exit_price,
-                        exit_reason,
+                        exit_check.reason,
                         highs,
                         lows,
                     )
                     trades.append(trade)
                     position = None
-
-                    if exit_reason == "signal_reverse":
+                elif exit_check.should_exit or signal_flat:
+                    # Signal-based exits use this bar's close: queue the fill
+                    # for the next bar's open.
+                    pending_exit_reason = (
+                        "signal_reverse"
+                        if exit_check.should_exit
+                        else "signal_exit"
+                    )
+                    if exit_check.should_exit:
                         pending_signal = int(signals.iloc[i])
                         pending_delay = self.latency_model.bars_delay()
 

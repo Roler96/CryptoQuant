@@ -25,6 +25,11 @@ class Strategy(ABC):
     timeframe: str = "1h"
     min_bars: int = 100
     version: str = "1.0.0"
+    # True when generate_signal() returns a persistent target position
+    # (1/-1/0 = long/short/flat) rather than entry pulses: the backtest
+    # engine then closes the position when the signal returns to 0,
+    # matching the live generate_signal_for_position() exit path.
+    signal_is_position: bool = False
 
     DEFAULT_PARAMS: dict[str, Any] = {}
 
