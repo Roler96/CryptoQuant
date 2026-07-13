@@ -194,13 +194,26 @@ class Broker(BrokerABC):
 
         min_cost = cost_limits.get("min")
         if min_cost is not None and price is not None:
-            notional = precise_amount * price
+            contract_size = float(market.get("contractSize", 1) or 1)
+            notional = precise_amount * contract_size * price
             if notional < float(min_cost):
                 raise OrderRejectedError(
                     f"Order notional {notional:.8f} below exchange min cost {min_cost}"
                 )
 
         return precise_amount
+
+    def quote_to_order_amount(
+        self, symbol: str, quote_amount: float, price: float
+    ) -> float:
+        """Convert USDT notional to base units or derivative contracts."""
+        if quote_amount <= 0 or price <= 0:
+            return 0.0
+        if self.account_type != "swap":
+            return quote_amount / price
+        market = self._get_market(symbol)
+        contract_size = float(market.get("contractSize", 1) or 1)
+        return quote_amount / (price * contract_size)
 
     def _get_market(self, symbol: str) -> dict:
         try:

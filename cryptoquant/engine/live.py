@@ -10,6 +10,8 @@ from loguru import logger
 
 from cryptoquant.data.closed_bar import ClosedBarFeed
 from cryptoquant.engine.exit_logic import (
+    ExitCheck,
+    ExitCheck,
     check_signal_reverse,
     check_stop_loss,
     check_take_profit,
@@ -70,6 +72,7 @@ class LiveEngine:
         initial_capital: float = 10000.0,
         order_timeout: int = 30,
         stop_loss_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
         take_profit_pct: float | None = None,
         max_hold_hours: float | None = None,
         sizer=None,
@@ -89,6 +92,9 @@ class LiveEngine:
         self._initial_capital = initial_capital
         self.order_timeout = order_timeout
         self.stop_loss_pct = stop_loss_pct
+        if trailing_stop_pct is not None and trailing_stop_pct <= 0:
+            raise ValueError("trailing_stop_pct must be positive")
+        self.trailing_stop_pct = trailing_stop_pct
         self.take_profit_pct = take_profit_pct
         self.max_hold_hours = max_hold_hours
         self.sizer = sizer
@@ -104,6 +110,7 @@ class LiveEngine:
         self._total_pnl_pct = 0.0
         self._tick_counter: int = 0
         self._position_unknown: bool = False  # True when get_position() failed
+        self._trailing_anchor: float = 0.0
 
         # Restore state if exists
         saved = self.state_mgr.load(strategy.name, symbol)
@@ -112,6 +119,7 @@ class LiveEngine:
             self._trades_count = saved.total_trades
             self._total_pnl_pct = saved.total_pnl_pct
             self._initial_capital = saved.initial_capital
+            self._trailing_anchor = saved.trailing_anchor
             if saved.ledger_state and self.position_ledger is not None:
                 self.position_ledger.restore(saved.ledger_state)
 
@@ -240,24 +248,6 @@ class LiveEngine:
         #      Still check exits and update risk state every poll.
         is_new_bar = bar_meta.has_new_closed
 
-        if not is_new_bar:
-            signal = 0  # no new signal without a new bar
-        else:
-            # 2. Generate signal (only when a new bar has closed)
-            try:
-                signals = self.strategy.generate_signal(df)
-                signal = int(signals.iloc[-1])
-            except Exception as e:
-                logger.error(f"Signal generation failed: {e}")
-                return TickResult(
-                    action=TickAction.SKIP,
-                    signal=0,
-                    reason=f"signal error: {e}",
-                    order=None,
-                    balance=self._get_balance(),
-                    timestamp=timestamp,
-                )
-
         # 3. Check current position (broker is source of truth).
         #    P0: Unknown != Flat — if position fetch fails, refuse new entries.
         try:
@@ -272,6 +262,28 @@ class LiveEngine:
             self._position_unknown = True
 
         has_position = position is not None and position.amount > 0
+
+        if not self._position_unknown and not has_position:
+            self._trailing_anchor = 0.0
+
+        if not is_new_bar:
+            signal = 0  # no new signal without a new bar
+        else:
+            # Generate signal with position context when the strategy supports it.
+            try:
+                side = position.side if has_position else None
+                signals = self.strategy.generate_signal_for_position(df, side)
+                signal = int(signals.iloc[-1])
+            except Exception as e:
+                logger.error(f"Signal generation failed: {e}")
+                return TickResult(
+                    action=TickAction.SKIP,
+                    signal=0,
+                    reason=f"signal error: {e}",
+                    order=None,
+                    balance=self._get_balance(),
+                    timestamp=timestamp,
+                )
 
         # 4. Decision
         balance = self._get_balance()
@@ -320,6 +332,7 @@ class LiveEngine:
                 stop_loss_price,
                 use_lows_for_stops=True,
             )
+            trailing_check = self._check_trailing_stop(position, df)
             tp_check = check_take_profit(
                 position.side,
                 bar_high,
@@ -336,7 +349,7 @@ class LiveEngine:
                 signal_check = check_signal_reverse(signal, -1)
 
             exit_check = determine_exit(
-                sl_check, tp_check, time_check, signal_check
+                sl_check, trailing_check, tp_check, time_check, signal_check
             )
             if exit_check.should_exit:
                 return self._exit_position(
@@ -465,6 +478,8 @@ class LiveEngine:
             )
 
             logger.info(f"ENTER {side.upper()}: {order.filled} @ {order.price}")
+            if order.filled > 0:
+                self._trailing_anchor = float(order.price or price)
             if self.risk_manager and order.filled > 0:
                 self.risk_manager.record_entry(self.symbol, side)
                 self.risk_manager.update_balance(self._get_balance(), calibrate=True)
@@ -512,6 +527,7 @@ class LiveEngine:
 
             self._trades_count += 1
             self._cooldown_remaining = self.cooldown_bars
+            self._trailing_anchor = 0.0
             balance_after = self._get_balance()
             self._record_risk_exit(position, order, balance_before, balance_after)
 
@@ -564,6 +580,8 @@ class LiveEngine:
 
     def _get_position_value(self) -> float:
         """Get total market value of open positions for accurate equity calc."""
+        if getattr(self.broker, "account_type", "spot") == "swap":
+            return 0.0
         try:
             pos = self.broker.get_position(self.symbol)
             if pos is not None and pos.amount > 0:
@@ -603,7 +621,46 @@ class LiveEngine:
     def _quote_to_base_amount(self, quote_amount: float, price: float) -> float:
         if quote_amount <= 0 or price <= 0:
             return 0.0
+        converter = getattr(self.broker, "quote_to_order_amount", None)
+        if callable(converter):
+            converted = converter(self.symbol, quote_amount, price)
+            if isinstance(converted, (int, float)):
+                return float(converted)
         return quote_amount / price
+
+    def _check_trailing_stop(self, position: Position, df=None) -> ExitCheck:
+        """Update favorable price anchor from ticker and check trailing stop."""
+        if self.trailing_stop_pct is None:
+            return ExitCheck(False, "")
+
+        price = float(position.current_price or 0)
+        try:
+            ticker_price = float(
+                self.broker.get_ticker(self.symbol).get("last", 0) or 0
+            )
+            if ticker_price > 0:
+                price = ticker_price
+        except Exception as e:
+            logger.warning(f"Ticker unavailable for trailing stop: {e}")
+        if price <= 0 and df is not None and len(df) > 0:
+            price = float(df["close"].iloc[-1])
+        if price <= 0:
+            return ExitCheck(False, "")
+
+        pct = self.trailing_stop_pct / 100
+        if position.side == "long":
+            self._trailing_anchor = max(
+                self._trailing_anchor or position.entry_price, price
+            )
+            if price <= self._trailing_anchor * (1 - pct):
+                return ExitCheck(True, "trailing_stop")
+        else:
+            self._trailing_anchor = min(
+                self._trailing_anchor or position.entry_price, price
+            )
+            if price >= self._trailing_anchor * (1 + pct):
+                return ExitCheck(True, "trailing_stop")
+        return ExitCheck(False, "")
 
     def _update_simulated_price(self, df) -> None:
         update_price = getattr(self.broker, "update_price", None)
@@ -777,6 +834,7 @@ class LiveEngine:
                 ledger_state=(
                     self.position_ledger.to_dict() if self.position_ledger else {}
                 ),
+                trailing_anchor=self._trailing_anchor,
             )
             self.state_mgr.save(state)
         except Exception as e:

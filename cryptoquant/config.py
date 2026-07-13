@@ -63,6 +63,7 @@ class TradingConfig(BaseSettings):
     cooldown_bars: int = Field(default=1, ge=0)
     account_type: str = "spot"
     stop_loss_pct: float | None = None
+    trailing_stop_pct: float | None = None
     take_profit_pct: float | None = None
     max_hold_hours: float | None = None
     strategy: str = ""

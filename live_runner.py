@@ -27,6 +27,7 @@ from cryptoquant.monitor.journal import TradeJournal
 from cryptoquant.monitor.logger import setup_logging
 from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.risk.manager import RiskManager
+from cryptoquant.risk.sizer import SizerMethod, create_sizer
 from cryptoquant.strategy.base import Strategy
 
 
@@ -339,6 +340,13 @@ def main():
 
     # 9. Initialize and run engine
     trading_cfg = config.trading
+    try:
+        sizer = create_sizer(
+            SizerMethod(trading_cfg.sizer_method), **trading_cfg.sizer_config
+        )
+    except (KeyError, ValueError, TypeError) as e:
+        logger.error(f"Invalid position sizer configuration: {e}")
+        sys.exit(1)
     engine = LiveEngine(
         broker=broker,
         strategy=strategy,
@@ -351,8 +359,10 @@ def main():
         cooldown_bars=trading_cfg.cooldown_bars,
         order_timeout=trading_cfg.order_timeout,
         stop_loss_pct=trading_cfg.stop_loss_pct,
+        trailing_stop_pct=trading_cfg.trailing_stop_pct,
         take_profit_pct=trading_cfg.take_profit_pct,
         max_hold_hours=trading_cfg.max_hold_hours,
+        sizer=sizer,
         reconcile_on_start=not args.no_reconcile,
         journal=journal,
         position_ledger=position_ledger,

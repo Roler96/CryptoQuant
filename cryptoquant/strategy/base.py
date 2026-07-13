@@ -55,6 +55,16 @@ class Strategy(ABC):
         """
         ...
 
+    def generate_signal_for_position(
+        self, df: pd.DataFrame, position_side: str | None
+    ) -> pd.Series:
+        """Generate a signal with current-position context.
+
+        Strategies with different entry and exit rules may override this hook.
+        Existing strategies retain their original behavior by default.
+        """
+        return self.generate_signal(df)
+
     def validate_params(self) -> bool:
         """Validate parameter legality. Subclasses may override.
 

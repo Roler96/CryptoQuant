@@ -94,9 +94,16 @@ def check_signal_reverse(
 def determine_exit(*checks: ExitCheck) -> ExitCheck:
     """Select the highest-priority exit from a set of checks.
 
-    Priority order: stop_loss > take_profit > time_exit > signal_reverse.
+    Priority order: stop_loss > trailing_stop > take_profit > time_exit >
+    signal_reverse.
     """
-    priority = ["stop_loss", "take_profit", "time_exit", "signal_reverse"]
+    priority = [
+        "stop_loss",
+        "trailing_stop",
+        "take_profit",
+        "time_exit",
+        "signal_reverse",
+    ]
     for reason in priority:
         for check in checks:
             if check.should_exit and check.reason == reason:

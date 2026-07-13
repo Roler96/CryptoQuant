@@ -33,6 +33,17 @@ class BrokerABC(ABC):
         """Round and validate base-asset order amount for this broker."""
         ...
 
+    def quote_to_order_amount(
+        self, symbol: str, quote_amount: float, price: float
+    ) -> float:
+        """Convert quote notional to the amount expected by the exchange.
+
+        Spot brokers use base units; derivative brokers may use contracts.
+        """
+        if quote_amount <= 0 or price <= 0:
+            return 0.0
+        return quote_amount / price
+
     @abstractmethod
     def market_buy(self, symbol: str, amount: float) -> Order:
         """Execute a market buy order."""

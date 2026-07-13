@@ -11,6 +11,7 @@ class SizerMethod(str, Enum):
     FIXED = "fixed"
     KELLY = "kelly"
     ATR = "atr"
+    REALIZED_VOL = "realized_vol"
 
 
 class PositionSizer(ABC):
@@ -170,11 +171,67 @@ class ATRSizer(PositionSizer):
         return max(self.min_order, amount)
 
 
+class RealizedVolSizer(PositionSizer):
+    """Target annualized volatility while capping portfolio notional.
+
+    The returned value is quote-currency notional, not exchange contracts.
+    Insufficient history returns zero so a live engine fails closed.
+    """
+
+    def __init__(
+        self,
+        target_vol_pct: float = 20.0,
+        lookback: int = 180,
+        periods_per_year: float = 2190.0,
+        max_pct: float = 10.0,
+        min_order: float = 10.0,
+    ):
+        self.target_vol_pct = target_vol_pct
+        self.lookback = lookback
+        self.periods_per_year = periods_per_year
+        self.max_pct = max_pct
+        self.min_order = min_order
+
+    def calculate(
+        self,
+        balance: float,
+        price: float,
+        df: pd.DataFrame | None = None,
+        **kwargs,
+    ) -> float:
+        if (
+            balance <= 0
+            or df is None
+            or len(df) <= self.lookback
+            or self.lookback < 2
+            or self.periods_per_year <= 0
+        ):
+            return 0.0
+
+        returns = df["close"].pct_change().dropna().iloc[-self.lookback :]
+        if len(returns) < self.lookback:
+            return 0.0
+
+        annual_vol_pct = float(
+            returns.std(ddof=1) * np.sqrt(self.periods_per_year) * 100
+        )
+        if not np.isfinite(annual_vol_pct) or annual_vol_pct <= 0:
+            return 0.0
+
+        position_pct = min(
+            self.target_vol_pct / annual_vol_pct * 100,
+            self.max_pct,
+        )
+        amount = balance * max(position_pct, 0.0) / 100
+        return amount if amount >= self.min_order else 0.0
+
+
 def create_sizer(method: SizerMethod, **kwargs) -> PositionSizer:
     """Factory function."""
     sizers = {
         SizerMethod.FIXED: FixedSizer,
         SizerMethod.KELLY: KellySizer,
         SizerMethod.ATR: ATRSizer,
+        SizerMethod.REALIZED_VOL: RealizedVolSizer,
     }
     return sizers[method](**kwargs)
