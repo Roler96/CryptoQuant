@@ -220,10 +220,16 @@ class TestOHLCVFetcherConfig:
         fetcher = OHLCVFetcher(exchange="okx", testnet=True, max_candles=0)
         assert fetcher.max_candles == 1
 
-    def test_timeout_parameter(self, mock_exchange):
-        """timeout should be passed to ccxt exchange."""
+    def test_timeout_parameter(self):
+        """timeout should be passed through to the ccxt exchange config.
+
+        Uses the real ccxt exchange (not the mocked fixture) since ccxt's
+        own Exchange base class is what actually stores `.timeout` from
+        the config dict — mocking it would only tell us the config dict
+        was built, not that ccxt understood it.
+        """
         fetcher = OHLCVFetcher(exchange="okx", testnet=True, timeout=60_000)
-        assert fetcher.timeout == 60_000
+        assert fetcher.exchange.timeout == 60_000
 
     def test_limit_clamped_to_max_candles(self, fetcher, mock_exchange):
         """limit should be clamped to [1, max_candles]."""
