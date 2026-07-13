@@ -295,3 +295,14 @@ class ManagedPositionLedger:
             for t in data.get("closed", [])
         ]
         return ledger
+
+    def restore(self, data: dict) -> None:
+        """Repopulate this ledger in place from a serialized dict (see to_dict).
+
+        Unlike from_dict, mutates the existing instance rather than creating
+        a new one, so callers who already share this ledger by reference
+        (Broker, ExecutionLifecycle) see the restored state.
+        """
+        restored = self.from_dict(data)
+        self._lots = restored._lots
+        self._closed = restored._closed

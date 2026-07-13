@@ -2,7 +2,7 @@
 import hashlib
 import json
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +28,7 @@ class EngineState:
     total_pnl_pct: float
     last_signal: int
     last_tick_time: int
+    ledger_state: dict = field(default_factory=dict)
 
 
 class StateManager:

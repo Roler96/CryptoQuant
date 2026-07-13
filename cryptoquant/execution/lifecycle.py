@@ -12,6 +12,7 @@ from loguru import logger
 from cryptoquant.exceptions import OrderRejectedError
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderSide, OrderStatus
+from cryptoquant.position.ledger import ManagedPositionLedger
 
 
 class ExecutionLifecycle:
@@ -29,10 +30,12 @@ class ExecutionLifecycle:
         broker: BrokerABC,
         order_timeout: int = 30,
         fill_threshold_pct: float = 90.0,
+        position_ledger: ManagedPositionLedger | None = None,
     ):
         self.broker = broker
         self.order_timeout = order_timeout
         self.fill_threshold_pct = fill_threshold_pct
+        self.position_ledger = position_ledger
 
     def execute_market(
         self, symbol: str, side: str, amount: float
@@ -61,6 +64,7 @@ class ExecutionLifecycle:
 
         # 2. Already filled
         if order.is_filled:
+            self._record_fill(symbol, side, order)
             return order
 
         # 3. Already in terminal state
@@ -81,7 +85,28 @@ class ExecutionLifecycle:
         if order.is_partially_filled:
             order = self._handle_partial_fill(order)
 
+        self._record_fill(symbol, side, order)
         return order
+
+    def _record_fill(self, symbol: str, side: str, order: Order) -> None:
+        """Record the confirmed fill in the position ledger, if any."""
+        if self.position_ledger is None or order.filled <= 0:
+            return
+
+        fee = (order.fee or {}).get("cost", 0.0) or 0.0
+        try:
+            if side == "buy":
+                self.position_ledger.record_buy(
+                    symbol, order.filled, order.price or 0.0,
+                    fee=fee, timestamp=order.timestamp,
+                )
+            else:
+                self.position_ledger.record_sell(
+                    symbol, order.filled, order.price or 0.0,
+                    fee=fee, timestamp=order.timestamp,
+                )
+        except ValueError as e:
+            logger.error(f"Position ledger out of sync, skipping record: {e}")
 
     def _wait_for_fill(self, order_id: str, symbol: str) -> Order:
         """Wait for order to fill, with timeout."""

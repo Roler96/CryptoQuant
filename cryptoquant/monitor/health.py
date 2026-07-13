@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from cryptoquant.data.closed_bar import ClosedBarFeed
 from cryptoquant.data.live_feed import LiveDataFeed
 
 
@@ -31,13 +32,13 @@ class HealthChecker:
         self.min_balance_threshold = min_balance_threshold
 
     def check(
-        self, broker, data_feed: LiveDataFeed, risk_manager
+        self, broker, data_feed: LiveDataFeed | ClosedBarFeed, risk_manager
     ) -> HealthStatus:
         """Run all health checks and return aggregated status.
 
         Args:
             broker: Broker instance for exchange/balance checks.
-            data_feed: LiveDataFeed instance for data freshness checks.
+            data_feed: LiveDataFeed | ClosedBarFeed instance for data freshness checks.
             risk_manager: RiskManager instance for risk state checks.
 
         Returns:
@@ -82,7 +83,7 @@ class HealthChecker:
             return False, f"error: {e}"
 
     def _check_data_freshness(
-        self, data_feed: LiveDataFeed
+        self, data_feed: LiveDataFeed | ClosedBarFeed
     ) -> tuple[bool, str]:
         try:
             last_fetch = data_feed.last_fetch_ts

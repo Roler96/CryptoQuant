@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
+from cryptoquant.data.closed_bar import BarFetchMeta
 from cryptoquant.data.quality import QualityReport
 from cryptoquant.engine.live import LiveEngine, TickAction
 from cryptoquant.exceptions import DataValidationError
@@ -78,7 +79,7 @@ def mock_data_feed():
         },
         index=dates,
     )
-    data_feed.fetch.return_value = df
+    data_feed.fetch.return_value = (df, BarFetchMeta(has_new_closed=True, stripped=0))
     data_feed.last_quality_report = None
     return data_feed
 
@@ -187,7 +188,7 @@ class TestLiveEngineTick:
             },
             index=dates,
         )
-        mock_data_feed.fetch.return_value = df
+        mock_data_feed.fetch.return_value = (df, BarFetchMeta(has_new_closed=True, stripped=0))
 
         result = engine.tick()
         assert result.action == TickAction.SKIP
@@ -272,7 +273,7 @@ class TestPositionSizing:
             max_order_usdt=10000.0,
         )
 
-        amount = engine._calculate_position_size(8800.0, mock_data_feed.fetch.return_value)
+        amount = engine._calculate_position_size(8800.0, mock_data_feed.fetch.return_value[0])
         assert amount == pytest.approx(4312.0)
 
 
@@ -365,24 +366,6 @@ class TestRiskManagerHooks:
         assert stats.total_pnl_abs == pytest.approx(100.0)
 
 
-class TestPartialFill:
-    def test_handle_90pct_fill(self, engine, mock_broker):
-        order = _make_order(
-            status="partially_filled", filled=0.091, amount=0.1
-        )
-        result = engine._handle_partial_fill(order)
-        assert result.status == OrderStatus.CLOSED
-        assert result.amount == 0.091
-
-    def test_handle_low_fill_cancels(self, engine, mock_broker):
-        order = _make_order(
-            status="partially_filled", filled=0.05, amount=0.1
-        )
-        result = engine._handle_partial_fill(order)
-        mock_broker.cancel_order.assert_called_once()
-        assert result.amount == 0.05
-
-
 class TestStatePersistence:
     def test_save_state(self, engine, mock_broker, mock_state_mgr):
         mock_broker.get_position.return_value = None
@@ -425,3 +408,38 @@ class TestStatePersistence:
         )
         assert engine._trades_count == 5
         assert engine._total_pnl_pct == 2.5
+
+    def test_restore_rehydrates_shared_position_ledger(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        """A saved ledger_state must repopulate the ledger LiveEngine was
+        constructed with, so Broker (sharing the same instance) sees it too."""
+        from cryptoquant.position.ledger import ManagedPositionLedger
+
+        source = ManagedPositionLedger()
+        source.record_buy("BTC/USDT", 0.2, 48000.0, fee=1.0, timestamp=1000)
+
+        engine1 = LiveEngine(
+            broker=mock_broker,
+            strategy=MockStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            position_ledger=source,
+        )
+        engine1._save_state()
+
+        fresh_ledger = ManagedPositionLedger()
+        LiveEngine(
+            broker=mock_broker,
+            strategy=MockStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            position_ledger=fresh_ledger,
+        )
+
+        pos = fresh_ledger.get_position("BTC/USDT")
+        assert pos is not None
+        assert pos.amount == 0.2
+        assert pos.avg_entry_price == 48000.0

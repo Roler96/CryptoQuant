@@ -8,7 +8,7 @@ from enum import Enum
 
 from loguru import logger
 
-from cryptoquant.data.live_feed import LiveDataFeed
+from cryptoquant.data.closed_bar import ClosedBarFeed
 from cryptoquant.engine.exit_logic import (
     check_signal_reverse,
     check_stop_loss,
@@ -19,8 +19,10 @@ from cryptoquant.engine.exit_logic import (
 from cryptoquant.engine.state import EngineState, StateManager
 from cryptoquant.exceptions import DataError, OrderRejectedError
 from cryptoquant.execution.broker_abc import BrokerABC
-from cryptoquant.execution.order import Order, OrderStatus, Position
+from cryptoquant.execution.lifecycle import ExecutionLifecycle
+from cryptoquant.execution.order import Order, Position
 from cryptoquant.monitor.journal import TradeJournal
+from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.strategy.base import Strategy
 
 
@@ -58,7 +60,7 @@ class LiveEngine:
         self,
         broker: BrokerABC,
         strategy: Strategy,
-        data_feed: LiveDataFeed,
+        data_feed: ClosedBarFeed,
         risk_manager=None,
         state_dir: str = "state",
         symbol: str = "",
@@ -73,6 +75,7 @@ class LiveEngine:
         sizer=None,
         reconcile_on_start: bool = True,
         journal: TradeJournal | None = None,
+        position_ledger: ManagedPositionLedger | None = None,
     ):
         self.broker = broker
         self.strategy = strategy
@@ -90,14 +93,16 @@ class LiveEngine:
         self.max_hold_hours = max_hold_hours
         self.sizer = sizer
         self.journal = journal
+        self.position_ledger = position_ledger
+        self._execution = ExecutionLifecycle(
+            broker, order_timeout=order_timeout, position_ledger=position_ledger
+        )
 
         self._running = False
         self._cooldown_remaining = 0
         self._trades_count = 0
         self._total_pnl_pct = 0.0
-        self._active_order_ids: list[str] = []
         self._tick_counter: int = 0
-        self._last_bar_ts: int = 0
         self._position_unknown: bool = False  # True when get_position() failed
 
         # Restore state if exists
@@ -107,7 +112,8 @@ class LiveEngine:
             self._trades_count = saved.total_trades
             self._total_pnl_pct = saved.total_pnl_pct
             self._initial_capital = saved.initial_capital
-            self._active_order_ids = saved.active_order_ids or []
+            if saved.ledger_state and self.position_ledger is not None:
+                self.position_ledger.restore(saved.ledger_state)
 
         # Reconcile exchange state (cancel stale orders, sync positions)
         if reconcile_on_start and self.symbol and getattr(self.broker, "exchange_name", "") != "paper":
@@ -131,8 +137,6 @@ class LiveEngine:
                 )
         except Exception as e:
             logger.error(f"Reconciliation: failed to cancel stale orders: {e}")
-
-        self._active_order_ids = []
 
         # 2. Fetch actual exchange position
         try:
@@ -191,10 +195,10 @@ class LiveEngine:
                 timestamp=timestamp,
             )
 
-        # 1. Fetch data
+        # 1. Fetch data (data_feed guarantees the last bar is closed)
         lookback = max(self.strategy.min_bars, 200)
         try:
-            df = self.data_feed.fetch(lookback)
+            df, bar_meta = self.data_feed.fetch(lookback)
         except DataError as e:
             logger.error(f"Live data fetch/validation failed: {e}")
             return TickResult(
@@ -232,11 +236,9 @@ class LiveEngine:
 
         self._update_simulated_price(df)
 
-        # 1.5. Skip signal generation if no new bar since last tick.
+        # 1.5. Skip signal generation if no new closed bar since last tick.
         #      Still check exits and update risk state every poll.
-        latest_bar_ts = int(df.index[-1].timestamp() * 1000)
-        is_new_bar = latest_bar_ts != self._last_bar_ts
-        self._last_bar_ts = latest_bar_ts
+        is_new_bar = bar_meta.has_new_closed
 
         if not is_new_bar:
             signal = 0  # no new signal without a new bar
@@ -458,22 +460,9 @@ class LiveEngine:
                     timestamp=timestamp,
                 )
 
-            if signal == 1:
-                order = self.broker.market_buy(self.symbol, order_amount)
-            else:
-                order = self.broker.market_sell(self.symbol, order_amount)
-
-            # Track active order
-            if order.is_open or order.is_partially_filled:
-                self._active_order_ids.append(order.id)
-
-            # Wait for fill
-            if order.is_open or order.is_partially_filled:
-                order = self._wait_and_handle_fill(order)
-
-            # Clean up order tracking
-            if order.id in self._active_order_ids:
-                self._active_order_ids.remove(order.id)
+            order = self._execution.execute_market(
+                self.symbol, "buy" if signal == 1 else "sell", order_amount
+            )
 
             logger.info(f"ENTER {side.upper()}: {order.filled} @ {order.price}")
             if self.risk_manager and order.filled > 0:
@@ -503,48 +492,6 @@ class LiveEngine:
                 timestamp=timestamp,
             )
 
-    def _wait_and_handle_fill(self, order: Order) -> Order:
-        """Wait for order fill, handle partial fills and timeout."""
-        try:
-            order = self.broker.wait_for_fill(
-                order.id, self.symbol, timeout=self.order_timeout
-            )
-        except Exception:
-            logger.warning(
-                f"Order {order.id} timeout after "
-                f"{self.order_timeout}s, cancelling"
-            )
-            self.broker.cancel_order(order.id, self.symbol)
-            raise
-
-        # Handle partial fill
-        if order.is_partially_filled:
-            order = self._handle_partial_fill(order)
-
-        return order
-
-    def _handle_partial_fill(self, order: Order) -> Order:
-        """Handle partial fill.
-
-        >=90% filled: treat as complete.
-        <90% filled: cancel remaining.
-        """
-        if order.fill_pct >= 90:
-            logger.info(
-                f"Order {order.id} {order.fill_pct:.1f}% filled, "
-                f"treating as complete"
-            )
-            order.status = OrderStatus.CLOSED
-            order.amount = order.filled
-        else:
-            logger.warning(
-                f"Order {order.id} {order.fill_pct:.1f}% filled, "
-                f"cancelling remaining {order.remaining}"
-            )
-            self.broker.cancel_order(order.id, order.symbol)
-            order.amount = order.filled
-        return order
-
     def _exit_position(
         self,
         position: Position,
@@ -557,26 +504,11 @@ class LiveEngine:
         balance_before = self._get_balance()
 
         try:
-            if position.side == "long":
-                order = self.broker.market_sell(
-                    self.symbol, position.amount
-                )
-            else:
-                order = self.broker.market_buy(
-                    self.symbol, position.amount
-                )
-
-            # Track active order
-            if order.is_open or order.is_partially_filled:
-                self._active_order_ids.append(order.id)
-
-            # Wait for fill
-            if order.is_open or order.is_partially_filled:
-                order = self._wait_and_handle_fill(order)
-
-            # Clean up order tracking
-            if order.id in self._active_order_ids:
-                self._active_order_ids.remove(order.id)
+            order = self._execution.execute_market(
+                self.symbol,
+                "sell" if position.side == "long" else "buy",
+                position.amount,
+            )
 
             self._trades_count += 1
             self._cooldown_remaining = self.cooldown_bars
@@ -792,7 +724,6 @@ class LiveEngine:
                 "position_side": position.side if position is not None and position.amount > 0 else "",
                 "trades": self._trades_count,
                 "pnl_pct": round(self._total_pnl_pct, 2),
-                "active_orders": len(self._active_order_ids),
             }
 
             if self.risk_manager:
@@ -838,11 +769,14 @@ class LiveEngine:
                 position_entry_time=(
                     position.timestamp if position else 0
                 ),
-                active_order_ids=list(self._active_order_ids),
+                active_order_ids=[],
                 total_trades=self._trades_count,
                 total_pnl_pct=self._total_pnl_pct,
                 last_signal=0,
                 last_tick_time=int(datetime.now(UTC).timestamp() * 1000),
+                ledger_state=(
+                    self.position_ledger.to_dict() if self.position_ledger else {}
+                ),
             )
             self.state_mgr.save(state)
         except Exception as e:

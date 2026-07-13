@@ -141,11 +141,7 @@ class TestGetPosition:
         _, mock_exchange = mock_ccxt
         mock_exchange.fetch_ticker.return_value = {"last": 50000.0, "timestamp": 0}
         # Simulate a prior buy: 0.5 BTC at 48000
-        broker._strategy_holdings["BTC/USDT"] = {
-            "amount": 0.5,
-            "cost_basis": 48000.0,
-            "side": "long",
-        }
+        broker.position_ledger.record_buy("BTC/USDT", 0.5, 48000.0, fee=0.0, timestamp=0)
         pos = broker.get_position("BTC/USDT")
         assert pos is not None
         assert pos.amount == 0.5

@@ -15,6 +15,7 @@ import time
 from loguru import logger
 
 from cryptoquant.config import load_config
+from cryptoquant.data.closed_bar import ClosedBarFeed
 from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.live_feed import LiveDataFeed
 from cryptoquant.data.store import OHLCVStore
@@ -24,6 +25,7 @@ from cryptoquant.monitor.alerts import AlertHandler
 from cryptoquant.monitor.health import HealthChecker
 from cryptoquant.monitor.journal import TradeJournal
 from cryptoquant.monitor.logger import setup_logging
+from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.risk.manager import RiskManager
 from cryptoquant.strategy.base import Strategy
 
@@ -197,6 +199,12 @@ def main():
     # 3. Initialize broker
     paper_mode = args.paper or config.paper_trading.enabled
     exchange_name = config.exchange.default
+    account_type = getattr(config.trading, "account_type", "spot")
+
+    # Strategy-owned position tracking for real spot trading. Not needed for
+    # PaperBroker (has its own simulated positions) or swap accounts (the
+    # exchange itself tracks margin positions authoritatively).
+    position_ledger = ManagedPositionLedger() if account_type == "spot" else None
 
     if paper_mode:
         from cryptoquant.execution.paper_broker import PaperBroker
@@ -222,7 +230,8 @@ def main():
             secret=config.okx_api_secret,
             password=config.okx_passphrase,
             testnet=okx_cfg.testnet,
-            account_type=getattr(config.trading, "account_type", "spot"),
+            account_type=account_type,
+            position_ledger=position_ledger,
         )
 
         if not okx_cfg.testnet:
@@ -249,7 +258,7 @@ def main():
         timeout=fetch_cfg.timeout_ms,
         max_candles=fetch_cfg.max_candles_per_request,
     )
-    data_feed = LiveDataFeed(
+    data_feed = ClosedBarFeed(LiveDataFeed(
         fetcher=fetcher,
         store=store,
         exchange=exchange_name,
@@ -258,7 +267,7 @@ def main():
         strict_validation=True,
         quality_check=True,
         fail_on_quality=False,
-    )
+    ))
     logger.info(f"Data feed: {args.symbol} {timeframe}")
 
     # 5. Initialize risk manager
@@ -298,7 +307,7 @@ def main():
         # Scale lookback: need enough bars to satisfy min_bars + warmup
         tf_map = {"1m": 3000, "3m": 2000, "5m": 1000, "15m": 500, "30m": 400, "1h": 200, "4h": 200}
         lookback = tf_map.get(timeframe, 500)
-        df_initial = data_feed.fetch(lookback=lookback)
+        df_initial, _initial_bar_meta = data_feed.fetch(lookback=lookback)
         if not df_initial.empty:
             last_price = float(df_initial["close"].iloc[-1])
             update_price = getattr(broker, "update_price", None)
@@ -346,6 +355,7 @@ def main():
         max_hold_hours=trading_cfg.max_hold_hours,
         reconcile_on_start=not args.no_reconcile,
         journal=journal,
+        position_ledger=position_ledger,
     )
 
     logger.info(

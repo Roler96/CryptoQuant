@@ -14,6 +14,7 @@ from cryptoquant.exceptions import (
 )
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus, Position
+from cryptoquant.position.ledger import ManagedPositionLedger
 
 
 def _get_proxy_from_env() -> str | None:
@@ -80,6 +81,7 @@ class Broker(BrokerABC):
         testnet: bool = True,
         account_type: str = "spot",
         proxy: str | None = None,
+        position_ledger: ManagedPositionLedger | None = None,
     ):
         exchange_class = getattr(ccxt, exchange)
         self.exchange = exchange_class(
@@ -95,10 +97,10 @@ class Broker(BrokerABC):
         self.testnet = testnet
         self.account_type = account_type
 
-        # Phase 0: Strategy-owned position tracking.
+        # Strategy-owned position tracking (see ManagedPositionLedger).
         # Spot _get_spot_position used to return ALL free balance as "our position".
         # Now we track only what this strategy actually bought/sold.
-        self._strategy_holdings: dict[str, dict] = {}
+        self.position_ledger = position_ledger or ManagedPositionLedger()
 
         if testnet:
             self.exchange.set_sandbox_mode(True)
@@ -221,9 +223,7 @@ class Broker(BrokerABC):
         logger.info(f"MARKET BUY {symbol}: amount={amount}")
         try:
             raw = self.exchange.create_market_buy_order(symbol, amount)
-            order = Order.from_ccxt(raw, exchange=self.exchange_name)
-            self._record_strategy_buy(symbol, amount, order.price)
-            return order
+            return Order.from_ccxt(raw, exchange=self.exchange_name)
         except Exception as e:
             self._handle_ccxt_error(e, f"market_buy({symbol})")
             raise
@@ -233,36 +233,10 @@ class Broker(BrokerABC):
         logger.info(f"MARKET SELL {symbol}: amount={amount}")
         try:
             raw = self.exchange.create_market_sell_order(symbol, amount)
-            order = Order.from_ccxt(raw, exchange=self.exchange_name)
-            self._record_strategy_sell(symbol, amount, order.price)
-            return order
+            return Order.from_ccxt(raw, exchange=self.exchange_name)
         except Exception as e:
             self._handle_ccxt_error(e, f"market_sell({symbol})")
             raise
-
-    def _record_strategy_buy(self, symbol: str, amount: float, price: float) -> None:
-        """Record strategy-owned position after a buy."""
-        h = self._strategy_holdings.get(symbol, {})
-        old_amount = h.get("amount", 0.0)
-        old_cost = h.get("cost_basis", 0.0) * old_amount
-        new_amount = old_amount + amount
-        new_cost_basis = (old_cost + amount * price) / new_amount if new_amount > 0 else 0.0
-        self._strategy_holdings[symbol] = {
-            "amount": new_amount,
-            "cost_basis": new_cost_basis,
-            "side": "long",
-        }
-
-    def _record_strategy_sell(self, symbol: str, amount: float, price: float) -> None:
-        """Deduct strategy-owned position after a sell."""
-        h = self._strategy_holdings.get(symbol)
-        if h is None:
-            return
-        new_amount = h["amount"] - amount
-        if new_amount <= 0:
-            del self._strategy_holdings[symbol]
-        else:
-            h["amount"] = new_amount
 
     @retry_on_network(max_retries=3, base_delay=1.0)
     def limit_buy(self, symbol: str, amount: float, price: float) -> Order:
@@ -337,30 +311,24 @@ class Broker(BrokerABC):
         received via transfer/airdrop. Now only reports positions the
         strategy actually bought through this Broker instance.
 
-        On restart (empty holdings), reconciliation in LiveEngine should
-        restore strategy holdings from exchange state.
+        On restart, LiveEngine restores position_ledger from persisted state
+        before this is queried.
         """
-        base = symbol.split("/")[0]
-
-        # Prefer strategy-tracked holdings over account free balance.
-        h = self._strategy_holdings.get(symbol)
-        if h is None or h.get("amount", 0.0) <= 0:
+        snapshot = self.position_ledger.get_position(symbol)
+        if snapshot is None:
             return None
-
-        amount = h["amount"]
-        entry_price = h.get("cost_basis", 0.0)
 
         try:
             ticker = self.exchange.fetch_ticker(symbol)
             current_price = float(ticker.get("last", 0))
         except Exception:
-            current_price = entry_price
+            current_price = snapshot.avg_entry_price
 
         return Position(
             symbol=symbol,
-            side=h.get("side", "long"),
-            amount=amount,
-            entry_price=entry_price,
+            side=snapshot.side,
+            amount=snapshot.amount,
+            entry_price=snapshot.avg_entry_price,
             current_price=current_price,
             unrealized_pnl=0.0,
             unrealized_pnl_abs=0.0,

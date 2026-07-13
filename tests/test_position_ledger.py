@@ -231,3 +231,18 @@ class TestSerialization:
         assert restored.active_symbols == []
         assert restored.closed_trades == []
         assert restored.get_realized_pnl() == 0.0
+
+    def test_restore_mutates_in_place(self):
+        """restore() must update the existing instance, not return a new one —
+        Broker/ExecutionLifecycle/LiveEngine share a single ledger by reference."""
+        source = ManagedPositionLedger()
+        source.record_buy("BTC/USDT", 0.1, 50000.0, fee=5.0, timestamp=1000)
+        data = source.to_dict()
+
+        shared = ManagedPositionLedger()
+        other_ref = shared  # simulates Broker holding the same object
+
+        shared.restore(data)
+
+        assert other_ref.get_position("BTC/USDT").amount == 0.1
+        assert other_ref is shared

@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
+from cryptoquant.data.closed_bar import BarFetchMeta
 from cryptoquant.engine.backtest import BacktestEngine
 from cryptoquant.engine.live import LiveEngine, TickAction
 from cryptoquant.execution.broker import Broker, retry_on_network
@@ -22,6 +23,7 @@ from cryptoquant.execution.order import (
     OrderType,
     Position,
 )
+from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.strategy.base import Strategy
 
 
@@ -138,16 +140,20 @@ def _mock_order(status="closed", side="buy", filled=1.0, amount=1.0, price=50000
 
 
 class TestIncompleteCandle:
-    """Current code uses bar timestamp to detect "new bar" but doesn't check
-    if the bar has CLOSED. An unclosed candle can produce signals that may
-    later repaint, causing the live engine to enter on false signals.
+    """LiveEngine must trust its data_feed's closed-bar metadata rather than
+    inferring "new bar" from a raw timestamp change — otherwise a still-
+    forming candle can produce a signal that later repaints.
+
+    Fixed by wiring ClosedBarFeed into LiveEngine (see cryptoquant/data/closed_bar.py,
+    whose own stripping logic is covered by tests/test_closed_bar.py).
 
     See review 2.1: "实盘用尚未闭合的 K 线生成信号"
     """
 
-    def test_no_signal_from_unclosed_candle(self):
-        """When a new bar appears but hasn't closed yet, the engine should
-        NOT generate an entry signal from it."""
+    def test_no_signal_when_no_new_closed_bar(self):
+        """When data_feed reports no new closed bar, the engine must not
+        generate an entry signal even though a new (unclosed) candle exists
+        in the fetched data."""
         broker = MagicMock()
         broker.exchange_name = "paper"
         broker.testnet = True
@@ -159,8 +165,7 @@ class TestIncompleteCandle:
             lambda symbol, amount, price=None: round(amount, 8)
         )
 
-        # Bar at T=2024-01-01 00:00 (closed)
-        df_t1 = pd.DataFrame(
+        df = pd.DataFrame(
             {
                 "open": [100.0], "high": [101.0], "low": [99.0],
                 "close": [100.5], "volume": [1000.0],
@@ -168,21 +173,10 @@ class TestIncompleteCandle:
             index=pd.DatetimeIndex([pd.Timestamp("2024-01-01 00:00")]),
         )
 
-        # New bar at T=2024-01-01 01:00 — but current time is 01:30,
-        # so this bar hasn't closed yet (it closes at 02:00 for 1h timeframe).
-        df_t2 = pd.concat([
-            df_t1,
-            pd.DataFrame(
-                {
-                    "open": [100.5], "high": [102.0], "low": [100.0],
-                    "close": [101.5], "volume": [2000.0],
-                },
-                index=pd.DatetimeIndex([pd.Timestamp("2024-01-01 01:00")]),
-            ),
-        ])
-
         data_feed = MagicMock()
-        data_feed.fetch.return_value = df_t2
+        # ClosedBarFeed already stripped the still-forming bar and reports
+        # no new closed bar since the last fetch.
+        data_feed.fetch.return_value = (df, BarFetchMeta(has_new_closed=False, stripped=1))
         data_feed.last_quality_report = None
 
         engine = LiveEngine(
@@ -195,21 +189,12 @@ class TestIncompleteCandle:
             max_order_usdt=10000.0,
         )
 
-        # Simulate: first tick saw bar at 00:00, second tick sees bar at 01:00
-        engine._last_bar_ts = int(df_t1.index[-1].timestamp() * 1000)
-
         result = engine.tick()
 
-        # BUG: Currently the engine WILL generate a signal from this bar
-        # because is_new_bar = True (timestamp changed).
-        # EXPECTED: signal should be 0 (no new CLOSED bar).
-        # Marking as xfail until ClosedBarFeed is implemented.
-        pytest.xfail(
-            "incomplete candle generates signal — ClosedBarFeed needed"
-        )
         assert result.signal == 0, (
-            f"Expected no signal from unclosed bar, got signal={result.signal}"
+            f"Expected no signal without a new closed bar, got signal={result.signal}"
         )
+        broker.market_buy.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -237,7 +222,7 @@ class TestPositionUnknownBlocksEntry:
 
         df = _make_ohlcv(100, start_price=100.0, trend="up")
         data_feed = MagicMock()
-        data_feed.fetch.return_value = df
+        data_feed.fetch.return_value = (df, BarFetchMeta(has_new_closed=True, stripped=0))
         data_feed.last_quality_report = None
 
         engine = LiveEngine(
@@ -290,8 +275,7 @@ class TestPositionUnknownBlocksEntry:
         )
 
         # Tick 1: position fetch fails
-        data_feed.fetch.return_value = df_t1
-        engine._last_bar_ts = 0  # ensure first bar appears "new"
+        data_feed.fetch.return_value = (df_t1, BarFetchMeta(has_new_closed=True, stripped=0))
         broker.get_position.side_effect = RuntimeError("exchange timeout")
         broker.market_buy.return_value = _mock_order()
         result1 = engine.tick()
@@ -299,7 +283,7 @@ class TestPositionUnknownBlocksEntry:
         assert "unknown" in result1.reason.lower()
 
         # Tick 2: new bar, position fetch succeeds
-        data_feed.fetch.return_value = df_t2
+        data_feed.fetch.return_value = (df_t2, BarFetchMeta(has_new_closed=True, stripped=0))
         broker.get_position.side_effect = None
         broker.get_position.return_value = None
         broker.market_buy.reset_mock()
@@ -322,6 +306,10 @@ class TestStrategyOwnedPositionsOnly:
     """Broker._get_spot_position must only return positions the strategy
     actually bought — not all free balance in the account.
 
+    Backed by ManagedPositionLedger (cryptoquant/position/ledger.py); FIFO
+    lot consumption on sells is covered exhaustively in
+    tests/test_position_ledger.py, not duplicated here.
+
     See review 2.2: "现货持仓没有策略所有权"
     """
 
@@ -331,7 +319,7 @@ class TestStrategyOwnedPositionsOnly:
         broker = Broker.__new__(Broker)
         broker.exchange = mock_exchange
         broker.account_type = "spot"
-        broker._strategy_holdings = {}
+        broker.position_ledger = ManagedPositionLedger()
 
         # Exchange reports 10 BTC free balance
         mock_exchange.fetch_balance.return_value = {"BTC": {"free": 10.0}}
@@ -351,9 +339,8 @@ class TestStrategyOwnedPositionsOnly:
         broker = Broker.__new__(Broker)
         broker.exchange = mock_exchange
         broker.account_type = "spot"
-        broker._strategy_holdings = {
-            "BTC/USDT": {"amount": 0.1, "cost_basis": 48000.0, "side": "long"}
-        }
+        broker.position_ledger = ManagedPositionLedger()
+        broker.position_ledger.record_buy("BTC/USDT", 0.1, 48000.0, fee=0.0, timestamp=0)
 
         mock_exchange.fetch_ticker.return_value = {"last": 50000.0}
 
@@ -365,39 +352,6 @@ class TestStrategyOwnedPositionsOnly:
             f"Expected entry_price 48000.0, got {pos.entry_price}"
         )
         assert pos.side == "long"
-
-    def test_sell_deducts_holdings(self):
-        """After a sell, strategy holdings are correctly reduced."""
-        mock_exchange = MagicMock()
-        broker = Broker.__new__(Broker)
-        broker.exchange = mock_exchange
-        broker.account_type = "spot"
-        broker._strategy_holdings = {
-            "BTC/USDT": {"amount": 0.2, "cost_basis": 48000.0, "side": "long"}
-        }
-
-        # Sell 0.1 BTC
-        broker._record_strategy_sell("BTC/USDT", 0.1, 50000.0)
-
-        h = broker._strategy_holdings.get("BTC/USDT")
-        assert h is not None
-        assert h["amount"] == 0.1, f"Expected 0.1 remaining, got {h['amount']}"
-
-    def test_full_sell_removes_holdings(self):
-        """Selling the full position removes the holdings entry."""
-        mock_exchange = MagicMock()
-        broker = Broker.__new__(Broker)
-        broker.exchange = mock_exchange
-        broker.account_type = "spot"
-        broker._strategy_holdings = {
-            "BTC/USDT": {"amount": 0.1, "cost_basis": 48000.0, "side": "long"}
-        }
-
-        broker._record_strategy_sell("BTC/USDT", 0.1, 50000.0)
-
-        assert "BTC/USDT" not in broker._strategy_holdings, (
-            "Full sell should remove holdings entry"
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -582,7 +536,7 @@ class TestNetworkRetryCount:
         broker.exchange_name = "okx"
         broker.testnet = True
         broker.account_type = "spot"
-        broker._strategy_holdings = {}
+        broker.position_ledger = ManagedPositionLedger()
 
         # Count calls
         call_count = [0]
