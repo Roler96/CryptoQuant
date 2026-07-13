@@ -32,7 +32,7 @@ dashboard = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = ["research", ".venv", "data", "logs", "state"]
+exclude = [".venv", "data", "logs", "state"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F403", "F405"]
@@ -52,7 +52,7 @@ timeout = 120
 
 [tool.coverage.run]
 source = ["cryptoquant"]
-omit = ["tests/*", "research/*"]
+omit = ["tests/*"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -63,5 +63,5 @@ exclude_lines = [
 
 [tool.pyright]
 include = ["cryptoquant", "tests"]
-exclude = ["research", ".venv"]
+exclude = [".venv"]
 typeCheckingMode = "standard"
