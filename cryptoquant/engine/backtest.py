@@ -663,6 +663,60 @@ def _find_drawdown_periods(
     return sorted(periods, key=lambda x: x["depth_pct"], reverse=True)
 
 
+def _fmt_time(ts_ms: int) -> str:
+    return pd.Timestamp(ts_ms, unit="ms").strftime("%Y-%m-%d %H:%M")
+
+
+def _price_decimals(trades: list[Trade]) -> int:
+    """Decimals that keep ~5 significant digits at the trades' price scale.
+
+    A DOGE fill near 0.08 needs 5; giving a BTC fill near 60,000 the same
+    would pad the column with three meaningless zeros.
+    """
+    largest = max(max(abs(t.entry_price), abs(t.exit_price)) for t in trades)
+    for threshold, decimals in ((1000, 2), (100, 3), (1, 4), (0.01, 5)):
+        if largest >= threshold:
+            return decimals
+    return 8
+
+
+_TRADE_COLUMNS = (
+    "ID", "Side", "Entry Time", "Entry", "Exit Time", "Exit",
+    "PnL%", "PnL", "Hold", "MAE%", "MFE%", "Exit Reason",
+)
+
+
+def _render_trade_log(trades: list[Trade]) -> list[str]:
+    """Render one row per trade, with each column fitted to its widest value."""
+    dp = _price_decimals(trades)
+    rows = [
+        (
+            str(t.id),
+            t.side,
+            _fmt_time(t.entry_time),
+            f"{t.entry_price:.{dp}f}",
+            _fmt_time(t.exit_time),
+            f"{t.exit_price:.{dp}f}",
+            f"{t.pnl_pct:+.2f}",
+            f"{t.pnl_abs:+,.2f}",
+            f"{t.hold_hours:,.1f}h",
+            f"{t.mae_pct:+.2f}",
+            f"{t.mfe_pct:+.2f}",
+            t.exit_reason,
+        )
+        for t in trades
+    ]
+    widths = [max(len(c) for c in col) for col in zip(_TRADE_COLUMNS, *rows)]
+
+    def _line(cells: tuple[str, ...]) -> str:
+        # Exit reason trails left-aligned: it is the one free-text column, and
+        # padding it would leave every short reason on a ragged right edge.
+        fixed = "   ".join(c.rjust(w) for c, w in zip(cells[:-1], widths[:-1]))
+        return f"  {fixed}   {cells[-1]}"
+
+    return [_line(_TRADE_COLUMNS), *(_line(r) for r in rows)]
+
+
 def generate_report(result: BacktestResult, include_trades: bool = False) -> str:
     """Render a backtest result as a plain-text report.
 
@@ -673,9 +727,6 @@ def generate_report(result: BacktestResult, include_trades: bool = False) -> str
             don't want hundreds of rows in the text report.
     """
     m = result.metrics
-
-    def _fmt_time(ts_ms: int) -> str:
-        return pd.Timestamp(ts_ms, unit="ms").strftime("%Y-%m-%d %H:%M")
 
     lines = [
         f"{'=' * 60}",
@@ -731,16 +782,7 @@ def generate_report(result: BacktestResult, include_trades: bool = False) -> str
     if include_trades and result.trades:
         lines.append("")
         lines.append(f"-- TRADE LOG ({len(result.trades)} trades) --")
-        lines.append(
-            f"  {'ID':>4} {'Side':>5} {'Entry':>10} {'Exit':>10} "
-            f"{'PnL%':>8} {'Hold(h)':>8} {'Exit Reason':>15}"
-        )
-        for t in result.trades:
-            lines.append(
-                f"  {t.id:>4} {t.side:>5} {t.entry_price:>10.4f} "
-                f"{t.exit_price:>10.4f} {t.pnl_pct:>+8.2f} "
-                f"{t.hold_hours:>8.1f} {t.exit_reason:>15}"
-            )
+        lines.extend(_render_trade_log(result.trades))
 
     return "\n".join(lines)
 

@@ -7,10 +7,12 @@ import pytest
 from cryptoquant.engine.backtest import (
     BacktestEngine,
     _compute_drawdown_curve,
+    _fmt_time,
+    _render_trade_log,
     generate_report,
     trades_to_dataframe,
 )
-from cryptoquant.engine.types import BacktestResult
+from cryptoquant.engine.types import BacktestResult, Trade
 from cryptoquant.risk.sizer import ATRSizer, FixedSizer
 from cryptoquant.strategy.base import Strategy
 
@@ -97,6 +99,29 @@ def _make_df(n=100, start_price=100.0, trend="up"):
             "volume": np.full(n, 1000.0),
         },
         index=dates,
+    )
+
+
+def _make_trade(entry_price=100.0, exit_price=101.0):
+    """A minimal filled trade. _make_df can't reach sub-dollar price scales
+    (its open = close - 0.1 would go negative), so precision cases build here.
+    """
+    return Trade(
+        id=1,
+        symbol="TEST/USDT",
+        side="long",
+        entry_time=1704067200000,
+        entry_price=entry_price,
+        entry_signal=1,
+        exit_time=1704153600000,
+        exit_price=exit_price,
+        exit_reason="take_profit",
+        pnl_pct=1.0,
+        pnl_abs=100.0,
+        hold_bars=24,
+        hold_hours=24.0,
+        mae_pct=-0.5,
+        mfe_pct=1.5,
     )
 
 
@@ -378,6 +403,58 @@ class TestGenerateReport:
         result = engine.run(df, NeverTrade())
 
         assert "TRADE LOG" not in generate_report(result, include_trades=True)
+
+    def test_trade_log_shows_times_and_excursions(self, engine):
+        """Entry/exit timing and MAE/MFE live only in the trade log — without
+        them a row can't say when it traded or how far it went underwater."""
+        df = _make_df(100, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+        report = generate_report(result, include_trades=True)
+
+        trade = result.trades[0]
+        assert _fmt_time(trade.entry_time) in report
+        assert _fmt_time(trade.exit_time) in report
+        assert f"{trade.mae_pct:+.2f}" in report
+        assert f"{trade.mfe_pct:+.2f}" in report
+        assert f"{trade.pnl_abs:+,.2f}" in report
+
+    def test_trade_log_columns_stay_aligned(self, engine):
+        df = _make_df(100, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+        report = generate_report(result, include_trades=True)
+
+        log = report[report.index("-- TRADE LOG") :].splitlines()
+        header, rows = log[1], log[2:]
+        assert len(rows) == len(result.trades)
+
+        reason_col = header.index("Exit Reason")
+        for row, trade in zip(rows, result.trades):
+            assert row.index(trade.exit_reason) == reason_col
+
+
+class TestTradeLogPrecision:
+    @pytest.mark.parametrize(
+        "price, decimals",
+        [(61_000.0, 2), (250.0, 3), (12.5, 4), (0.081, 5), (0.000021, 8)],
+    )
+    def test_price_precision_follows_price_scale(self, price, decimals):
+        """A DOGE fill needs 5dp to stay meaningful; a BTC fill given the same
+        would pad the column with dead zeros."""
+        log = _render_trade_log([_make_trade(entry_price=price, exit_price=price)])
+
+        assert f"{price:.{decimals}f}" in log[1]
+
+    def test_columns_absorb_a_wide_price(self):
+        """Column widths are fitted to the data, so a price too wide for the
+        header can't shove the row out of alignment."""
+        trades = [
+            _make_trade(entry_price=61_000.0, exit_price=61_500.0),
+            _make_trade(entry_price=9.0, exit_price=9.5),
+        ]
+        header, *rows = _render_trade_log(trades)
+
+        reason_col = header.index("Exit Reason")
+        assert all(row.index("take_profit") == reason_col for row in rows)
 
 
 class TestTradesToDataframe:
