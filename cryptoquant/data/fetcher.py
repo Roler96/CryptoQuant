@@ -13,6 +13,9 @@ from cryptoquant.utils import (
     retry_on_network,
 )
 
+# Fallback probe stride for exchanges whose timeframe we can't measure.
+_LEADING_GAP_SKIP_MS = 30 * 86_400_000
+
 
 def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
     """Validate OHLCV data integrity.
@@ -82,6 +85,8 @@ class OHLCVFetcher:
         timeout: Connection timeout in milliseconds
         max_candles: Max candles per single request (exchange limit)
         proxy: Proxy URL (e.g. 'http://127.0.0.1:7890'). If None, reads from env.
+        max_retries: Retry attempts for transient network errors.
+        retry_base_delay: Base seconds for retry backoff. Set 0 in tests.
     """
 
     def __init__(
@@ -91,6 +96,8 @@ class OHLCVFetcher:
         timeout: int = 30_000,
         max_candles: int = 300,
         proxy: str | None = None,
+        max_retries: int = 3,
+        retry_base_delay: float = 1.0,
     ):
         exchange_class = getattr(ccxt, exchange)
         self.exchange: ccxt.Exchange = exchange_class(
@@ -102,6 +109,8 @@ class OHLCVFetcher:
         )
         self.exchange_name = exchange
         self.max_candles = max(1, max_candles)
+        self.max_retries = max_retries
+        self.retry_base_delay = retry_base_delay
         if testnet:
             self.exchange.set_sandbox_mode(True)
 
@@ -125,13 +134,51 @@ class OHLCVFetcher:
             return list(self.exchange.timeframes.keys())
         return []
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
+    def _probe_stride_ms(self, timeframe: str, limit: int) -> int:
+        """How far to jump when probing past a leading gap.
+
+        One request spans limit * timeframe of wall clock, and OKX answers
+        empty for a window with no data rather than skipping to the next
+        listed candle. Striding by exactly that window is therefore the
+        largest jump that cannot step over bars we never looked at: a fixed
+        stride would silently drop data on short timeframes, where 300x1m
+        spans only 5 hours.
+        """
+        try:
+            tf_seconds = self.exchange.parse_timeframe(timeframe)
+        except Exception:
+            return _LEADING_GAP_SKIP_MS
+        return max(1, int(tf_seconds) * 1000 * limit)
+
+    def _fetch_ohlcv(
+        self, symbol: str, timeframe: str, limit: int, since: int | None
+    ) -> list:
+        """Call ccxt, retrying transient network failures.
+
+        Raw ccxt exceptions escape on purpose: retry_on_network only
+        recognizes ccxt's own network types, so wrapping them in
+        DataFetchError must happen in fetch() *after* retries are spent.
+        Permanent failures (BadSymbol, ExchangeError) are not network
+        types and so propagate on the first attempt.
+        """
+
+        @retry_on_network(
+            max_retries=self.max_retries, base_delay=self.retry_base_delay
+        )
+        def fetch_ohlcv() -> list:
+            return self.exchange.fetch_ohlcv(
+                symbol, timeframe=timeframe, limit=limit, since=since
+            )
+
+        return fetch_ohlcv()
+
     def fetch(
         self,
         symbol: str,
         timeframe: str = "1h",
         limit: int = 300,
         since: int | None = None,
+        strict: bool = False,
     ) -> pd.DataFrame:
         """Fetch OHLCV candles and return as DataFrame.
 
@@ -140,22 +187,30 @@ class OHLCVFetcher:
             timeframe: '1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'
             limit: Number of candles (clamped to [1, max_candles])
             since: Unix timestamp in ms
+            strict: If True, timestamp gaps raise instead of warning.
 
         Returns:
             DataFrame with columns [open, high, low, close, volume],
             DatetimeIndex (UTC, no timezone), sorted ascending.
 
         Raises:
-            DataFetchError: If exchange request fails.
+            DataFetchError: If the timeframe is unsupported or the request fails.
             DataValidationError: If returned data fails validation.
         """
         # Clamp limit to valid range [1, max_candles]
         limit = max(1, min(limit, self.max_candles))
 
-        try:
-            raw = self.exchange.fetch_ohlcv(
-                symbol, timeframe=timeframe, limit=limit, since=since
+        # Exchanges that don't advertise timeframes get no check rather than
+        # a spurious rejection.
+        supported = self.available_timeframes()
+        if supported and timeframe not in supported:
+            raise DataFetchError(
+                f"Timeframe '{timeframe}' not supported by {self.exchange_name}. "
+                f"Available: {', '.join(supported)}"
             )
+
+        try:
+            raw = self._fetch_ohlcv(symbol, timeframe, limit, since)
         except ccxt.BadSymbol as e:
             raise DataFetchError(f"Invalid symbol: {symbol}") from e
         except ccxt.RateLimitExceeded as e:
@@ -176,20 +231,19 @@ class OHLCVFetcher:
         df.set_index("timestamp", inplace=True)
         df.sort_index(inplace=True)
         df = df[["open", "high", "low", "close", "volume"]]
-        df = df.astype(
-            {
-                "open": "float64",
-                "high": "float64",
-                "low": "float64",
-                "close": "float64",
-                "volume": "float64",
-            }
+        df = pd.DataFrame(
+            df.astype(
+                {
+                    "open": "float64",
+                    "high": "float64",
+                    "low": "float64",
+                    "close": "float64",
+                    "volume": "float64",
+                }
+            )
         )
-        # Ensure UTC without timezone
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
 
-        validate_ohlcv(df)
+        validate_ohlcv(df, strict=strict)
         return df
 
     def fetch_range(
@@ -198,6 +252,7 @@ class OHLCVFetcher:
         timeframe: str,
         start: int,
         end: int,
+        strict: bool = False,
     ) -> pd.DataFrame:
         """Fetch OHLCV data for a time range, chunking as needed.
 
@@ -206,6 +261,7 @@ class OHLCVFetcher:
             timeframe: K-line period
             start: Start time (Unix ms, inclusive)
             end: End time (Unix ms, inclusive)
+            strict: If True, gaps in the assembled series raise instead of warning.
 
         Returns:
             Concatenated DataFrame, deduplicated and sorted.
@@ -213,6 +269,7 @@ class OHLCVFetcher:
         Raises:
             DataFetchError: If any chunk fails after retries.
                 Error message includes number of successfully fetched chunks.
+            DataValidationError: If the assembled series fails validation.
         """
         chunks: list[pd.DataFrame] = []
         cursor = start
@@ -227,13 +284,39 @@ class OHLCVFetcher:
                 ) from e
 
             if df.empty:
-                break
+                if chunks:
+                    break  # caught up to the end of available data
+                # Nothing yet: the symbol likely wasn't listed at `start`.
+                # Probe forward instead of abandoning the whole range. The
+                # `cursor < end` bound caps how far this walks.
+                cursor += self._probe_stride_ms(timeframe, self.max_candles)
+                logger.debug(
+                    f"{symbol} {timeframe}: no data yet, probing from "
+                    f"{pd.Timestamp(cursor, unit='ms')}"
+                )
+                continue
+
             chunks.append(df)
 
             # Advance cursor past last candle.
             # OKX/Binance: timestamp = candle OPEN time. +1ms advances past it.
             # If an exchange uses CLOSE time semantics, this logic needs adjustment.
-            cursor = int(pd.Timestamp(df.index[-1]).timestamp() * 1000) + 1
+            next_cursor = int(pd.Timestamp(df.index[-1]).timestamp() * 1000) + 1
+            if next_cursor <= cursor:
+                # The exchange ignored `since` and replayed a window we already
+                # hold. Without this guard the cursor creeps 1ms per request
+                # and the loop never reaches `end`.
+                logger.warning(
+                    f"{symbol} {timeframe}: cursor stalled at "
+                    f"{pd.Timestamp(cursor, unit='ms')}, stopping early"
+                )
+                break
+            cursor = next_cursor
+
+            logger.debug(
+                f"{symbol} {timeframe}: +{len(df)} bars through {df.index[-1]} "
+                f"({sum(len(c) for c in chunks)} total)"
+            )
 
         if not chunks:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -247,4 +330,8 @@ class OHLCVFetcher:
         end_ts = pd.Timestamp(end, unit="ms")
         result = result[(result.index >= start_ts) & (result.index <= end_ts)]
 
-        return pd.DataFrame(result)
+        result = pd.DataFrame(result)
+        # Per-chunk validation can't see gaps that straddle a chunk boundary,
+        # so the assembled series gets the strict check.
+        validate_ohlcv(result, strict=strict)
+        return result

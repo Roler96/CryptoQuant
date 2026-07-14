@@ -1,5 +1,6 @@
 """Tests for cryptoquant.data.fetcher module."""
 
+import math
 from unittest.mock import MagicMock, patch
 
 import ccxt
@@ -7,7 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cryptoquant.data.fetcher import OHLCVFetcher, validate_ohlcv
+from cryptoquant.data.fetcher import (
+    _LEADING_GAP_SKIP_MS,
+    OHLCVFetcher,
+    validate_ohlcv,
+)
 from cryptoquant.exceptions import DataFetchError, DataValidationError
 
 
@@ -26,13 +31,16 @@ def mock_exchange():
         mock_ccxt.NetworkError = ccxt.NetworkError
         mock_ccxt.RateLimitExceeded = ccxt.RateLimitExceeded
         mock_ccxt.ExchangeError = ccxt.ExchangeError
+        # Real timeframe parsing: a MagicMock would make int() return 1 and
+        # silently produce a nonsense probe stride.
+        mock_instance.parse_timeframe.side_effect = ccxt.Exchange.parse_timeframe
         yield mock_instance
 
 
 @pytest.fixture
 def fetcher(mock_exchange):
-    """Create fetcher with mocked exchange."""
-    return OHLCVFetcher(exchange="okx", testnet=True)
+    """Create fetcher with mocked exchange. retry_base_delay=0 keeps retries instant."""
+    return OHLCVFetcher(exchange="okx", testnet=True, retry_base_delay=0)
 
 
 def _make_ohlcv(n=10, start_price=100.0):
@@ -189,10 +197,12 @@ class TestOHLCVFetcherFetchRange:
 
     def test_fetch_range_error_includes_chunk_count(self, mock_exchange):
         """fetch_range error message should include number of successful chunks."""
-        fetcher = OHLCVFetcher(exchange="okx", testnet=True, max_candles=5)
+        fetcher = OHLCVFetcher(
+            exchange="okx", testnet=True, max_candles=5, retry_base_delay=0
+        )
         raw1 = _make_raw_ohlcv(5, start_price=100)
         raw2 = _make_raw_ohlcv(5, start_price=105, base_ts=1704067200000 + 5 * 3600000)
-        # First two chunks succeed, third fails
+        # Third chunk fails; its 4 entries are the initial attempt + 3 retries.
         mock_exchange.fetch_ohlcv.side_effect = [
             raw1,
             raw2,
@@ -207,6 +217,223 @@ class TestOHLCVFetcherFetchRange:
 
         with pytest.raises(DataFetchError, match="2 successful chunk"):
             fetcher.fetch_range("BTC/USDT", "1h", start, end)
+
+
+class TestRetry:
+    """fetch() converts ccxt errors into DataFetchError, which retry_on_network
+    does not recognize. Retries must therefore happen below that conversion."""
+
+    def test_network_error_is_retried(self, fetcher, mock_exchange):
+        mock_exchange.fetch_ohlcv.side_effect = ccxt.NetworkError("timeout")
+
+        with pytest.raises(DataFetchError, match="Network error"):
+            fetcher.fetch("BTC/USDT", "1h")
+
+        # 1 initial attempt + 3 retries
+        assert mock_exchange.fetch_ohlcv.call_count == 4
+
+    def test_retry_recovers_and_returns_data(self, fetcher, mock_exchange):
+        mock_exchange.fetch_ohlcv.side_effect = [
+            ccxt.NetworkError("timeout"),
+            ccxt.NetworkError("timeout"),
+            _make_raw_ohlcv(5),
+        ]
+
+        df = fetcher.fetch("BTC/USDT", "1h", limit=5)
+        assert len(df) == 5
+        assert mock_exchange.fetch_ohlcv.call_count == 3
+
+    def test_rate_limit_is_retried(self, fetcher, mock_exchange):
+        """RateLimitExceeded subclasses NetworkError, so it backs off too."""
+        mock_exchange.fetch_ohlcv.side_effect = ccxt.RateLimitExceeded("slow down")
+
+        with pytest.raises(DataFetchError, match="Rate limit"):
+            fetcher.fetch("BTC/USDT", "1h")
+
+        assert mock_exchange.fetch_ohlcv.call_count == 4
+
+    def test_bad_symbol_is_not_retried(self, fetcher, mock_exchange):
+        """Permanent failures must fail fast rather than burn the backoff budget."""
+        mock_exchange.fetch_ohlcv.side_effect = ccxt.BadSymbol("nope")
+
+        with pytest.raises(DataFetchError, match="Invalid symbol"):
+            fetcher.fetch("INVALID/PAIR", "1h")
+
+        assert mock_exchange.fetch_ohlcv.call_count == 1
+
+    def test_exchange_error_is_not_retried(self, fetcher, mock_exchange):
+        mock_exchange.fetch_ohlcv.side_effect = ccxt.ExchangeError("boom")
+
+        with pytest.raises(DataFetchError, match="Exchange error"):
+            fetcher.fetch("BTC/USDT", "1h")
+
+        assert mock_exchange.fetch_ohlcv.call_count == 1
+
+    def test_max_retries_is_configurable(self, mock_exchange):
+        fetcher = OHLCVFetcher(
+            exchange="okx", testnet=True, max_retries=1, retry_base_delay=0
+        )
+        mock_exchange.fetch_ohlcv.side_effect = ccxt.NetworkError("timeout")
+
+        with pytest.raises(DataFetchError):
+            fetcher.fetch("BTC/USDT", "1h")
+
+        assert mock_exchange.fetch_ohlcv.call_count == 2
+
+
+class TestFetchRangeCursor:
+    def test_stalled_cursor_terminates(self, fetcher, mock_exchange):
+        """An exchange that ignores `since` must not spin the loop forever.
+
+        Advancing to last_candle_ts + 1 makes no progress when the same window
+        keeps coming back, so the loop needs an explicit stall guard.
+        """
+        base = 1704067200000
+        calls = {"n": 0}
+
+        def ignores_since(*args, **kwargs):
+            # Same three candles regardless of `since`. Fail loudly rather than
+            # hang the suite if the stall guard ever regresses.
+            calls["n"] += 1
+            if calls["n"] > 10:
+                raise AssertionError("fetch_range did not terminate on a stalled cursor")
+            return _make_raw_ohlcv(3, base_ts=base)
+
+        mock_exchange.fetch_ohlcv.side_effect = ignores_since
+
+        df = fetcher.fetch_range("BTC/USDT", "1h", base, base + 30 * 86400000)
+
+        assert calls["n"] <= 3
+        assert len(df) == 3
+
+    def test_normal_cursor_advances_through_chunks(self, fetcher, mock_exchange):
+        base = 1704067200000
+        mock_exchange.fetch_ohlcv.side_effect = [
+            _make_raw_ohlcv(5, base_ts=base),
+            _make_raw_ohlcv(5, base_ts=base + 5 * 3600000),
+            [],
+        ]
+
+        df = fetcher.fetch_range("BTC/USDT", "1h", base, base + 20 * 3600000)
+        assert len(df) == 10
+
+
+class TestFetchRangeLeadingGap:
+    def test_skips_leading_gap_before_listing(self, fetcher, mock_exchange):
+        """A range starting before the symbol listed must not return empty.
+
+        The exchange answers empty until the listing date; fetch_range should
+        probe forward and still return the data that does exist.
+        """
+        base = 1704067200000
+        listed_at = base + 60 * 86400000
+        mock_exchange.fetch_ohlcv.side_effect = [
+            [],  # nothing at base
+            [],  # nothing 30d later
+            _make_raw_ohlcv(5, base_ts=listed_at),
+            [],
+        ]
+
+        df = fetcher.fetch_range("BTC/USDT", "1h", base, base + 200 * 86400000)
+        assert len(df) == 5
+
+    def test_all_empty_returns_empty_and_terminates(self, fetcher, mock_exchange):
+        """Probing forward is bounded by `end` rather than looping forever."""
+        mock_exchange.fetch_ohlcv.return_value = []
+        base = 1704067200000
+        span_ms = 90 * 86400000
+
+        df = fetcher.fetch_range("BTC/USDT", "1h", base, base + span_ms)
+
+        assert df.empty
+        stride_ms = 300 * 3600 * 1000  # max_candles x 1h
+        assert mock_exchange.fetch_ohlcv.call_count == math.ceil(span_ms / stride_ms)
+
+    def test_probe_stride_matches_request_window(self, fetcher):
+        """The stride must never exceed what one request actually covers,
+        or a probe jumps over bars nobody looked at."""
+        assert fetcher._probe_stride_ms("1m", 300) == 300 * 60 * 1000  # 5h
+        assert fetcher._probe_stride_ms("4h", 300) == 300 * 4 * 3600 * 1000  # 50d
+
+    def test_probe_stride_falls_back_on_unknown_timeframe(self, fetcher, mock_exchange):
+        mock_exchange.parse_timeframe.side_effect = ccxt.NotSupported("unknown")
+
+        assert fetcher._probe_stride_ms("7x", 300) == _LEADING_GAP_SKIP_MS
+
+    def test_trailing_empty_keeps_earlier_chunks(self, fetcher, mock_exchange):
+        """An empty chunk after real data means caught-up, not 'skip ahead'."""
+        base = 1704067200000
+        mock_exchange.fetch_ohlcv.side_effect = [
+            _make_raw_ohlcv(5, base_ts=base),
+            [],
+        ]
+
+        df = fetcher.fetch_range("BTC/USDT", "1h", base, base + 200 * 86400000)
+        assert len(df) == 5
+        assert mock_exchange.fetch_ohlcv.call_count == 2
+
+
+class TestTimeframeValidation:
+    def test_unsupported_timeframe_raises(self, mock_exchange):
+        mock_exchange.timeframes = {"1m": 60, "1h": 3600}
+        fetcher = OHLCVFetcher(exchange="okx", testnet=True, retry_base_delay=0)
+
+        with pytest.raises(DataFetchError, match="not supported"):
+            fetcher.fetch("BTC/USDT", "7h")
+
+        mock_exchange.fetch_ohlcv.assert_not_called()
+
+    def test_supported_timeframe_passes(self, mock_exchange):
+        mock_exchange.timeframes = {"1m": 60, "1h": 3600}
+        mock_exchange.fetch_ohlcv.return_value = _make_raw_ohlcv(5)
+        fetcher = OHLCVFetcher(exchange="okx", testnet=True, retry_base_delay=0)
+
+        df = fetcher.fetch("BTC/USDT", "1h", limit=5)
+        assert len(df) == 5
+
+    def test_no_validation_when_exchange_reports_none(self, mock_exchange):
+        """Exchanges that don't advertise timeframes shouldn't be second-guessed."""
+        mock_exchange.timeframes = None
+        mock_exchange.fetch_ohlcv.return_value = _make_raw_ohlcv(5)
+        fetcher = OHLCVFetcher(exchange="okx", testnet=True, retry_base_delay=0)
+
+        df = fetcher.fetch("BTC/USDT", "anything", limit=5)
+        assert len(df) == 5
+
+
+class TestStrictPassthrough:
+    def test_fetch_strict_raises_on_gap(self, fetcher, mock_exchange):
+        base = 1704067200000
+        raw = _make_raw_ohlcv(3, base_ts=base)
+        raw[2][0] = base + 5 * 3600000  # jump: 1h, 1h, then 4h
+        mock_exchange.fetch_ohlcv.return_value = raw
+
+        with pytest.raises(DataValidationError, match="gap"):
+            fetcher.fetch("BTC/USDT", "1h", limit=3, strict=True)
+
+    def test_fetch_default_tolerates_gap(self, fetcher, mock_exchange):
+        base = 1704067200000
+        raw = _make_raw_ohlcv(3, base_ts=base)
+        raw[2][0] = base + 5 * 3600000
+        mock_exchange.fetch_ohlcv.return_value = raw
+
+        df = fetcher.fetch("BTC/USDT", "1h", limit=3)
+        assert len(df) == 3
+
+    def test_fetch_range_strict_raises_on_cross_chunk_gap(self, fetcher, mock_exchange):
+        """A gap straddling two chunks is invisible per-chunk, so fetch_range
+        validates the assembled series."""
+        base = 1704067200000
+        mock_exchange.fetch_ohlcv.side_effect = [
+            _make_raw_ohlcv(3, base_ts=base),
+            _make_raw_ohlcv(3, base_ts=base + 20 * 3600000),  # 17h hole
+            [],
+        ]
+
+        with pytest.raises(DataValidationError, match="gap"):
+            fetcher.fetch_range(
+                "BTC/USDT", "1h", base, base + 30 * 3600000, strict=True
+            )
 
 
 class TestOHLCVFetcherConfig:
