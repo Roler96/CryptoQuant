@@ -663,7 +663,15 @@ def _find_drawdown_periods(
     return sorted(periods, key=lambda x: x["depth_pct"], reverse=True)
 
 
-def generate_report(result: BacktestResult) -> str:
+def generate_report(result: BacktestResult, include_trades: bool = False) -> str:
+    """Render a backtest result as a plain-text report.
+
+    Args:
+        result: The backtest to render.
+        include_trades: Append a row per trade. Off by default because callers
+            that already surface trades separately (see trades_to_dataframe)
+            don't want hundreds of rows in the text report.
+    """
     m = result.metrics
 
     def _fmt_time(ts_ms: int) -> str:
@@ -680,10 +688,15 @@ def generate_report(result: BacktestResult) -> str:
         "-- PERFORMANCE --",
         f"  Total Return:       {m.total_return_pct:+.2f}%",
         f"  Annualized Return:  {m.annualized_return_pct:+.2f}%",
+        f"  Final Equity:       {result.final_equity:,.2f} "
+        f"(from {result.initial_capital:,.2f})",
         f"  Sharpe Ratio:       {m.sharpe_ratio:.2f}",
         f"  Sortino Ratio:      {m.sortino_ratio:.2f}",
         f"  Max Drawdown:       {m.max_drawdown_pct:.2f}%",
+        f"  Max DD Days:        {m.max_drawdown_days}",
         f"  Volatility (ann):   {m.volatility_annual_pct:.2f}%",
+        f"  VaR 95%:            {m.var_95_pct:.2f}%",
+        f"  CVaR 95%:           {m.cvar_95_pct:.2f}%",
         "",
         "-- TRADES --",
         f"  Total Trades:       {m.total_trades}",
@@ -708,6 +721,26 @@ def generate_report(result: BacktestResult) -> str:
             f"  {_fmt_time(dd['start'])} -> {_fmt_time(dd['end'])}: "
             f"{dd['depth_pct']:.1f}% ({dd['days']}d)"
         )
+
+    if not m.monthly_returns.empty:
+        lines.append("")
+        lines.append("-- MONTHLY RETURNS --")
+        for ts, ret in m.monthly_returns.items():
+            lines.append(f"  {pd.Timestamp(ts).strftime('%Y-%m')}: {ret:>+8.2f}%")
+
+    if include_trades and result.trades:
+        lines.append("")
+        lines.append(f"-- TRADE LOG ({len(result.trades)} trades) --")
+        lines.append(
+            f"  {'ID':>4} {'Side':>5} {'Entry':>10} {'Exit':>10} "
+            f"{'PnL%':>8} {'Hold(h)':>8} {'Exit Reason':>15}"
+        )
+        for t in result.trades:
+            lines.append(
+                f"  {t.id:>4} {t.side:>5} {t.entry_price:>10.4f} "
+                f"{t.exit_price:>10.4f} {t.pnl_pct:>+8.2f} "
+                f"{t.hold_hours:>8.1f} {t.exit_reason:>15}"
+            )
 
     return "\n".join(lines)
 

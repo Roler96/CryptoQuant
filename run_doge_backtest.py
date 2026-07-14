@@ -1,12 +1,19 @@
-"""Backtest DogeSpotDonchianSma on ~1 year of DOGE/USDT 4h data."""
+"""Backtest DogeSpotDonchianSma on ~1 year of 4h data.
+
+Usage:
+    python run_doge_backtest.py [SYMBOL] [EXCHANGE]
+
+Defaults to DOGE/USDT on okx. Other pairs are just different arguments, e.g.
+    python run_doge_backtest.py ASTR/USDT binance
+"""
 import sys
-import time
 
 import pandas as pd
 
 from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.store import OHLCVStore
-from cryptoquant.engine.backtest import BacktestEngine
+from cryptoquant.engine.backtest import BacktestEngine, generate_report
+from cryptoquant.exceptions import DataError
 from strategies.doge_spot_donchian_sma import DogeSpotDonchianSma
 
 
@@ -19,7 +26,7 @@ START_MS = int((pd.Timestamp.now() - pd.Timedelta(days=365)).timestamp() * 1000)
 
 
 def fetch_data() -> pd.DataFrame:
-    """Fetch DOGE/USDT 4h data, using store as cache."""
+    """Fetch the configured symbol's 4h data, using the store as cache."""
     store = OHLCVStore()
     fetcher = OHLCVFetcher(exchange=EXCHANGE, testnet=False, max_candles=300)
 
@@ -40,53 +47,15 @@ def fetch_data() -> pd.DataFrame:
     print(f"Fetching {SYMBOL} {TIMEFRAME} from {EXCHANGE}...")
     print(f"  Range: {pd.Timestamp(start, unit='ms')} → {pd.Timestamp(END_MS, unit='ms')}")
 
-    # Fetch in chunks with rate limiting
-    cursor = start
-    all_chunks = []
-    empty_first = False
-    while cursor < END_MS:
-        try:
-            chunk = fetcher.fetch(SYMBOL, TIMEFRAME, limit=300, since=cursor)
-        except Exception as e:
-            print(f"  Fetch error at {pd.Timestamp(cursor, unit='ms')}: {e}")
-            print(f"  Retrying in 3s...")
-            time.sleep(3)
-            try:
-                chunk = fetcher.fetch(SYMBOL, TIMEFRAME, limit=300, since=cursor)
-            except Exception as e2:
-                print(f"  Retry failed: {e2}")
-                break
+    try:
+        df = fetcher.fetch_range(SYMBOL, TIMEFRAME, start, END_MS)
+    except DataError as e:
+        print(f"  Fetch failed: {e}")
+        df = pd.DataFrame()
 
-        if chunk.empty:
-            if not all_chunks:
-                # First fetch empty — symbol may not have existed this early.
-                # Advance cursor by 30 days and retry until we find data.
-                print(f"  No data at {pd.Timestamp(cursor, unit='ms')}, skipping ahead 30d...")
-                cursor += 30 * 86400000
-                continue
-            else:
-                print(f"  Empty response at cursor {pd.Timestamp(cursor, unit='ms')}")
-                break
-
-        all_chunks.append(chunk)
-        n = len(chunk)
-        last_ts = int(chunk.index[-1].timestamp() * 1000)
-        print(f"  Fetched {n} bars, last={chunk.index[-1]}, total so far={sum(len(c) for c in all_chunks)}")
-
-        cursor = last_ts + 1
-        if last_ts >= END_MS:
-            break
-        # Rate limit: OKX allows ~20 req/2s for public endpoints
-        time.sleep(0.5)
-
-    if all_chunks:
-        df = pd.concat(all_chunks)
-        df = df[~df.index.duplicated(keep="last")].sort_index()
-        # Save to store
+    if not df.empty:
         store.save(df, EXCHANGE, SYMBOL, TIMEFRAME)
         print(f"  Saved {len(df)} bars to store")
-    else:
-        df = pd.DataFrame()
 
     store.close()
     return df
@@ -109,7 +78,7 @@ def main():
     print(f"{'='*60}\n")
 
     # Run backtest with realistic costs
-    # OKX spot: 0.1% taker commission, ~0.05% slippage
+    # OKX and Binance spot both charge 0.1% taker; ~0.05% slippage
     engine = BacktestEngine(
         initial_capital=10_000,
         commission=0.001,   # 0.1% per side
@@ -119,48 +88,7 @@ def main():
     strategy = DogeSpotDonchianSma()
     result = engine.run(df, strategy, symbol=SYMBOL)
 
-    m = result.metrics
-    print(f"{'='*60}")
-    print(f"Strategy: {result.strategy_name} v{result.strategy_version}")
-    print(f"Symbol: {result.symbol} | Timeframe: {result.timeframe}")
-    print(f"Period: {pd.Timestamp(result.start_time, unit='ms')} → {pd.Timestamp(result.end_time, unit='ms')}")
-    print(f"{'='*60}")
-    print(f"Total Return:      {m.total_return_pct:+.2f}%")
-    print(f"Annualized Return: {m.annualized_return_pct:+.2f}%")
-    print(f"Final Equity:      {result.final_equity:,.2f} (from {result.initial_capital:,.2f})")
-    print(f"Total Trades:      {m.total_trades}")
-    print(f"Win Rate:          {m.win_rate_pct:.1f}%")
-    print(f"Profit Factor:     {m.profit_factor:.2f}")
-    print(f"Sharpe Ratio:      {m.sharpe_ratio:.2f}")
-    print(f"Sortino Ratio:     {m.sortino_ratio:.2f}")
-    print(f"Max Drawdown:      {m.max_drawdown_pct:.2f}%")
-    print(f"Max DD Days:       {m.max_drawdown_days}")
-    print(f"Volatility (ann):  {m.volatility_annual_pct:.2f}%")
-    print(f"VaR 95%:           {m.var_95_pct:.2f}%")
-    print(f"CVaR 95%:          {m.cvar_95_pct:.2f}%")
-    print(f"Avg Win:           {m.avg_win_pct:+.2f}%")
-    print(f"Avg Loss:          {m.avg_loss_pct:+.2f}%")
-    print(f"Avg Hold Time:     {m.avg_hold_hours:.1f}h")
-    print(f"{'='*60}")
-
-    # Print individual trades
-    if result.trades:
-        print(f"\nTrade-by-trade ({len(result.trades)} trades):")
-        print(f"{'ID':>4} {'Side':>5} {'Entry':>10} {'Exit':>10} {'PnL%':>8} {'Hold(h)':>8} {'Exit Reason':>15}")
-        print("-" * 65)
-        for t in result.trades:
-            print(
-                f"{t.id:>4} {t.side:>5} {t.entry_price:>10.4f} {t.exit_price:>10.4f} "
-                f"{t.pnl_pct:>+8.2f} {t.hold_hours:>8.1f} {t.exit_reason:>15}"
-            )
-
-    # Monthly returns
-    if not m.monthly_returns.empty:
-        print(f"\nMonthly Returns:")
-        print(f"{'Month':>12} {'Return%':>8}")
-        print("-" * 22)
-        for ts, ret in m.monthly_returns.items():
-            print(f"{ts.strftime('%Y-%m'):>12} {ret:>+8.2f}")
+    print(generate_report(result, include_trades=True))
 
 
 if __name__ == "__main__":

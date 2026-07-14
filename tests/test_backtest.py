@@ -324,6 +324,61 @@ class TestGenerateReport:
         report = generate_report(result)
         assert "Total Trades:       0" in report
 
+    def test_report_covers_equity_and_risk_metrics(self, engine):
+        """These were only ever printed by the run scripts; the report is now
+        the single place they live."""
+        df = _make_df(100, trend="up")
+        result = engine.run(
+            df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}), symbol="BTC/USDT"
+        )
+        report = generate_report(result)
+
+        assert "Final Equity:" in report
+        assert "Max DD Days:" in report
+        assert "VaR 95%:" in report
+        assert "CVaR 95%:" in report
+
+    def test_report_includes_monthly_returns(self, engine):
+        # Monthly returns come from resample("ME").pct_change(), so the run has
+        # to straddle at least two month ends to produce a single figure.
+        # AlwaysBuy holds throughout; BuyThenSell would flip short at sell_bar
+        # and get run over by the trend.
+        df = _make_df(2000, trend="up")  # 1h bars: 2024-01-01 into late March
+        result = engine.run(df, AlwaysBuy())
+        report = generate_report(result)
+
+        assert "MONTHLY RETURNS" in report
+        assert "2024-02" in report
+
+    def test_monthly_returns_omitted_when_run_is_short(self, engine):
+        df = _make_df(100, trend="up")  # 1h bars: about four days
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+
+        assert "MONTHLY RETURNS" not in generate_report(result)
+
+    def test_trade_log_is_opt_in(self, engine):
+        df = _make_df(100, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+        assert result.trades, "BuyThenSell must produce a trade"
+
+        assert "TRADE LOG" not in generate_report(result)
+        assert "TRADE LOG" in generate_report(result, include_trades=True)
+
+    def test_trade_log_has_a_row_per_trade(self, engine):
+        df = _make_df(100, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+        report = generate_report(result, include_trades=True)
+
+        for trade in result.trades:
+            assert trade.exit_reason in report
+        assert f"TRADE LOG ({len(result.trades)} trades)" in report
+
+    def test_trade_log_omitted_when_no_trades(self, engine):
+        df = _make_df(50, trend="flat")
+        result = engine.run(df, NeverTrade())
+
+        assert "TRADE LOG" not in generate_report(result, include_trades=True)
+
 
 class TestTradesToDataframe:
     def test_conversion(self, engine):
