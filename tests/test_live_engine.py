@@ -49,6 +49,35 @@ class SellSignalStrategy(MockStrategy):
         return signal
 
 
+class FlatPositionStrategy(MockStrategy):
+    """Position-style: signal 0 means target flat, i.e. close what we hold."""
+
+    signal_is_position = True
+
+
+class HoldPositionStrategy(MockStrategy):
+    """Position-style: signal 1 means stay long."""
+
+    signal_is_position = True
+
+    def generate_signal(self, df: pd.DataFrame) -> pd.Series:
+        df = self.preprocess(df)
+        return pd.Series(1, index=df.index, dtype=int)
+
+
+def _long_position(entry_price=100.0):
+    return Position(
+        symbol="BTC/USDT",
+        side="long",
+        amount=1.0,
+        entry_price=entry_price,
+        current_price=entry_price,
+        unrealized_pnl=0.0,
+        unrealized_pnl_abs=0.0,
+        timestamp=1704067200000,
+    )
+
+
 @pytest.fixture
 def mock_broker():
     broker = MagicMock()
@@ -224,6 +253,108 @@ class TestLiveEngineTick:
         assert result.action == TickAction.SKIP
         assert "cooldown" in result.reason
         assert engine._cooldown_remaining == 1
+
+
+class TestPositionStyleSignalExit:
+    """Strategies with signal_is_position=True return a target position, so a
+    0 while holding must close. The backtest has always done this; live read 0
+    as "no action" and rode positions that the backtest had already exited."""
+
+    def _engine(self, strategy, mock_broker, mock_data_feed, mock_state_mgr):
+        return LiveEngine(
+            broker=mock_broker,
+            strategy=strategy,
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+
+    def test_flat_signal_closes_position(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        engine = self._engine(
+            FlatPositionStrategy(), mock_broker, mock_data_feed, mock_state_mgr
+        )
+        mock_broker.get_position.return_value = _long_position()
+        mock_broker.market_sell.return_value = _make_order(side="sell")
+
+        result = engine.tick()
+
+        assert result.action == TickAction.EXIT
+        assert "signal_exit" in result.reason
+        mock_broker.market_sell.assert_called_once()
+
+    def test_stale_bar_does_not_close_position(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        """Without a new bar the engine forces signal to 0. Treating that as
+        "target flat" would liquidate the position on every poll."""
+        engine = self._engine(
+            FlatPositionStrategy(), mock_broker, mock_data_feed, mock_state_mgr
+        )
+        df, _ = mock_data_feed.fetch.return_value
+        mock_data_feed.fetch.return_value = (
+            df,
+            BarFetchMeta(has_new_closed=False, stripped=0),
+        )
+        mock_broker.get_position.return_value = _long_position()
+
+        result = engine.tick()
+
+        assert result.action == TickAction.NOOP
+        mock_broker.market_sell.assert_not_called()
+
+    def test_holding_signal_keeps_position(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        engine = self._engine(
+            HoldPositionStrategy(), mock_broker, mock_data_feed, mock_state_mgr
+        )
+        mock_broker.get_position.return_value = _long_position()
+
+        result = engine.tick()
+
+        assert result.action == TickAction.NOOP
+        mock_broker.market_sell.assert_not_called()
+
+    def test_pulse_strategy_ignores_zero_signal(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        """Pulse-style strategies emit 0 constantly to mean "no action", so
+        the flat rule must stay opt-in."""
+        assert MockStrategy.signal_is_position is False
+        engine = self._engine(
+            MockStrategy(), mock_broker, mock_data_feed, mock_state_mgr
+        )
+        mock_broker.get_position.return_value = _long_position()
+
+        result = engine.tick()
+
+        assert result.action == TickAction.NOOP
+        mock_broker.market_sell.assert_not_called()
+
+    def test_stop_loss_outranks_flat_signal(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        """Both fire on the same bar; the reported reason should be the stop."""
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=FlatPositionStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+            stop_loss_pct=1.0,
+        )
+        # Feed closes run 100..110, so an entry at 1000 is far through the stop.
+        mock_broker.get_position.return_value = _long_position(entry_price=1000.0)
+        mock_broker.market_sell.return_value = _make_order(side="sell")
+
+        result = engine.tick()
+
+        assert result.action == TickAction.EXIT
+        assert "stop_loss" in result.reason
 
 
 class TestPositionSizing:

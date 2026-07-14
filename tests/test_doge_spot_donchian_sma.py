@@ -8,15 +8,12 @@ from strategies.doge_spot_donchian_sma import DogeSpotDonchianSma
 
 
 def _make_4h_df(closes: list[float], n_lead: int = 200) -> pd.DataFrame:
-    """Build a 4h OHLCV frame with `n_lead` flat bars then ramps to `closes`.
+    """Build a 4h OHLCV frame with `n_lead` flat bars then the given closes.
 
-    Each requested close gets one 4h bar that ramps from the previous close.
+    Each requested close gets one 4h bar.
     """
     all_closes: list[float] = [100.0] * n_lead
-    prev = 100.0
-    for target in closes:
-        all_closes.append(target)
-        prev = target
+    all_closes.extend(closes)
     close = np.array(all_closes)
     start = pd.Timestamp("2024-01-01 00:00")
     dates = pd.date_range(start, periods=len(close), freq="4h")
@@ -129,8 +126,25 @@ class TestDogeSpotDonchianSma:
         closes += [closes[-1] * 0.95**i for i in range(1, 60)]
         df = _make_4h_df(closes)
         sig = DogeSpotDonchianSma().generate_signal_for_position(df, "long")
-        # Exit signal (0) should appear after the decline
-        assert (sig == 0).any()
+
+        # The rally must actually put the target position long, otherwise the
+        # exit assertion below would pass on an all-zero series.
+        assert (sig == 1).any()
+        # ...and the decline must target flat, not merely "no action".
+        assert sig.iloc[-1] == 0
+
+    def test_generate_signal_for_position_matches_generate_signal(self):
+        """Live and backtest must read the same target position."""
+        closes = [100 * 1.02**i for i in range(1, 80)]
+        closes += [closes[-1] * 0.95**i for i in range(1, 60)]
+        df = _make_4h_df(closes)
+        strat = DogeSpotDonchianSma()
+
+        for side in (None, "long"):
+            pd.testing.assert_series_equal(
+                strat.generate_signal_for_position(df, side),
+                strat.generate_signal(df),
+            )
 
     def test_generate_signal_for_position_unsupported_side(self):
         df = _make_4h_df([100.0] * 50)

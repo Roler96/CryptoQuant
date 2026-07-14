@@ -91,11 +91,28 @@ def check_signal_reverse(
     return ExitCheck(False, "")
 
 
+def check_signal_flat(
+    current_signal: int,
+    signal_is_position: bool,
+) -> ExitCheck:
+    """Check whether a position-style signal has gone flat.
+
+    Strategies with signal_is_position=True return a target position, so 0
+    means "hold nothing". check_signal_reverse can't express that: it reads 0
+    as "no action". Callers must only pass a signal derived from a freshly
+    closed bar — a stale or absent bar reads as 0 and would close the position.
+    """
+    if signal_is_position and current_signal == 0:
+        return ExitCheck(True, "signal_exit")
+
+    return ExitCheck(False, "")
+
+
 def determine_exit(*checks: ExitCheck) -> ExitCheck:
     """Select the highest-priority exit from a set of checks.
 
     Priority order: stop_loss > trailing_stop > take_profit > time_exit >
-    signal_reverse.
+    signal_reverse > signal_exit.
     """
     priority = [
         "stop_loss",
@@ -103,6 +120,7 @@ def determine_exit(*checks: ExitCheck) -> ExitCheck:
         "take_profit",
         "time_exit",
         "signal_reverse",
+        "signal_exit",
     ]
     for reason in priority:
         for check in checks:

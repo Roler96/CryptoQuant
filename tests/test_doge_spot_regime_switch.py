@@ -225,7 +225,29 @@ class TestDogeSpotRegimeSwitch:
         closes += [closes[-1] * 0.95**i for i in range(1, 60)]
         df = _make_4h_df(closes)
         sig = DogeSpotRegimeSwitch().generate_signal_for_position(df, "long")
-        assert (sig == 0).any()
+
+        # The rally must actually put the target position long, otherwise the
+        # exit assertion below would pass on an all-zero series.
+        assert (sig == 1).any()
+        # ...and the crash must target flat, not merely "no action".
+        assert sig.iloc[-1] == 0
+
+    def test_for_position_matches_generate_signal(self):
+        """Live and backtest must read the same target position.
+
+        These drifted once already: the live hook re-derived exits from
+        position_side and silently never closed anything.
+        """
+        closes = [100 * 1.02**i for i in range(1, 80)]
+        closes += [closes[-1] * 0.95**i for i in range(1, 60)]
+        df = _make_4h_df(closes)
+        strat = DogeSpotRegimeSwitch()
+
+        for side in (None, "long"):
+            pd.testing.assert_series_equal(
+                strat.generate_signal_for_position(df, side),
+                strat.generate_signal(df),
+            )
 
     def test_for_position_unsupported_side(self):
         df = _make_4h_df([100.0] * 50)

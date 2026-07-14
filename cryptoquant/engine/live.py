@@ -11,7 +11,7 @@ from loguru import logger
 from cryptoquant.data.closed_bar import ClosedBarFeed
 from cryptoquant.engine.exit_logic import (
     ExitCheck,
-    ExitCheck,
+    check_signal_flat,
     check_signal_reverse,
     check_stop_loss,
     check_take_profit,
@@ -266,6 +266,10 @@ class LiveEngine:
         if not self._position_unknown and not has_position:
             self._trailing_anchor = 0.0
 
+        signal_is_position = bool(
+            getattr(self.strategy, "signal_is_position", False)
+        )
+
         if not is_new_bar:
             signal = 0  # no new signal without a new bar
         else:
@@ -348,8 +352,21 @@ class LiveEngine:
             else:
                 signal_check = check_signal_reverse(signal, -1)
 
+            # A position-style signal of 0 means "target flat" and must close
+            # the position, matching the backtest. Only consult it on a fresh
+            # bar: without one `signal` was forced to 0 above, which would
+            # otherwise close the position on every poll.
+            flat_check = check_signal_flat(
+                signal, signal_is_position and is_new_bar
+            )
+
             exit_check = determine_exit(
-                sl_check, trailing_check, tp_check, time_check, signal_check
+                sl_check,
+                trailing_check,
+                tp_check,
+                time_check,
+                signal_check,
+                flat_check,
             )
             if exit_check.should_exit:
                 return self._exit_position(

@@ -84,28 +84,16 @@ class DogeSpotDonchianSma(Strategy):
     def generate_signal_for_position(
         self, df: pd.DataFrame, position_side: str | None
     ) -> pd.Series:
-        df = self.preprocess(df)
-        close = df["close"]
-        entry_bars = self.params["entry_bars"]
-        exit_bars = self.params["exit_bars"]
+        """Return the target position, whatever we currently hold.
 
-        entry_high = df["high"].rolling(entry_bars).max().shift(1)
-        exit_low = df["low"].rolling(exit_bars).min().shift(1)
-        trend = self._daily_trend(df)
-
-        signal = pd.Series(0, index=df.index, dtype=int)
-
-        if position_side is None:
-            signal.loc[
-                (trend == 1) & (close > entry_high)
-            ] = 1
-        elif position_side == "long":
-            # Exit if price below exit channel or trend turns bearish
-            exit_cond = (close < exit_low) | (trend == 0)
-            signal.loc[exit_cond] = 0
-        else:
+        generate_signal() already replays entries and exits statefully, so the
+        target position is the whole contract here and position_side only needs
+        validating. Recomputing the exit rules separately is what let live and
+        backtest drift apart.
+        """
+        if position_side not in (None, "long"):
             raise StrategyError(
                 f"Unsupported position side for spot strategy: {position_side}"
             )
 
-        return signal
+        return self.generate_signal(df)

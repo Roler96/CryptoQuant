@@ -76,19 +76,15 @@ class DogeDonchianTrend(Strategy):
     def generate_signal_for_position(
         self, df: pd.DataFrame, position_side: str | None
     ) -> pd.Series:
-        df = self.preprocess(df)
-        close = df["close"]
-        entry_high, entry_low, exit_high, exit_low = self._channels(df)
-        signal = pd.Series(0, index=df.index, dtype=int)
+        """Return the target position, whatever we currently hold.
 
-        if position_side is None:
-            signal.loc[close > entry_high] = 1
-            signal.loc[close < entry_low] = -1
-        elif position_side == "long":
-            signal.loc[close < exit_low] = -1
-        elif position_side == "short":
-            signal.loc[close > exit_high] = 1
-        else:
+        generate_signal() replays entries and exits statefully, so the target
+        position is the whole contract here and position_side only needs
+        validating. The previous override re-derived exits and leaned on -1
+        ("go short") to force a long out, which reads as a reversal rather
+        than the flat this engine now understands.
+        """
+        if position_side not in (None, "long", "short"):
             raise StrategyError(f"Unsupported position side: {position_side}")
 
-        return signal
+        return self.generate_signal(df)

@@ -141,16 +141,14 @@ class DogeSpotRegimeSwitch(Strategy):
                         position = 0
                         sub_strategy = ""
                 elif sub_strategy == "bear":
-                    # intrabar TP / SL
-                    if lows[i] <= sl_price:
-                        position = 0; sub_strategy = ""
-                    elif highs[i] >= tp_price:
-                        position = 0; sub_strategy = ""
-                    elif i - entry_idx >= max_hold:
-                        position = 0; sub_strategy = ""
-                    elif trend.iloc[i] == 1:
-                        # regime changed back to bull
-                        position = 0; sub_strategy = ""
+                    if (
+                        lows[i] <= sl_price            # intrabar stop-loss
+                        or highs[i] >= tp_price        # intrabar take-profit
+                        or i - entry_idx >= max_hold
+                        or trend.iloc[i] == 1          # regime back to bull
+                    ):
+                        position = 0
+                        sub_strategy = ""
 
             # --- entries (only when flat) ------------------------------
             if position == 0:
@@ -183,40 +181,18 @@ class DogeSpotRegimeSwitch(Strategy):
     def generate_signal_for_position(
         self, df: pd.DataFrame, position_side: str | None
     ) -> pd.Series:
-        """Live-compatible signal with position context."""
-        df = self.preprocess(df)
-        close = df["close"]
-        entry_high, exit_low = self._bull_channels(df)
-        trend = self._daily_trend(df)
-        drawdown = self._bear_drawdown(df)
-        vol_ratio = self._vol_filter(df)
+        """Return the target position, whatever we currently hold.
 
-        thresh = self.params["bear_drawdown_thresh"]
-        vol_min = self.params["bear_vol_min"]
-
-        signal = pd.Series(0, index=df.index, dtype=int)
-
-        if position_side is None:
-            # Flat: look for entry from either sub-strategy
-            bull_entry = (trend == 1) & (close > entry_high)
-            bear_cond = (
-                (trend == 0)
-                & (drawdown <= thresh)
-                & (close > close.shift(1))
-                & (vol_ratio >= vol_min)
-            )
-            signal.loc[bull_entry | bear_cond] = 1
-        elif position_side == "long":
-            # We don't know which sub-strategy is active from here alone,
-            # so we signal exit if either exit condition fires.
-            bull_exit = (close < exit_low) | (trend == 0)
-            # For bear trades, TP/SL are price-level exits handled by the
-            # live engine's risk manager; here we only flag the structural
-            # exits (channel break, trend flip, regime change).
-            signal.loc[bull_exit] = 0
-        else:
+        generate_signal() replays the bull/bear state machine, so it already
+        knows which sub-strategy is active and where the bear leg's take-profit
+        and stop-loss sit. Re-deriving exits from position_side alone cannot:
+        the side says "long" for both legs, which is exactly how the bear leg's
+        price exits ended up delegated to engine-level config that then applied
+        to bull trades too.
+        """
+        if position_side not in (None, "long"):
             raise StrategyError(
                 f"Unsupported position side for spot strategy: {position_side}"
             )
 
-        return signal
+        return self.generate_signal(df)

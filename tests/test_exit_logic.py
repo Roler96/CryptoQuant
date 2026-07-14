@@ -2,6 +2,7 @@
 
 from cryptoquant.engine.exit_logic import (
     ExitCheck,
+    check_signal_flat,
     check_signal_reverse,
     check_stop_loss,
     check_take_profit,
@@ -113,7 +114,34 @@ class TestCheckSignalReverse:
         assert not result.should_exit
 
 
+class TestCheckSignalFlat:
+    def test_flat_target_exits(self):
+        result = check_signal_flat(0, signal_is_position=True)
+        assert result.should_exit
+        assert result.reason == "signal_exit"
+
+    def test_held_target_does_not_exit(self):
+        assert not check_signal_flat(1, signal_is_position=True).should_exit
+        assert not check_signal_flat(-1, signal_is_position=True).should_exit
+
+    def test_pulse_strategy_never_exits_on_zero(self):
+        """Pulse-style strategies emit 0 to mean "no action"."""
+        assert not check_signal_flat(0, signal_is_position=False).should_exit
+
+
 class TestDetermineExit:
+    def test_signal_exit_is_recognized(self):
+        """A reason missing from the priority list is silently dropped."""
+        result = determine_exit(ExitCheck(True, "signal_exit"))
+        assert result.should_exit
+        assert result.reason == "signal_exit"
+
+    def test_priority_stop_over_signal_exit(self):
+        result = determine_exit(
+            ExitCheck(True, "signal_exit"), ExitCheck(True, "stop_loss")
+        )
+        assert result.reason == "stop_loss"
+
     def test_priority_stop_over_tp(self):
         sl = ExitCheck(True, "stop_loss")
         tp = ExitCheck(True, "take_profit")
