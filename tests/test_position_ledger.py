@@ -3,9 +3,7 @@
 import pytest
 
 from cryptoquant.position import (
-    ClosedTrade,
     ManagedPositionLedger,
-    PositionSnapshot,
 )
 
 
@@ -146,6 +144,19 @@ class TestRealizedPnl:
         assert len(trades) == 1
         assert trades[0].entry_time == 1000
         assert trades[0].exit_time == 2000
+
+    def test_entry_time_is_earliest_lot_when_sell_spans_lots(self):
+        """A sell consuming several FIFO lots dates the trade from the oldest
+        lot, so entry_time measures how long the position was actually held.
+        Single-lot tests can't see this — min and max agree there.
+        """
+        ledger = ManagedPositionLedger()
+        ledger.record_buy("BTC/USDT", 0.1, 50000.0, timestamp=1000)
+        ledger.record_buy("BTC/USDT", 0.1, 52000.0, timestamp=5000)
+
+        trade = ledger.record_sell("BTC/USDT", 0.15, 53000.0, timestamp=9000)
+
+        assert trade.entry_time == 1000
 
 
 class TestFees:
