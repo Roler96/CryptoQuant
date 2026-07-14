@@ -1,0 +1,30 @@
+# Testnet/paper validation profile for DogeSpotRegimeSwitch (spot).
+# Set exchange.okx.testnet=false only after the acceptance gates in the
+# research note pass and API permissions/order semantics are verified.
+exchange:
+  default: okx
+  okx:
+    testnet: true
+
+trading:
+  default_timeframe: 4h
+  account_type: spot
+  strategy: doge_spot_regime_switch
+  min_order_usdt: 10.0
+  max_order_usdt: 100.0       # 100 USDT gray-line limit per research note
+  order_timeout: 30
+  cooldown_bars: 1
+  stop_loss_pct: 10.0          # bear sub-strategy stop-loss
+  trailing_stop_pct: null
+  take_profit_pct: 10.0        # bear sub-strategy take-profit
+  max_hold_hours: 180          # 7.5 days * 24h for bear max-hold
+  sizer_method: realized_vol
+  sizer_config:
+    target_vol_pct: 20.0
+    lookback: 180
+    periods_per_year: 2190.0
+    max_pct: 10.0
+    min_order: 10.0
+
+paper_trading:
+  enabled: false
