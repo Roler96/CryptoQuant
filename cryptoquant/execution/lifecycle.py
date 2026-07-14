@@ -11,7 +11,7 @@ from loguru import logger
 
 from cryptoquant.exceptions import OrderRejectedError
 from cryptoquant.execution.broker_abc import BrokerABC
-from cryptoquant.execution.order import Order, OrderSide, OrderStatus
+from cryptoquant.execution.order import Order, OrderStatus
 from cryptoquant.position.ledger import ManagedPositionLedger
 
 

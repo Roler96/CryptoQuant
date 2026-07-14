@@ -21,7 +21,6 @@ from cryptoquant.execution.order import (
     OrderSide,
     OrderStatus,
     OrderType,
-    Position,
 )
 from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.strategy.base import Strategy

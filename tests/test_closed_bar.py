@@ -3,9 +3,7 @@
 import time
 from unittest.mock import MagicMock
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from cryptoquant.data.closed_bar import ClosedBarFeed
 

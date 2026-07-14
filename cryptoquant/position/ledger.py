@@ -10,7 +10,7 @@ Separated from Broker so:
 - Spot and swap positions are tracked uniformly
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -117,7 +117,7 @@ class ManagedPositionLedger:
             raise ValueError(f"Sell amount must be positive, got {amount}")
 
         lots = self._lots.get(symbol, [])
-        total_held = sum(l.amount for l in lots)
+        total_held = sum(lot.amount for lot in lots)
         if total_held < amount:
             raise ValueError(
                 f"Insufficient position: {total_held} < {amount} for {symbol}"
@@ -161,7 +161,7 @@ class ManagedPositionLedger:
         )
 
         # Use the earliest entry time among consumed lots
-        entry_time = min(l[0].timestamp for l in consumed) if consumed else 0
+        entry_time = min(lot.timestamp for lot, _ in consumed) if consumed else 0
 
         trade = ClosedTrade(
             symbol=symbol,
@@ -185,14 +185,14 @@ class ManagedPositionLedger:
     def get_position(self, symbol: str) -> PositionSnapshot | None:
         """Return current strategy-owned position, or None if flat."""
         lots = self._lots.get(symbol, [])
-        total = sum(l.amount for l in lots)
+        total = sum(lot.amount for lot in lots)
         if total <= 0:
             return None
 
-        total_cost = sum(l.amount * l.price for l in lots)
+        total_cost = sum(lot.amount * lot.price for lot in lots)
         avg_price = total_cost / total if total > 0 else 0.0
-        total_fees = sum(l.fee for l in lots)
-        latest_ts = max((l.timestamp for l in lots), default=0)
+        total_fees = sum(lot.fee for lot in lots)
+        latest_ts = max((lot.timestamp for lot in lots), default=0)
 
         return PositionSnapshot(
             symbol=symbol,
@@ -228,7 +228,11 @@ class ManagedPositionLedger:
     @property
     def active_symbols(self) -> list[str]:
         """Symbols with open positions."""
-        return [s for s, lots in self._lots.items() if sum(l.amount for l in lots) > 0]
+        return [
+            s
+            for s, lots in self._lots.items()
+            if sum(lot.amount for lot in lots) > 0
+        ]
 
     # ── State serialization ─────────────────────────────────────────────
 
@@ -237,9 +241,9 @@ class ManagedPositionLedger:
         return {
             "lots": {
                 sym: [
-                    {"amount": l.amount, "price": l.price, "fee": l.fee,
-                     "timestamp": l.timestamp, "symbol": l.symbol}
-                    for l in lots
+                    {"amount": lot.amount, "price": lot.price, "fee": lot.fee,
+                     "timestamp": lot.timestamp, "symbol": lot.symbol}
+                    for lot in lots
                 ]
                 for sym, lots in self._lots.items()
             },
@@ -269,13 +273,13 @@ class ManagedPositionLedger:
         for sym, lot_list in data.get("lots", {}).items():
             ledger._lots[sym] = [
                 Lot(
-                    amount=l["amount"],
-                    price=l["price"],
-                    fee=l.get("fee", 0.0),
-                    timestamp=l.get("timestamp", 0),
-                    symbol=l.get("symbol", sym),
+                    amount=raw["amount"],
+                    price=raw["price"],
+                    fee=raw.get("fee", 0.0),
+                    timestamp=raw.get("timestamp", 0),
+                    symbol=raw.get("symbol", sym),
                 )
-                for l in lot_list
+                for raw in lot_list
             ]
         ledger._closed = [
             ClosedTrade(
