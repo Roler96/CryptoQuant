@@ -8,6 +8,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from cryptoquant.utils import safe_filename
+
 
 @dataclass
 class EngineState:
@@ -42,7 +44,7 @@ class StateManager:
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
     def _state_path(self, strategy_name: str, symbol: str) -> Path:
-        safe_symbol = symbol.replace("/", "_").lower()
+        safe_symbol = safe_filename(symbol, lower=True)
         return self.state_dir / f"state_{strategy_name}_{safe_symbol}.json"
 
     def save(self, state: EngineState) -> None:

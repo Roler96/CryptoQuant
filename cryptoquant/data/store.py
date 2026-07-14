@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from cryptoquant.exceptions import DataValidationError
+from cryptoquant.utils import safe_filename
 
 
 _VALID_TABLE_NAME = re.compile(r"^ohlcv_[a-zA-Z0-9_]+_[a-zA-Z0-9_]+_\w+$")
@@ -15,7 +16,7 @@ _VALID_TABLE_NAME = re.compile(r"^ohlcv_[a-zA-Z0-9_]+_[a-zA-Z0-9_]+_\w+$")
 
 def _table_name(exchange: str, symbol: str, timeframe: str) -> str:
     """Generate safe table name. BTC/USDT → BTC_USDT."""
-    safe = symbol.replace("/", "_").replace("-", "_")
+    safe = safe_filename(symbol, extra_chars="-")
     name = f"ohlcv_{exchange}_{safe}_{timeframe}"
     if not _VALID_TABLE_NAME.match(name):
         raise DataValidationError(f"Invalid table name: {name}")

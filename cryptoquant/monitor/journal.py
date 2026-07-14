@@ -5,6 +5,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cryptoquant.utils import safe_filename
+
 
 class TradeJournal:
     """Trade journal — one trade per line in JSONL format.
@@ -13,7 +15,7 @@ class TradeJournal:
     """
 
     def __init__(self, journal_dir: str = "logs", strategy_name: str = "default"):
-        safe_name = strategy_name.replace("/", "_").replace(" ", "_")
+        safe_name = safe_filename(strategy_name, extra_chars=" ")
         self.journal_path = Path(journal_dir) / f"trade_journal_{safe_name}.jsonl"
         self.journal_path.parent.mkdir(parents=True, exist_ok=True)
 

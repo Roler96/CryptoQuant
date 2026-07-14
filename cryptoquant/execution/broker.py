@@ -1,7 +1,4 @@
 """Exchange broker abstraction — ccxt wrapper with retry logic."""
-import functools
-import os
-import random
 import time
 
 import ccxt
@@ -15,55 +12,7 @@ from cryptoquant.exceptions import (
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus, Position
 from cryptoquant.position.ledger import ManagedPositionLedger
-
-
-def _get_proxy_from_env() -> str | None:
-    """Get proxy URL from environment variables."""
-    return (
-        os.environ.get("HTTPS_PROXY")
-        or os.environ.get("https_proxy")
-        or os.environ.get("HTTP_PROXY")
-        or os.environ.get("http_proxy")
-    )
-
-
-def retry_on_network(
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 30.0,
-    jitter: float = 0.1,
-):
-    """Network error retry decorator (exponential backoff + jitter)."""
-
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            last_error: BaseException | None = None
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except (ccxt.NetworkError, ConnectionError, TimeoutError) as e:
-                    last_error = e
-                    if attempt < max_retries:
-                        delay = min(base_delay * (2**attempt), max_delay)
-                        delay *= 1 + random.uniform(-jitter, jitter)
-                        logger.warning(
-                            f"Retry {attempt + 1}/{max_retries} for "
-                            f"{func.__name__} in {delay:.1f}s: {e}"
-                        )
-                        time.sleep(delay)
-                    else:
-                        logger.error(
-                            f"All {max_retries} retries exhausted for "
-                            f"{func.__name__}: {e}"
-                        )
-            if last_error is not None:
-                raise last_error
-            raise RuntimeError("retry_on_network: unreachable — no error captured")
-
-        return wrapper
-
-    return decorator
+from cryptoquant.utils import get_proxy_from_env, retry_on_network
 
 
 class Broker(BrokerABC):
@@ -109,7 +58,7 @@ class Broker(BrokerABC):
             logger.warning(f"Broker initialized: {exchange} LIVE ({account_type})")
 
         # Configure proxy - ccxt sets trust_env=False, so we must set proxies manually
-        proxy_url = proxy or _get_proxy_from_env()
+        proxy_url = proxy or get_proxy_from_env()
         if proxy_url:
             self.exchange.session.proxies = {
                 "http": proxy_url,

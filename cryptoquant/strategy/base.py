@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from cryptoquant.exceptions import StrategyError
+from cryptoquant.utils import missing_ohlcv_columns
 
 
 class Strategy(ABC):
@@ -90,8 +91,7 @@ class Strategy(ABC):
 
         Default: check required columns + minimum bar count.
         """
-        required = ["open", "high", "low", "close", "volume"]
-        missing = [c for c in required if c not in df.columns]
+        missing = missing_ohlcv_columns(df)
         if missing:
             raise StrategyError(f"DataFrame missing required columns: {missing}")
 

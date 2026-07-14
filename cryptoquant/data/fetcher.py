@@ -1,24 +1,17 @@
 """OHLCV data fetcher — ccxt wrapper for exchange data."""
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 
-import os
-
 import ccxt
 import pandas as pd
 from loguru import logger
 
 from cryptoquant.exceptions import DataFetchError, DataValidationError
-from cryptoquant.execution.broker import retry_on_network
-
-
-def _get_proxy_from_env() -> str | None:
-    """Get proxy URL from environment variables."""
-    return (
-        os.environ.get("HTTPS_PROXY")
-        or os.environ.get("https_proxy")
-        or os.environ.get("HTTP_PROXY")
-        or os.environ.get("http_proxy")
-    )
+from cryptoquant.utils import (
+    REQUIRED_OHLCV_COLUMNS,
+    get_proxy_from_env,
+    missing_ohlcv_columns,
+    retry_on_network,
+)
 
 
 def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
@@ -43,8 +36,7 @@ def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
     if df.empty:
         return
 
-    required = ["open", "high", "low", "close", "volume"]
-    missing = [c for c in required if c not in df.columns]
+    missing = missing_ohlcv_columns(df)
     if missing:
         raise DataValidationError(f"Missing columns: {missing}")
 
@@ -60,7 +52,7 @@ def validate_ohlcv(df: pd.DataFrame, strict: bool = False) -> None:
     if (df["volume"] < 0).any():
         raise DataValidationError("Negative volume detected")
 
-    for col in required:
+    for col in REQUIRED_OHLCV_COLUMNS:
         if df[col].isna().sum() > 0:
             raise DataValidationError(f"NaN in column '{col}'")
 
@@ -114,7 +106,7 @@ class OHLCVFetcher:
             self.exchange.set_sandbox_mode(True)
 
         # Configure proxy - ccxt sets trust_env=False, so we must set proxies manually
-        proxy_url = proxy or _get_proxy_from_env()
+        proxy_url = proxy or get_proxy_from_env()
         if proxy_url:
             if self.exchange.session is not None:
                 self.exchange.session.proxies = {
