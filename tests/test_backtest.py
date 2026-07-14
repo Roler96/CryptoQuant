@@ -404,6 +404,26 @@ class TestGenerateReport:
 
         assert "TRADE LOG" not in generate_report(result, include_trades=True)
 
+    def test_empty_sections_are_omitted(self, engine):
+        """A no-trade run has no exits and no drawdown, so those headers would
+        otherwise dangle over nothing."""
+        df = _make_df(50, trend="flat")
+        result = engine.run(df, NeverTrade())
+        report = generate_report(result, include_trades=True)
+
+        assert "EXIT BREAKDOWN" not in report
+        assert "DRAWDOWN PERIODS" not in report
+        assert not report.endswith("\n")
+
+    def test_sections_are_kept_when_populated(self, engine):
+        """Guards the omission above from degrading into "never render"."""
+        df = _make_df(100, trend="up")
+        result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 50}))
+        report = generate_report(result)
+
+        assert "EXIT BREAKDOWN" in report
+        assert "DRAWDOWN PERIODS" in report
+
     def test_trade_log_shows_times_and_excursions(self, engine):
         """Entry/exit timing and MAE/MFE live only in the trade log — without
         them a row can't say when it traded or how far it went underwater."""

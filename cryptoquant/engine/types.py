@@ -1,6 +1,6 @@
 """Backtesting data types."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -24,7 +24,6 @@ class Trade:
     hold_hours: float
     mae_pct: float  # Maximum Adverse Excursion (%)
     mfe_pct: float  # Maximum Favorable Excursion (%)
-    regime: dict = field(default_factory=dict)
 
 
 @dataclass

@@ -37,6 +37,10 @@ BAR_HOURS = {tf: (365 * 24) / p for tf, p in PERIODS_PER_YEAR.items()}
 # history depth as live trading.
 SIZER_LOOKBACK_BARS = 300
 
+# Deepest drawdowns listed in the report — the tail is noise once the worst
+# few are known.
+TOP_DRAWDOWN_PERIODS = 5
+
 
 def _index_to_ms(index: pd.Index) -> np.ndarray:
     """Convert a DatetimeIndex to Unix-ms int64, handling ms/us/ns dtypes."""
@@ -756,22 +760,26 @@ def generate_report(result: BacktestResult, include_trades: bool = False) -> str
         f"  Avg Win:            {m.avg_win_pct:+.2f}%",
         f"  Avg Loss:           {m.avg_loss_pct:+.2f}%",
         f"  Avg Hold:           {m.avg_hold_hours:.1f}h",
-        "",
-        "-- EXIT BREAKDOWN --",
     ]
 
+    # Every section below is conditional: a run with no trades or no drawdown
+    # would otherwise print a header with nothing under it.
     exit_counts = Counter(t.exit_reason for t in result.trades)
-    for reason, count in exit_counts.most_common():
-        pct = count / m.total_trades * 100 if m.total_trades > 0 else 0
-        lines.append(f"  {reason:20s}: {count:4d} ({pct:.0f}%)")
+    if exit_counts:
+        lines.append("")
+        lines.append("-- EXIT BREAKDOWN --")
+        for reason, count in exit_counts.most_common():
+            pct = count / m.total_trades * 100
+            lines.append(f"  {reason:20s}: {count:4d} ({pct:.0f}%)")
 
-    lines.append("")
-    lines.append("-- DRAWDOWN PERIODS --")
-    for dd in m.drawdown_periods[:5]:
-        lines.append(
-            f"  {_fmt_time(dd['start'])} -> {_fmt_time(dd['end'])}: "
-            f"{dd['depth_pct']:.1f}% ({dd['days']}d)"
-        )
+    if m.drawdown_periods:
+        lines.append("")
+        lines.append("-- DRAWDOWN PERIODS --")
+        for dd in m.drawdown_periods[:TOP_DRAWDOWN_PERIODS]:
+            lines.append(
+                f"  {_fmt_time(dd['start'])} -> {_fmt_time(dd['end'])}: "
+                f"{dd['depth_pct']:.1f}% ({dd['days']}d)"
+            )
 
     if not m.monthly_returns.empty:
         lines.append("")
