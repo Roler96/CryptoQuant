@@ -1,6 +1,11 @@
 """Tests for cryptoquant.config module."""
-import pytest
+import inspect
+from pathlib import Path
 
+import pytest
+import yaml
+
+from cryptoquant.engine.backtest import BacktestEngine
 from cryptoquant.config import (
     AppConfig,
     load_config,
@@ -132,3 +137,45 @@ paper_trading:
         assert config.paper_trading.initial_balance == 25000.0
         assert config.paper_trading.slippage_bps == 2.0
         assert config.paper_trading.latency_ms == 200
+
+
+class TestShippedConfigsMatchBacktest:
+    """Live must not run exit rules the backtest cannot model.
+
+    BacktestEngine.run() takes stop_loss_pct / take_profit_pct /
+    max_hold_bars — there is no trailing stop. LiveEngine has one, wired
+    from trading.trailing_stop_pct. A config that sets it puts live on a
+    strategy no backtest ever validated, which is the same class of bug as
+    the signal_exit divergence fixed on 2026-07-14.
+    """
+
+    @staticmethod
+    def _configs() -> list[Path]:
+        return sorted(Path(__file__).resolve().parent.parent.glob("config*.yaml"))
+
+    def test_configs_exist(self):
+        assert self._configs(), "glob found no configs — this guard would be vacuous"
+
+    @pytest.mark.parametrize("field", ["trailing_stop_pct"])
+    def test_backtest_cannot_model_field_is_disabled(self, field):
+        offenders = []
+        for path in self._configs():
+            raw = yaml.safe_load(path.read_text()) or {}
+            value = (raw.get("trading") or {}).get(field)
+            if value is not None:
+                offenders.append(f"{path.name}: {field}={value}")
+
+        assert not offenders, (
+            f"{field} is set in {', '.join(offenders)}, but BacktestEngine "
+            f"cannot model it — live would run an unvalidated exit rule. "
+            f"Implement it in the backtest and re-run the research protocol "
+            f"before enabling."
+        )
+
+    def test_backtest_run_still_lacks_trailing_stop(self):
+        """If the backtest grows a trailing stop, the guard above is stale."""
+        params = inspect.signature(BacktestEngine.run).parameters
+        assert "trailing_stop_pct" not in params, (
+            "BacktestEngine.run now models a trailing stop — drop this guard "
+            "and let configs enable trailing_stop_pct again."
+        )

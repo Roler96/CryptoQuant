@@ -15,7 +15,12 @@ trading:
   order_timeout: 30
   cooldown_bars: 1
   stop_loss_pct: null
-  trailing_stop_pct: 20.0
+  # Must stay null: BacktestEngine cannot model a trailing stop, so any
+  # value here is an exit rule live would run that the validated baseline
+  # (120/60, Sharpe 0.90/0.67/0.69) never saw. DogeDonchianTrend exits on
+  # its own 60-bar channel. Re-enabling means first implementing trailing
+  # in the backtest and re-running the research protocol.
+  trailing_stop_pct: null
   take_profit_pct: null
   max_hold_hours: null
   sizer_method: realized_vol
