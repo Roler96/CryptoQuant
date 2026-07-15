@@ -7,15 +7,17 @@ correct (or already fixed in Phase 0).
 See docs/review-2026-07-10.md for the full list of issues.
 """
 
+import ccxt
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from cryptoquant.data.closed_bar import BarFetchMeta
 from cryptoquant.engine.backtest import BacktestEngine
 from cryptoquant.engine.live import LiveEngine, TickAction
-from cryptoquant.execution.broker import Broker, retry_on_network
+from cryptoquant.exceptions import ExecutionError, OrderRejectedError
+from cryptoquant.execution.broker import Broker
 from cryptoquant.execution.order import (
     Order,
     OrderSide,
@@ -29,6 +31,24 @@ from cryptoquant.strategy.base import Strategy
 # ═══════════════════════════════════════════════════════════════════════════
 # Test helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _raw_order(order_id: str = "test-123") -> dict:
+    """A filled market buy as ccxt would report it."""
+    return {
+        "id": order_id,
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "market",
+        "amount": 1.0,
+        "price": 50000.0,
+        "filled": 1.0,
+        "remaining": 0.0,
+        "cost": 50000.0,
+        "fee": None,
+        "status": "closed",
+        "timestamp": 1704067200000,
+    }
 
 
 class BuyOnNewBar(Strategy):
@@ -470,53 +490,246 @@ class TestReverseSignalNoLookahead:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# P1: annualized return must never be NaN once equity is wiped out
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestAnnualizedReturnOnBlowup:
+    """(1 + r) ** (1 / years) takes a negative base once equity goes
+    negative, and numpy answers with a bare NaN that flows into the report
+    and dashboard. Spot long-only can't get there; a short can.
+    """
+
+    @staticmethod
+    def _rally(n_bars: int = 300) -> pd.DataFrame:
+        """An 11x rally — enough to wipe out a 1x short."""
+        dates = pd.date_range("2024-01-01", periods=n_bars, freq="1h")
+        close = np.linspace(100.0, 1100.0, n_bars)
+        return pd.DataFrame(
+            {
+                "open": close - 0.1,
+                "high": close + 0.5,
+                "low": close - 0.5,
+                "close": close,
+                "volume": np.full(n_bars, 1000.0),
+            },
+            index=dates,
+        )
+
+    def test_blown_up_short_does_not_report_nan(self):
+        engine = BacktestEngine(initial_capital=10000, commission=0.0, slippage=0.0)
+        # sell_bar with no buy_bar opens a short into the rally.
+        result = engine.run(self._rally(), BuyThenSell({"buy_bar": 999, "sell_bar": 10}))
+        metrics = result.metrics
+
+        assert metrics.total_return_pct <= -100, (
+            f"setup must actually wipe equity out, got "
+            f"{metrics.total_return_pct:.2f}%"
+        )
+        assert not np.isnan(metrics.annualized_return_pct), (
+            "annualized return is NaN — it will flow into the report unnoticed"
+        )
+        assert metrics.annualized_return_pct == -100.0
+
+    def test_surviving_loss_still_computes_normally(self):
+        """The guard must not swallow ordinary losses. Held long through a
+        20% decline lasting exactly one year, so the annualized figure has
+        to come back as the total return itself."""
+        df = _make_ohlcv(8760, start_price=100.0, trend="down")
+        engine = BacktestEngine(initial_capital=10000, commission=0.0, slippage=0.0)
+        metrics = engine.run(df, BuyOnNewBar()).metrics
+
+        assert -100 < metrics.total_return_pct < 0
+        assert not np.isnan(metrics.annualized_return_pct)
+        assert metrics.annualized_return_pct == pytest.approx(
+            metrics.total_return_pct, abs=0.01
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # P1-6: NetworkError retry actually happens 3 times
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@pytest.fixture
+def _no_backoff_sleep():
+    """Collapse the retry backoff so these tests don't sleep for real."""
+    with patch("cryptoquant.utils.time.sleep"):
+        yield
+
+
+@pytest.fixture
+def retry_broker(_no_backoff_sleep):
+    """A Broker whose ccxt exchange is a mock, but whose ccxt exception
+    types are the real ones — the retry path keys off those types."""
+    with patch("cryptoquant.execution.broker.ccxt") as mock_ccxt:
+        mock_exchange = MagicMock()
+        mock_ccxt.okx = MagicMock(return_value=mock_exchange)
+        for name in (
+            "NetworkError",
+            "RateLimitExceeded",
+            "AuthenticationError",
+            "InsufficientFunds",
+            "InvalidOrder",
+            "OrderNotFound",
+            "ExchangeError",
+        ):
+            setattr(mock_ccxt, name, getattr(ccxt, name))
+        yield Broker(exchange="okx", testnet=True), mock_exchange
+
+
 class TestNetworkRetryCount:
-    """The retry_on_network decorator must actually retry on ccxt.NetworkError.
+    """Broker's @retry_on_network must actually retry the underlying ccxt call.
 
     See review 3.4: "网络重试装饰器实际没有重试 Broker 调用"
 
-    The bug: Broker._handle_ccxt_error() converts ccxt.NetworkError to
-    ExecutionError BEFORE the decorator can catch it, so retries never happen.
+    The bug: _handle_ccxt_error() converted ccxt.NetworkError into
+    ExecutionError before the decorator could see it, so retries never
+    happened. Asserting on the decorator in isolation passes either way —
+    these tests drive real Broker methods, which is where the bug lived.
     """
 
-    def test_retry_on_network_error(self):
-        """ccxt.NetworkError should trigger the full retry chain."""
-        import ccxt
+    def test_get_balance_retries_network_error(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.fetch_balance.side_effect = ccxt.NetworkError("Connection reset")
 
-        call_count = 0
+        with pytest.raises(ExecutionError, match="network error"):
+            broker.get_balance("USDT")
 
-        @retry_on_network(max_retries=3, base_delay=0.01, max_delay=0.1)
-        def flaky_network_call():
-            nonlocal call_count
-            call_count += 1
-            raise ccxt.NetworkError("Connection reset")
-
-        with pytest.raises(ccxt.NetworkError):
-            flaky_network_call()
-
-        assert call_count == 4, (  # 1 initial + 3 retries
-            f"Expected 4 calls (1 initial + 3 retries), got {call_count}"
+        assert exchange.fetch_balance.call_count == 4, (  # 1 initial + 3 retries
+            f"Expected 4 calls, got {exchange.fetch_balance.call_count}"
         )
 
-    def test_retry_stops_on_success(self):
-        """Retry should stop when the call succeeds."""
-        import ccxt
+    def test_get_balance_recovers_after_blip(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.fetch_balance.side_effect = [
+            ccxt.NetworkError("timeout"),
+            ccxt.NetworkError("timeout"),
+            {"USDT": {"free": 10000.0}},
+        ]
 
-        call_count = 0
+        assert broker.get_balance("USDT") == 10000.0
+        assert exchange.fetch_balance.call_count == 3
 
-        @retry_on_network(max_retries=3, base_delay=0.01, max_delay=0.1)
-        def flaky_but_recovers():
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                raise ccxt.NetworkError("Connection reset")
-            return "success"
+    def test_rate_limit_is_retried(self, retry_broker):
+        """RateLimitExceeded subclasses NetworkError, so it backs off too."""
+        broker, exchange = retry_broker
+        exchange.fetch_ticker.side_effect = ccxt.RateLimitExceeded("slow down")
 
-        result = flaky_but_recovers()
+        with pytest.raises(ExecutionError):
+            broker.get_ticker("BTC/USDT")
 
-        assert result == "success"
-        assert call_count == 3, f"Expected 3 calls, got {call_count}"
+        assert exchange.fetch_ticker.call_count == 4
+
+    def test_auth_error_is_not_retried(self, retry_broker):
+        """Permanent failures must fail fast rather than burn the backoff budget."""
+        broker, exchange = retry_broker
+        exchange.fetch_balance.side_effect = ccxt.AuthenticationError("bad key")
+
+        with pytest.raises(ExecutionError, match="authentication"):
+            broker.get_balance("USDT")
+
+        assert exchange.fetch_balance.call_count == 1
+
+    def test_swap_position_query_retries(self, retry_broker):
+        """A flat report on an unreachable exchange would invite a double entry."""
+        broker, exchange = retry_broker
+        broker.account_type = "swap"
+        exchange.fetch_positions.side_effect = ccxt.NetworkError("timeout")
+
+        with pytest.raises(ExecutionError, match="network error"):
+            broker.get_position("BTC/USDT")
+
+        assert exchange.fetch_positions.call_count == 4
+
+    def test_cancel_order_retries(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.cancel_order.side_effect = ccxt.NetworkError("timeout")
+
+        with pytest.raises(ExecutionError, match="network error"):
+            broker.cancel_order("order-1", "BTC/USDT")
+
+        assert exchange.cancel_order.call_count == 3  # 1 initial + 2 retries
+
+
+class TestOrderPlacementIdempotency:
+    """Retrying a market order is only safe under an idempotency key.
+
+    A lost response is ambiguous: the order may already be live. Broker
+    tags every order with a clientOrderId and looks that key up before
+    re-sending, so a timeout can never open a second position.
+    """
+
+    def test_order_carries_client_order_id(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.return_value = _raw_order()
+
+        broker.market_buy("BTC/USDT", 1.0)
+
+        params = exchange.create_market_buy_order.call_args[0][2]
+        assert params["clientOrderId"].startswith("cq")
+
+    def test_lost_response_adopts_the_live_order(self, retry_broker):
+        """The order landed but the reply didn't — must adopt, not re-send."""
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.side_effect = ccxt.RequestTimeout("lost")
+        exchange.fetch_order.return_value = _raw_order()
+
+        order = broker.market_buy("BTC/USDT", 1.0)
+
+        assert order.id == "test-123"
+        assert exchange.create_market_buy_order.call_count == 1, (
+            "re-sent an order that was already live — double position"
+        )
+
+    def test_order_never_landed_is_resent(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.side_effect = [
+            ccxt.RequestTimeout("lost"),
+            _raw_order(),
+        ]
+        exchange.fetch_order.side_effect = ccxt.OrderNotFound("no such order")
+
+        order = broker.market_buy("BTC/USDT", 1.0)
+
+        assert order.id == "test-123"
+        assert exchange.create_market_buy_order.call_count == 2
+
+    def test_resend_uses_the_same_key(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.side_effect = [
+            ccxt.RequestTimeout("lost"),
+            _raw_order(),
+        ]
+        exchange.fetch_order.side_effect = ccxt.OrderNotFound("no such order")
+
+        broker.market_buy("BTC/USDT", 1.0)
+
+        keys = {
+            call[0][2]["clientOrderId"]
+            for call in exchange.create_market_buy_order.call_args_list
+        }
+        assert len(keys) == 1, "a fresh key per attempt defeats the whole point"
+
+    def test_unverifiable_order_is_not_resent(self, retry_broker):
+        """If the lookup itself can't reach the exchange, "could not check"
+        must not be read as "never placed"."""
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.side_effect = ccxt.RequestTimeout("lost")
+        exchange.fetch_order.side_effect = ccxt.NetworkError("still down")
+        exchange.fetch_open_orders.side_effect = ccxt.NetworkError("still down")
+        exchange.fetch_closed_orders.side_effect = ccxt.NetworkError("still down")
+
+        with pytest.raises(ExecutionError):
+            broker.market_buy("BTC/USDT", 1.0)
+
+        assert exchange.create_market_buy_order.call_count == 1
+
+    def test_invalid_order_is_not_retried(self, retry_broker):
+        broker, exchange = retry_broker
+        exchange.create_market_buy_order.side_effect = ccxt.InvalidOrder("too small")
+
+        with pytest.raises(OrderRejectedError):
+            broker.market_buy("BTC/USDT", 1.0)
+
+        assert exchange.create_market_buy_order.call_count == 1
