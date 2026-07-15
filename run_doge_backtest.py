@@ -63,10 +63,27 @@ def load_resampled(
         return df
     print(f"Loaded {len(df)} {source_tf} bars from store "
           f"({df.index[0]} → {df.index[-1]}), aggregating to {target_tf}")
-    return df.resample(timeframe_to_timedelta(target_tf)).agg(
+    return resample_complete_ohlcv(df, source_tf, target_tf)
+
+
+def resample_complete_ohlcv(
+    df: pd.DataFrame, source_tf: str, target_tf: str
+) -> pd.DataFrame:
+    """Aggregate OHLCV while rejecting partial target-timeframe buckets."""
+    source_delta = timeframe_to_timedelta(source_tf)
+    target_delta = timeframe_to_timedelta(target_tf)
+    if target_delta <= source_delta or target_delta % source_delta != pd.Timedelta(0):
+        raise DataValidationError(
+            f"Cannot build complete {target_tf} bars from {source_tf} bars"
+        )
+    expected = int(target_delta / source_delta)
+    resampler = df.resample(target_delta)
+    counts = resampler["close"].count()
+    bars = resampler.agg(
         {"open": "first", "high": "max", "low": "min",
          "close": "last", "volume": "sum"}
-    ).dropna()
+    )
+    return bars.loc[counts == expected].dropna()
 
 
 def fetch_data(
@@ -76,14 +93,20 @@ def fetch_data(
     store = OHLCVStore()
     fetcher = OHLCVFetcher(exchange=exchange, testnet=False, max_candles=300)
 
-    df = store.load(exchange, symbol, timeframe, start=start_ms, end=end_ms)
-    if not df.empty and len(df) > 2000:
-        print(f"Loaded {len(df)} bars from store ({df.index[0]} → {df.index[-1]})")
+    requested_start_ms = start_ms
+    cached = store.load(
+        exchange, symbol, timeframe, start=requested_start_ms, end=end_ms
+    )
+    if not cached.empty and len(cached) > 2000:
+        print(
+            f"Loaded {len(cached)} bars from store "
+            f"({cached.index[0]} → {cached.index[-1]})"
+        )
         latest = store.get_latest(exchange, symbol, timeframe)
         if latest and latest > end_ms - 86400000:  # within 1 day of end
             store.close()
-            return df
-        start_ms = latest if latest else start_ms
+            return cached
+        start_ms = latest + 1 if latest else start_ms
     print(f"Fetching {symbol} {timeframe} from {exchange}...")
     print(f"  Range: {pd.Timestamp(start_ms, unit='ms')} → "
           f"{pd.Timestamp(end_ms, unit='ms')}")
@@ -92,14 +115,23 @@ def fetch_data(
         df = fetcher.fetch_range(symbol, timeframe, start_ms, end_ms)
     except DataError as e:
         print(f"  Fetch failed: {e}")
-        df = pd.DataFrame()
+        df_new = pd.DataFrame()
+    else:
+        df_new = df
 
-    if not df.empty:
-        store.save(df, exchange, symbol, timeframe)
-        print(f"  Saved {len(df)} bars to store")
+    if not df_new.empty:
+        store.save(df_new, exchange, symbol, timeframe)
+        print(f"  Saved {len(df_new)} bars to store")
 
+    result = store.load(
+        exchange,
+        symbol,
+        timeframe,
+        start=requested_start_ms,
+        end=end_ms,
+    )
     store.close()
-    return df
+    return result
 
 
 def main() -> None:

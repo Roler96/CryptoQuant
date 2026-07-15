@@ -205,6 +205,19 @@ class TestBacktestEngine:
         assert result.trades, "AlwaysBuy must produce a trade"
         assert result.trades[-1].exit_reason == "end_of_data"
 
+    def test_end_of_data_uses_final_close_not_past_open(self):
+        df = _make_df(50, trend="flat")
+        df.iloc[-1, df.columns.get_loc("open")] = 50.0
+        df.iloc[-1, df.columns.get_loc("close")] = 120.0
+        df.iloc[-1, df.columns.get_loc("high")] = 121.0
+        df.iloc[-1, df.columns.get_loc("low")] = 49.0
+        engine = BacktestEngine(commission=0.0, slippage=0.0)
+
+        result = engine.run(df, AlwaysBuy())
+
+        assert result.trades[-1].exit_reason == "end_of_data"
+        assert result.trades[-1].exit_price == pytest.approx(120.0)
+
     def test_equity_curve_no_trades(self, engine):
         df = _make_df(50, trend="flat")
         result = engine.run(df, NeverTrade())

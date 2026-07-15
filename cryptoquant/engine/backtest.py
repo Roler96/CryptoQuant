@@ -435,6 +435,17 @@ class BacktestEngine:
     ) -> float:
         slippage = self.slippage_model.calculate(bar, position.side)
 
+        if exit_reason == "end_of_data":
+            # The final close is the first executable price after the sample
+            # outcome is known. Filling at that bar's open would travel back
+            # in time after observing its close.
+            price = float(bar["close"])
+            return (
+                price * (1 - slippage)
+                if position.side == "long"
+                else price * (1 + slippage)
+            )
+
         if exit_reason == "stop_loss":
             price = position.stop_loss_price
             if price is None:
