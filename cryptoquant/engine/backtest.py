@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from loguru import logger
+
 from cryptoquant.engine.commission import CommissionModel, FlatCommission
 from cryptoquant.engine.exit_logic import (
     check_signal_reverse,
@@ -31,6 +33,17 @@ PERIODS_PER_YEAR = {
 }
 
 BAR_HOURS = {tf: (365 * 24) / p for tf, p in PERIODS_PER_YEAR.items()}
+
+_HOURS_TO_TIMEFRAME = {hours: tf for tf, hours in BAR_HOURS.items()}
+
+
+def _format_bar_hours(bar_hours: float) -> str:
+    """Name a bar spacing the way an exchange would ('5m', '4h')."""
+    for hours, tf in _HOURS_TO_TIMEFRAME.items():
+        if np.isclose(bar_hours, hours, rtol=0.01):
+            return tf
+    minutes = round(bar_hours * 60)
+    return f"{minutes}m" if minutes < 60 else f"{bar_hours:g}h"
 
 # Bars of history handed to the sizer at each entry — mirrors the live feed
 # window (OHLCVFetcher max_candles=300) so backtest sizing sees the same
@@ -99,7 +112,45 @@ class BacktestEngine:
         self.latency_model = latency_model or ZeroLatency()
         self.commission_model = commission_model or FlatCommission(commission)
         self._bars_to_hours: float = 1.0
-        self._periods_per_year: int = 365 * 24
+        self._periods_per_year: float = 365 * 24
+
+    @staticmethod
+    def _resolve_bar_spacing(df: pd.DataFrame, strategy: Strategy) -> tuple[float, float]:
+        """Return (hours per bar, bars per year) measured from the data.
+
+        Taking these from strategy.timeframe instead trusts a declaration
+        over the bars actually handed in. Feed a strategy declaring 4h a
+        year of 5m bars and the engine reads len(df) / 2190 as 48 years,
+        so a -92% loss reports as -5% annualized and holds inflate 48x.
+        The metrics have to describe what was simulated.
+        """
+        declared = getattr(strategy, "timeframe", "1h")
+        fallback = (BAR_HOURS.get(declared, 1.0), float(PERIODS_PER_YEAR.get(declared, 365 * 24)))
+
+        if not isinstance(df.index, pd.DatetimeIndex) or len(df) < 3:
+            return fallback
+
+        # Median, not mean: gaps and DST steps must not drag the spacing.
+        gaps = pd.Series(df.index).diff().dropna()
+        if gaps.empty:
+            return fallback
+        spacing_seconds = float(gaps.dt.total_seconds().median())
+        if not np.isfinite(spacing_seconds) or spacing_seconds <= 0:
+            return fallback
+
+        bar_hours = spacing_seconds / 3600
+        declared_hours = BAR_HOURS.get(declared)
+        if declared_hours is not None and not np.isclose(
+            bar_hours, declared_hours, rtol=0.01
+        ):
+            logger.warning(
+                f"{strategy.name} declares timeframe={declared} "
+                f"({declared_hours:g}h/bar) but the data is spaced "
+                f"{bar_hours:g}h/bar. Reporting against the data. If this is "
+                f"not deliberate, the strategy is running on bars it was not "
+                f"designed for."
+            )
+        return bar_hours, (365 * 24) / bar_hours
 
     def run(
         self,
@@ -110,9 +161,9 @@ class BacktestEngine:
         take_profit_pct: float | None = None,
         max_hold_bars: int | None = None,
     ) -> BacktestResult:
-        tf = getattr(strategy, "timeframe", "1h")
-        self._bars_to_hours = BAR_HOURS.get(tf, 1.0)
-        self._periods_per_year = PERIODS_PER_YEAR.get(tf, 365 * 24)
+        self._bars_to_hours, self._periods_per_year = self._resolve_bar_spacing(
+            df, strategy
+        )
 
         signals = strategy.generate_signal(df)
         trades = self._simulate_positions(
@@ -153,7 +204,9 @@ class BacktestEngine:
             strategy_name=strategy.name,
             strategy_version=getattr(strategy, "version", "unknown"),
             symbol=symbol,
-            timeframe=strategy.timeframe,
+            # The bars simulated, not the ones the strategy asked for — the
+            # report must not name a timeframe the run never used.
+            timeframe=_format_bar_hours(self._bars_to_hours),
             start_time=int(df.index[0].timestamp() * 1000),
             end_time=int(df.index[-1].timestamp() * 1000),
             initial_capital=self.initial_capital,

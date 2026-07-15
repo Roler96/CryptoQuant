@@ -601,3 +601,109 @@ class TestStopLossTakeProfit:
                     f"Suspicious short PnL: {trade.pnl_pct:.1f}% — "
                     f"SL may be calculated below entry (old bug)"
                 )
+
+
+class TestBarSpacingFromData:
+    """Time-based metrics must describe the bars actually simulated.
+
+    Reading the spacing off strategy.timeframe instead trusts a class
+    attribute over the data: hand a strategy declaring 4h a year of 5m
+    bars and len(df)/2190 reads as 48 years, so a -92% loss reports as
+    -5% annualized and holds inflate 48x.
+    """
+
+    @staticmethod
+    def _frame(periods: int, freq: str) -> pd.DataFrame:
+        idx = pd.date_range("2024-01-01", periods=periods, freq=freq)
+        close = np.linspace(100.0, 120.0, periods)
+        return pd.DataFrame(
+            {
+                "open": close,
+                "high": close * 1.001,
+                "low": close * 0.999,
+                "close": close,
+                "volume": np.full(periods, 1000.0),
+            },
+            index=idx,
+        )
+
+    def test_declared_timeframe_matching_data_is_unchanged(self):
+        """The common case must keep behaving exactly as before."""
+        engine = BacktestEngine(initial_capital=10_000)
+        bar_hours, per_year = engine._resolve_bar_spacing(
+            self._frame(500, "1h"), AlwaysBuy()
+        )
+        assert bar_hours == pytest.approx(1.0)
+        assert per_year == pytest.approx(365 * 24)
+
+    def test_spacing_follows_the_data_not_the_declaration(self):
+        """AlwaysBuy declares 1h; feed it 5m bars."""
+        engine = BacktestEngine(initial_capital=10_000)
+        bar_hours, per_year = engine._resolve_bar_spacing(
+            self._frame(500, "5min"), AlwaysBuy()
+        )
+        assert bar_hours == pytest.approx(5 / 60)
+        assert per_year == pytest.approx(365 * 24 * 12)
+
+    def test_mismatch_is_warned_about(self):
+        import io
+
+        from loguru import logger
+
+        output = io.StringIO()
+        handler_id = logger.add(output, level="WARNING")
+        try:
+            engine = BacktestEngine(initial_capital=10_000)
+            engine._resolve_bar_spacing(self._frame(500, "5min"), AlwaysBuy())
+        finally:
+            logger.remove(handler_id)
+
+        assert "declares timeframe=1h" in output.getvalue()
+
+    def test_matching_data_is_not_warned_about(self):
+        import io
+
+        from loguru import logger
+
+        output = io.StringIO()
+        handler_id = logger.add(output, level="WARNING")
+        try:
+            engine = BacktestEngine(initial_capital=10_000)
+            engine._resolve_bar_spacing(self._frame(500, "1h"), AlwaysBuy())
+        finally:
+            logger.remove(handler_id)
+
+        assert output.getvalue() == "", "a matching timeframe must stay quiet"
+
+    def test_annualized_return_uses_the_real_span(self):
+        """One year of 5m bars is one year, not 48."""
+        engine = BacktestEngine(initial_capital=10_000, commission=0.0, slippage=0.0)
+        df = self._frame(365 * 24 * 12, "5min")  # exactly one year
+
+        result = engine.run(df, AlwaysBuy(), symbol="X/USDT")
+
+        assert result.metrics.annualized_return_pct == pytest.approx(
+            result.metrics.total_return_pct, rel=0.02
+        ), "over exactly one year, annualized must equal total return"
+
+    def test_report_names_the_bars_that_ran(self):
+        engine = BacktestEngine(initial_capital=10_000)
+        result = engine.run(self._frame(500, "5min"), AlwaysBuy(), symbol="X/USDT")
+        assert result.timeframe == "5m", "report must not name the declared timeframe"
+
+    def test_gaps_do_not_drag_the_spacing(self):
+        """Median, not mean — a missing week must not rewrite the bar size."""
+        df = self._frame(500, "1h")
+        gapped = pd.concat([df.iloc[:250], df.iloc[250:].set_index(
+            df.index[250:] + pd.Timedelta(days=7)
+        )])
+        engine = BacktestEngine(initial_capital=10_000)
+        bar_hours, _ = engine._resolve_bar_spacing(gapped, AlwaysBuy())
+        assert bar_hours == pytest.approx(1.0)
+
+    def test_non_datetime_index_falls_back_to_declaration(self):
+        df = self._frame(500, "1h").reset_index(drop=True)
+        engine = BacktestEngine(initial_capital=10_000)
+        bar_hours, per_year = engine._resolve_bar_spacing(df, AlwaysBuy())
+        assert bar_hours == pytest.approx(1.0)
+        assert per_year == pytest.approx(365 * 24)
