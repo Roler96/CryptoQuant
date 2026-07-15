@@ -1,4 +1,4 @@
-"""Backtest any strategy in strategies/ on 4h data.
+"""Backtest any strategy in strategies/ on its own timeframe.
 
 Usage:
     uv run python run_doge_backtest.py
@@ -7,7 +7,9 @@ Usage:
         --resample-from 1h --commission-bps 10 --slippage-bps 5
 
 The strategy is resolved by module name from strategies/, the same way
-live_runner resolves trading.strategy, so both run the same class.
+live_runner resolves trading.strategy, so both run the same class. The
+timeframe defaults to the one the strategy class declares, so a backtest
+cannot silently run it on bars it was never designed for.
 """
 import argparse
 import sys
@@ -17,10 +19,9 @@ import pandas as pd
 from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.store import OHLCVStore
 from cryptoquant.engine.backtest import BacktestEngine, generate_report
-from cryptoquant.exceptions import DataError, StrategyError
+from cryptoquant.exceptions import DataError, DataValidationError, StrategyError
 from cryptoquant.strategy.resolve import resolve_strategy
-
-TIMEFRAME = "4h"
+from cryptoquant.utils import timeframe_to_timedelta
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -30,13 +31,16 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="module name under strategies/ (default: %(default)s)")
     p.add_argument("--symbol", default="DOGE/USDT")
     p.add_argument("--exchange", default="okx")
+    p.add_argument("--timeframe", metavar="TF",
+                   help="bar size to run on (default: the strategy's own "
+                        "declared timeframe)")
     p.add_argument("--start", help="UTC date, e.g. 2021-01-01 (default: 1 year ago)")
     p.add_argument("--end", help="UTC date (default: now)")
     p.add_argument("--resample-from", metavar="TF",
-                   help="aggregate 4h bars from this stored timeframe (e.g. 1h) "
-                        "instead of loading 4h directly. The DOGE research ran "
-                        "on 1h aggregated to 4h, and only the 1h table covers "
-                        "the full 2021-2026 range.")
+                   help="aggregate the target bars from this stored timeframe "
+                        "(e.g. 1h) instead of loading them directly. The DOGE "
+                        "research ran on 1h aggregated to 4h, and only the 1h "
+                        "table covers the full 2021-2026 range.")
     p.add_argument("--capital", type=float, default=10_000.0)
     p.add_argument("--commission-bps", type=float, default=10.0,
                    help="fee per side in bps (default: %(default)s)")
@@ -48,47 +52,50 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 def load_resampled(
-    symbol: str, exchange: str, source_tf: str, start_ms: int, end_ms: int
+    symbol: str, exchange: str, source_tf: str, target_tf: str,
+    start_ms: int, end_ms: int,
 ) -> pd.DataFrame:
-    """Build 4h bars from a finer stored timeframe, offline."""
+    """Build target_tf bars from a finer stored timeframe, offline."""
     store = OHLCVStore()
     df = store.load(exchange, symbol, source_tf, start=start_ms, end=end_ms)
     store.close()
     if df.empty:
         return df
     print(f"Loaded {len(df)} {source_tf} bars from store "
-          f"({df.index[0]} → {df.index[-1]}), aggregating to {TIMEFRAME}")
-    return df.resample(TIMEFRAME).agg(
+          f"({df.index[0]} → {df.index[-1]}), aggregating to {target_tf}")
+    return df.resample(timeframe_to_timedelta(target_tf)).agg(
         {"open": "first", "high": "max", "low": "min",
          "close": "last", "volume": "sum"}
     ).dropna()
 
 
-def fetch_data(symbol: str, exchange: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    """Fetch the symbol's 4h data, using the store as cache."""
+def fetch_data(
+    symbol: str, exchange: str, timeframe: str, start_ms: int, end_ms: int
+) -> pd.DataFrame:
+    """Fetch the symbol's bars at timeframe, using the store as cache."""
     store = OHLCVStore()
     fetcher = OHLCVFetcher(exchange=exchange, testnet=False, max_candles=300)
 
-    df = store.load(exchange, symbol, TIMEFRAME, start=start_ms, end=end_ms)
+    df = store.load(exchange, symbol, timeframe, start=start_ms, end=end_ms)
     if not df.empty and len(df) > 2000:
         print(f"Loaded {len(df)} bars from store ({df.index[0]} → {df.index[-1]})")
-        latest = store.get_latest(exchange, symbol, TIMEFRAME)
+        latest = store.get_latest(exchange, symbol, timeframe)
         if latest and latest > end_ms - 86400000:  # within 1 day of end
             store.close()
             return df
         start_ms = latest if latest else start_ms
-    print(f"Fetching {symbol} {TIMEFRAME} from {exchange}...")
+    print(f"Fetching {symbol} {timeframe} from {exchange}...")
     print(f"  Range: {pd.Timestamp(start_ms, unit='ms')} → "
           f"{pd.Timestamp(end_ms, unit='ms')}")
 
     try:
-        df = fetcher.fetch_range(symbol, TIMEFRAME, start_ms, end_ms)
+        df = fetcher.fetch_range(symbol, timeframe, start_ms, end_ms)
     except DataError as e:
         print(f"  Fetch failed: {e}")
         df = pd.DataFrame()
 
     if not df.empty:
-        store.save(df, exchange, symbol, TIMEFRAME)
+        store.save(df, exchange, symbol, timeframe)
         print(f"  Saved {len(df)} bars to store")
 
     store.close()
@@ -104,16 +111,27 @@ def main() -> None:
         print(f"ERROR: {e}")
         sys.exit(1)
 
+    timeframe = args.timeframe or strategy.timeframe
+    try:
+        target = timeframe_to_timedelta(timeframe)
+        if args.resample_from and timeframe_to_timedelta(args.resample_from) >= target:
+            print(f"ERROR: --resample-from {args.resample_from} is not finer than "
+                  f"the {timeframe} bars it would build.")
+            sys.exit(1)
+    except DataValidationError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
     end = pd.Timestamp(args.end) if args.end else pd.Timestamp.now()
     start = pd.Timestamp(args.start) if args.start else end - pd.Timedelta(days=365)
     start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
     if args.resample_from:
         df = load_resampled(
-            args.symbol, args.exchange, args.resample_from, start_ms, end_ms
+            args.symbol, args.exchange, args.resample_from, timeframe, start_ms, end_ms
         )
     else:
-        df = fetch_data(args.symbol, args.exchange, start_ms, end_ms)
+        df = fetch_data(args.symbol, args.exchange, timeframe, start_ms, end_ms)
     if df.empty or len(df) < 200:
         print(f"ERROR: Insufficient data ({len(df)} bars). Need at least 200.")
         sys.exit(1)
@@ -122,6 +140,9 @@ def main() -> None:
 
     print(f"\n{'=' * 60}")
     print(f"Strategy: {strategy.name}  ({args.strategy})")
+    print(f"Timeframe: {timeframe}"
+          + ("" if args.timeframe is None
+             else f"  [OVERRIDE — strategy declares {strategy.timeframe}]"))
     print(f"Data: {len(df)} bars, {df.index[0]} → {df.index[-1]}")
     print(f"Price range: {df['close'].min():.4f} - {df['close'].max():.4f}")
     print(f"Costs: {args.commission_bps:.0f} bps fee + {args.slippage_bps:.0f} "

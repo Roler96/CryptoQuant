@@ -33,18 +33,6 @@ uv run python run_doge_backtest.py --strategy doge_donchian_trend \
 
 ---
 
-### 2. 回测脚本的 timeframe 写死为 4h
-
-**位置:** `run_doge_backtest.py:23`（`TIMEFRAME = "4h"`）
-
-**证据:** 2026-07-15 参数化时加了 `--strategy`，但周期仍是常量。核对 ATRBreakoutTrend（5m）时因此无法用该脚本，只能写内联脚本。
-
-**影响:** 任何非 4h 策略都无法用标准脚本跑基线——而"能不能一条命令复现基线"正是这轮审计反复用到的能力。
-
-**建议:** 加 `--timeframe`，默认取 `strategy.timeframe`（策略类已声明），与 `--resample-from` 组合。
-
----
-
 ## P2 — 中优先级
 
 ### 2. "看着在测、实际什么都没测"的空测试需要系统排查
@@ -90,6 +78,11 @@ uv run python run_doge_backtest.py --strategy doge_donchian_trend \
 ---
 
 ## 附：2026-07-15 已完成
+
+- **回测脚本 timeframe 参数化，并修掉它暴露出的引擎缺陷**：`run_doge_backtest.py` 新增 `--timeframe`，默认取策略类自己声明的 `timeframe`。加这个参数时连带发现两个真缺陷：
+  - **引擎按声明而非数据推导周期**（`BacktestEngine.run()` 原用 `strategy.timeframe` 取 `PERIODS_PER_YEAR`）。拿一年 5m 数据跑一个声称 4h 的策略，引擎认为跨度 **48 年** → -92.16% 的总亏损被年化成 **-5.17%**，平均持有 432h（实际 9h）。现从数据 index 推导（取**中位**间距，避免缺口把间距拖歪），与声明不符时告警。4h 基线逐字不变（+1747.19% / 年化 +69.46% / 54 笔），确认只在错配时改变行为。回归测试 `TestBarSpacingFromData`。
+  - **报表 `Timeframe:` 字段撒谎**：取自 `strategy.timeframe`，实际跑 5m 也显示 4h。现改为反映实际模拟的 bar。
+  - **`5m` 不能直接喂给 pandas**：`df.resample("5m")` 把 `m` 读成**月末**，只发一条 FutureWarning 就把一年数据压成 1 根 bar（`5min` 才是分钟）。新增 `cryptoquant/utils.py::timeframe_to_timedelta()` 走 `pd.Timedelta` 彻底绕开别名歧义，`1M`/`5x` 等一律报错而非静默误解。
 
 - **移除三个已失效策略，`strategies/` 只剩 `doge_donchian_trend.py`**（历史上共出现过 13 个策略实现）：
   | 移除 | 理由 |
