@@ -85,6 +85,15 @@ class TestEmergencyStop:
         rm.is_emergency_stop()
         assert not rm._emergency_stop
 
+    def test_can_enter_applies_expired_cooldown(self, rm):
+        rm._trigger_emergency("test")
+        rm._emergency_triggered_at = time.time() - 120
+
+        allowed, reason = rm.can_enter("BTC/USDT", 1, 10000.0)
+
+        assert allowed
+        assert reason == "ok"
+
     def test_clear_emergency(self, rm):
         rm._trigger_emergency("test")
         rm.clear_emergency()
@@ -103,6 +112,23 @@ class TestRecordExit:
         rm.record_exit("BTC/USDT", -1.5, -150.0)
         stats = rm.get_daily_stats()
         assert stats.losses == 1
+
+
+class TestPositionRiskCap:
+    def test_max_per_trade_risk_caps_notional(self):
+        rm = RiskManager(
+            initial_balance=10000.0,
+            max_per_trade_risk_pct=2.0,
+        )
+
+        assert rm.apply_position_limits(5000.0, 10000.0) == pytest.approx(200.0)
+
+    def test_different_limits_change_position_size(self):
+        conservative = RiskManager(max_per_trade_risk_pct=1.0)
+        permissive = RiskManager(max_per_trade_risk_pct=20.0)
+
+        assert conservative.position_size(1000.0, 100.0) == pytest.approx(10.0)
+        assert permissive.position_size(1000.0, 100.0) == pytest.approx(200.0)
 
 
 class TestBalanceTracking:
@@ -124,6 +150,17 @@ class TestResetDaily:
         stats = rm.get_daily_stats()
         assert stats.total_trades == 0
         assert stats.start_balance == 10100.0
+
+
+class TestPersistence:
+    def test_restore_never_relaxes_new_config_limits(self):
+        old = RiskManager(max_positions=10, max_daily_trades=100)
+        restored = RiskManager(max_positions=2, max_daily_trades=5)
+
+        restored.restore(old.to_dict())
+
+        assert restored.max_positions == 2
+        assert restored.max_daily_trades == 5
 
 
 class TestDrawdownTiers:

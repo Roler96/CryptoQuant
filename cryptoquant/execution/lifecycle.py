@@ -12,7 +12,7 @@ from loguru import logger
 from cryptoquant.exceptions import OrderRejectedError
 from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus
-from cryptoquant.position.ledger import ManagedPositionLedger
+from cryptoquant.position.ledger import ClosedTrade, ManagedPositionLedger
 
 
 class ExecutionLifecycle:
@@ -36,6 +36,7 @@ class ExecutionLifecycle:
         self.order_timeout = order_timeout
         self.fill_threshold_pct = fill_threshold_pct
         self.position_ledger = position_ledger
+        self.last_closed_trade: ClosedTrade | None = None
 
     def execute_market(
         self, symbol: str, side: str, amount: float
@@ -56,6 +57,8 @@ class ExecutionLifecycle:
         if side not in ("buy", "sell"):
             raise ValueError(f"side must be 'buy' or 'sell', got {side}")
 
+        self.last_closed_trade = None
+
         # 1. Submit
         if side == "buy":
             order = self.broker.market_buy(symbol, amount)
@@ -64,7 +67,7 @@ class ExecutionLifecycle:
 
         # 2. Already filled
         if order.is_filled:
-            self._record_fill(symbol, side, order)
+            self.last_closed_trade = self._record_fill(symbol, side, order)
             return order
 
         # 3. Already in terminal state
@@ -85,28 +88,36 @@ class ExecutionLifecycle:
         if order.is_partially_filled:
             order = self._handle_partial_fill(order)
 
-        self._record_fill(symbol, side, order)
+        self.last_closed_trade = self._record_fill(symbol, side, order)
         return order
 
-    def _record_fill(self, symbol: str, side: str, order: Order) -> None:
+    def _record_fill(
+        self, symbol: str, side: str, order: Order
+    ) -> ClosedTrade | None:
         """Record the confirmed fill in the position ledger, if any."""
         if self.position_ledger is None or order.filled <= 0:
-            return
+            return None
 
         fee = (order.fee or {}).get("cost", 0.0) or 0.0
+        fill_price = float(
+            order.price
+            or (order.cost / order.filled if order.filled > 0 else 0.0)
+        )
         try:
             if side == "buy":
                 self.position_ledger.record_buy(
-                    symbol, order.filled, order.price or 0.0,
+                    symbol, order.filled, fill_price,
                     fee=fee, timestamp=order.timestamp,
                 )
+                return None
             else:
-                self.position_ledger.record_sell(
-                    symbol, order.filled, order.price or 0.0,
+                return self.position_ledger.record_sell(
+                    symbol, order.filled, fill_price,
                     fee=fee, timestamp=order.timestamp,
                 )
         except ValueError as e:
             logger.error(f"Position ledger out of sync, skipping record: {e}")
+            return None
 
     def _wait_for_fill(self, order_id: str, symbol: str) -> Order:
         """Wait for order to fill, with timeout."""
@@ -134,22 +145,32 @@ class ExecutionLifecycle:
                 f"Order {order.id} {order.fill_pct:.1f}% filled, "
                 f"treating as complete"
             )
-            # P0 fix: MUST cancel remaining before marking closed.
-            # Previously, remaining could fill later with no tracking.
-            try:
-                self.broker.cancel_order(order.id, order.symbol)
-            except Exception:
-                logger.warning(
-                    f"Failed to cancel remaining for order {order.id}"
-                )
-            order.status = OrderStatus.CLOSED
-            order.amount = order.filled
         else:
             logger.warning(
                 f"Order {order.id} {order.fill_pct:.1f}% filled, "
                 f"cancelling remaining {order.remaining}"
             )
+
+        # Every partial fill has a live remainder, regardless of threshold.
+        # Do not normalize local state until cancellation is confirmed.
+        try:
             self.broker.cancel_order(order.id, order.symbol)
-            order.amount = order.filled
+        except Exception as e:
+            # The filled quantity is real even though the remainder is now
+            # indeterminate. Record it before failing closed so the next
+            # reconciliation sees the exposure, but never claim the order is
+            # complete while an exchange remainder may still be live.
+            self.last_closed_trade = self._record_fill(
+                order.symbol, order.side.value, order
+            )
+            raise OrderRejectedError(
+                f"Order {order.id} partially filled ({order.fill_pct:.1f}%) "
+                "but remaining quantity could not be cancelled; "
+                "order state is unknown"
+            ) from e
+
+        order.status = OrderStatus.CLOSED
+        order.amount = order.filled
+        order.remaining = 0.0
 
         return order

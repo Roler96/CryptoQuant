@@ -99,9 +99,11 @@ def resolve_strategy(strategy_name: str | None, config) -> Strategy:
         sys.exit(1)
 
 
-def health_check_startup(broker, data_feed, risk_manager) -> bool:
+def health_check_startup(
+    broker, data_feed, risk_manager, quote_currency: str = "USDT"
+) -> bool:
     """Run health check on startup. Returns True if healthy."""
-    checker = HealthChecker()
+    checker = HealthChecker(quote_currency=quote_currency)
     try:
         status = checker.check(broker, data_feed, risk_manager)
         if not all([
@@ -143,43 +145,34 @@ def main():
     )
     logger.info("Logging initialized")
 
-    # 2.5. P0 SAFETY GATE — refuse non-testnet startup until P0 issues resolved.
-    #      See docs/review-2026-07-10.md for unresolved P0 items.
-    okx_cfg = config.exchange.okx
-    if not okx_cfg.testnet:
+    # 2.5. Require an explicit acknowledgement before real-money startup.
+    paper_mode = args.paper or config.paper_trading.enabled
+    exchange_name = config.exchange.default
+    exchange_cfg = getattr(config.exchange, exchange_name)
+    if not paper_mode and not exchange_cfg.testnet:
         live_allowed = os.environ.get("LIVE_MODE_ALLOWED", "").lower() in (
             "1", "true", "yes"
         )
 
         if not args.live and not live_allowed:
             logger.error(
-                "LIVE MODE BLOCKED: P0 safety issues remain unresolved.\n"
-                "  Use --live flag or set LIVE_MODE_ALLOWED=true to acknowledge risks.\n"
-                "  See docs/review-2026-07-10.md for the list of unresolved P0 issues."
-            )
-            sys.exit(1)
-
-        # Config conflict: can't have paper_trading enabled in live mode
-        if config.paper_trading.enabled:
-            logger.error(
-                "CONFIG CONFLICT: testnet=false but paper_trading.enabled=true.\n"
-                "  Paper trading must be disabled for live mode.\n"
-                "  Set paper_trading.enabled: false in config.yaml"
+                "LIVE MODE BLOCKED: real-money trading requires explicit "
+                "acknowledgement.\n"
+                "  Use --live or set LIVE_MODE_ALLOWED=true after verifying "
+                "the account, strategy, limits, and API permissions."
             )
             sys.exit(1)
 
         logger.warning(
             "=" * 55 + "\n"
             " LIVE MODE — REAL MONEY TRADING\n"
-            " P0 safety issues remain unresolved.\n"
-            " See docs/review-2026-07-10.md\n"
+            f" Exchange: {exchange_name}\n"
+            f" Account type: {config.trading.account_type}\n"
             "=" * 55
         )
         time.sleep(5)
 
     # 3. Initialize broker
-    paper_mode = args.paper or config.paper_trading.enabled
-    exchange_name = config.exchange.default
     account_type = getattr(config.trading, "account_type", "spot")
 
     # Strategy-owned position tracking for real spot trading. Not needed for
@@ -204,38 +197,41 @@ def main():
             f"latency={config.paper_trading.latency_ms}ms"
         )
     else:
-        okx_cfg = config.exchange.okx
+        if exchange_name == "okx":
+            api_key = config.okx_api_key
+            api_secret = config.okx_api_secret
+            password = config.okx_passphrase
+        else:
+            api_key = config.binance_api_key
+            api_secret = config.binance_api_secret
+            password = ""
         broker = Broker(
             exchange=exchange_name,
-            api_key=config.okx_api_key,
-            secret=config.okx_api_secret,
-            password=config.okx_passphrase,
-            testnet=okx_cfg.testnet,
+            api_key=api_key,
+            secret=api_secret,
+            password=password,
+            testnet=exchange_cfg.testnet,
             account_type=account_type,
             position_ledger=position_ledger,
         )
 
-        if not okx_cfg.testnet:
+        if not exchange_cfg.testnet:
             logger.warning(
                 "=" * 50 + "\n"
                 " LIVE BROKER INITIALIZED — REAL MONEY\n"
-                " P0 safety issues remain unresolved.\n" +
                 "=" * 50
             )
-            # Allow 5 seconds for user to abort
-            time.sleep(5)
 
     # 4. Initialize data pipeline
     db_path = config.data.db_path
     store = OHLCVStore(db_path)
     fetch_cfg = config.data.fetch
-    okx_cfg = config.exchange.okx
 
     # --timeframe from CLI or fall back to config default
     timeframe = args.timeframe or getattr(config.trading, "default_timeframe", "1h")
     fetcher = OHLCVFetcher(
         exchange=exchange_name,
-        testnet=okx_cfg.testnet,
+        testnet=exchange_cfg.testnet,
         timeout=fetch_cfg.timeout_ms,
         max_candles=fetch_cfg.max_candles_per_request,
     )
@@ -266,7 +262,7 @@ def main():
         drawdown_tier2_pct=risk_cfg.drawdown_tier2_pct,
         drawdown_tier3_pct=risk_cfg.drawdown_tier3_pct,
         tier_cooldown_minutes=risk_cfg.tier_cooldown_minutes,
-        initial_balance=broker.get_balance("USDT"),
+        initial_balance=broker.get_balance(config.trading.default_quote),
     )
     logger.info("Risk manager initialized")
 
@@ -304,7 +300,9 @@ def main():
         logger.warning(f"Pre-fetch failed (will retry in tick loop): {e}")
 
     # 8. Startup health check
-    if not health_check_startup(broker, data_feed, risk):
+    if not health_check_startup(
+        broker, data_feed, risk, config.trading.default_quote
+    ):
         if paper_mode:
             logger.warning(
                 "Health check failed in paper mode — continuing anyway. "
@@ -346,6 +344,7 @@ def main():
         reconcile_on_start=not args.no_reconcile,
         journal=journal,
         position_ledger=position_ledger,
+        quote_currency=trading_cfg.default_quote,
     )
 
     logger.info(

@@ -1,5 +1,4 @@
 """Live trading engine — real-time execution loop."""
-# pyright: reportAttributeAccessIssue=false
 
 import time
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.lifecycle import ExecutionLifecycle
 from cryptoquant.execution.order import Order, Position
 from cryptoquant.monitor.journal import TradeJournal
-from cryptoquant.position.ledger import ManagedPositionLedger
+from cryptoquant.position.ledger import ClosedTrade, ManagedPositionLedger
 from cryptoquant.strategy.base import Strategy
 
 
@@ -79,6 +78,7 @@ class LiveEngine:
         reconcile_on_start: bool = True,
         journal: TradeJournal | None = None,
         position_ledger: ManagedPositionLedger | None = None,
+        quote_currency: str = "USDT",
     ):
         self.broker = broker
         self.strategy = strategy
@@ -100,6 +100,7 @@ class LiveEngine:
         self.sizer = sizer
         self.journal = journal
         self.position_ledger = position_ledger
+        self.quote_currency = quote_currency
         self._execution = ExecutionLifecycle(
             broker, order_timeout=order_timeout, position_ledger=position_ledger
         )
@@ -122,6 +123,8 @@ class LiveEngine:
             self._trailing_anchor = saved.trailing_anchor
             if saved.ledger_state and self.position_ledger is not None:
                 self.position_ledger.restore(saved.ledger_state)
+            if saved.risk_state and self.risk_manager is not None:
+                self.risk_manager.restore(saved.risk_state)
 
         # Reconcile exchange state (cancel stale orders, sync positions)
         if reconcile_on_start and self.symbol and getattr(self.broker, "exchange_name", "") != "paper":
@@ -199,7 +202,7 @@ class LiveEngine:
                 signal=0,
                 reason=f"cooldown ({self._cooldown_remaining} bars remaining)",
                 order=None,
-                balance=self._get_balance(),
+                balance=self._safe_balance(),
                 timestamp=timestamp,
             )
 
@@ -214,7 +217,7 @@ class LiveEngine:
                 signal=0,
                 reason=f"data error: {e}",
                 order=None,
-                balance=self._get_balance(),
+                balance=self._safe_balance(),
                 timestamp=timestamp,
             )
 
@@ -227,7 +230,7 @@ class LiveEngine:
                 signal=0,
                 reason="insufficient data",
                 order=None,
-                balance=self._get_balance(),
+                balance=self._safe_balance(),
                 timestamp=timestamp,
             )
 
@@ -238,7 +241,7 @@ class LiveEngine:
                 signal=0,
                 reason="data quality unhealthy",
                 order=None,
-                balance=self._get_balance(),
+                balance=self._safe_balance(),
                 timestamp=timestamp,
             )
 
@@ -275,7 +278,11 @@ class LiveEngine:
         else:
             # Generate signal with position context when the strategy supports it.
             try:
-                side = position.side if has_position else None
+                side = (
+                    position.side
+                    if position is not None and position.amount > 0
+                    else None
+                )
                 signals = self.strategy.generate_signal_for_position(df, side)
                 signal = int(signals.iloc[-1])
             except Exception as e:
@@ -285,22 +292,34 @@ class LiveEngine:
                     signal=0,
                     reason=f"signal error: {e}",
                     order=None,
-                    balance=self._get_balance(),
+                    balance=self._safe_balance(),
                     timestamp=timestamp,
                 )
 
         # 4. Decision
-        balance = self._get_balance()
+        try:
+            balance = self._get_balance()
+        except Exception as e:
+            logger.error(f"Failed to fetch {self.quote_currency} balance: {e}")
+            return TickResult(
+                action=TickAction.SKIP,
+                signal=signal,
+                reason=f"balance state unknown: {e}",
+                order=None,
+                balance=0.0,
+                timestamp=timestamp,
+            )
         # Compute total equity including open position value for accurate drawdown
-        position_value = self._get_position_value()
+        position_value = self._get_position_value(position)
         total_equity = balance + position_value
         if self.risk_manager:
             self.risk_manager.update_balance(total_equity, calibrate=True)
         current_positions = 1 if has_position else 0
 
         if position is not None and position.amount > 0:
-            bar_high = float(df["high"].iloc[-1])
-            bar_low = float(df["low"].iloc[-1])
+            bar_high, bar_low = self._exit_price_range(
+                position, df, is_new_bar
+            )
 
             stop_loss_price = None
             if self.stop_loss_pct is not None:
@@ -370,7 +389,11 @@ class LiveEngine:
             )
             if exit_check.should_exit:
                 return self._exit_position(
-                    position, signal, timestamp, exit_reason=exit_check.reason
+                    position,
+                    signal,
+                    timestamp,
+                    exit_reason=exit_check.reason,
+                    last_known_balance=balance,
                 )
 
             return TickResult(
@@ -416,7 +439,7 @@ class LiveEngine:
                         balance=balance,
                         timestamp=timestamp,
                     )
-            return self._enter_position(signal, timestamp, df)
+            return self._enter_position(signal, timestamp, df, balance)
 
         return TickResult(
             action=TickAction.NOOP,
@@ -434,11 +457,16 @@ class LiveEngine:
         )
 
     def _enter_position(
-        self, signal: int, timestamp: int, df=None
+        self,
+        signal: int,
+        timestamp: int,
+        df=None,
+        balance: float | None = None,
     ) -> TickResult:
         """Open position."""
         side = "long" if signal == 1 else "short"
-        balance = self._get_balance()
+        if balance is None:
+            balance = self._get_balance()
 
         order_value_usdt = self._calculate_position_size(balance, df)
 
@@ -499,7 +527,8 @@ class LiveEngine:
                 self._trailing_anchor = float(order.price or price)
             if self.risk_manager and order.filled > 0:
                 self.risk_manager.record_entry(self.symbol, side)
-                self.risk_manager.update_balance(self._get_balance(), calibrate=True)
+
+            current_balance = self._safe_balance(balance)
 
             return TickResult(
                 action=(
@@ -510,7 +539,7 @@ class LiveEngine:
                 signal=signal,
                 reason=f"entry {side}",
                 order=order,
-                balance=self._get_balance(),
+                balance=current_balance,
                 timestamp=timestamp,
             )
         except Exception as e:
@@ -530,10 +559,10 @@ class LiveEngine:
         signal: int,
         timestamp: int,
         exit_reason: str = "signal_reverse",
+        last_known_balance: float = 0.0,
     ) -> TickResult:
         """Close position."""
         logger.info(f"EXIT {position.side.upper()}: {exit_reason}")
-        balance_before = self._get_balance()
 
         try:
             order = self._execution.execute_market(
@@ -545,16 +574,25 @@ class LiveEngine:
             self._trades_count += 1
             self._cooldown_remaining = self.cooldown_bars
             self._trailing_anchor = 0.0
-            balance_after = self._get_balance()
-            self._record_risk_exit(position, order, balance_before, balance_after)
+            balance_after: float | None
+            try:
+                balance_after = self._get_balance()
+            except Exception as e:
+                logger.error(
+                    f"Exit filled but balance refresh failed: {e}; "
+                    "settlement is still being recorded"
+                )
+                balance_after = None
+            settlement = self._execution.last_closed_trade
+            if settlement is not None:
+                settlement.exit_reason = exit_reason
+            pnl_pct, pnl_abs = self._record_risk_exit(
+                position, order, balance_after, settlement
+            )
 
             # Journal the completed trade
             if self.journal:
                 exit_price = order.price or position.current_price
-                if position.side == "long":
-                    pnl_pct = (exit_price / position.entry_price - 1) * 100 if position.entry_price > 0 else 0
-                else:
-                    pnl_pct = (1 - exit_price / position.entry_price) * 100 if position.entry_price > 0 else 0
                 self.journal.record({
                     "symbol": self.symbol,
                     "side": position.side,
@@ -562,7 +600,7 @@ class LiveEngine:
                     "exit_price": exit_price,
                     "amount": position.amount,
                     "pnl_pct": round(pnl_pct, 4),
-                    "pnl_abs": round(balance_after - balance_before, 4),
+                    "pnl_abs": round(pnl_abs, 4),
                     "exit_reason": exit_reason,
                     "entry_time": position.timestamp,
                     "exit_time": timestamp,
@@ -574,7 +612,11 @@ class LiveEngine:
                 signal=signal,
                 reason=f"exit {position.side} ({exit_reason})",
                 order=order,
-                balance=self._get_balance(),
+                balance=(
+                    balance_after
+                    if balance_after is not None
+                    else last_known_balance
+                ),
                 timestamp=timestamp,
             )
         except Exception as e:
@@ -584,28 +626,29 @@ class LiveEngine:
                 signal=signal,
                 reason=f"exit error: {e}",
                 order=None,
-                balance=self._get_balance(),
+                balance=self._safe_balance(last_known_balance),
                 timestamp=timestamp,
             )
 
     def _get_balance(self) -> float:
-        """Safely get balance."""
-        try:
-            return self.broker.get_balance("USDT")
-        except Exception:
-            return 0.0
+        """Get balance, preserving failure as an unknown state."""
+        return self.broker.get_balance(self.quote_currency)
 
-    def _get_position_value(self) -> float:
+    def _safe_balance(self, fallback: float = 0.0) -> float:
+        """Best-effort balance for reporting paths that cannot affect entry."""
+        try:
+            return self._get_balance()
+        except Exception as e:
+            logger.warning(f"Balance unavailable for status reporting: {e}")
+            return fallback
+
+    def _get_position_value(self, position: Position | None) -> float:
         """Get total market value of open positions for accurate equity calc."""
         if getattr(self.broker, "account_type", "spot") == "swap":
-            return 0.0
-        try:
-            pos = self.broker.get_position(self.symbol)
-            if pos is not None and pos.amount > 0:
-                price = pos.current_price or pos.entry_price
-                return pos.amount * price
-        except Exception:
-            pass
+            return position.unrealized_pnl_abs if position is not None else 0.0
+        if position is not None and position.amount > 0:
+            price = position.current_price or position.entry_price
+            return position.amount * price
         return 0.0
 
     def _calculate_position_size(
@@ -618,6 +661,10 @@ class LiveEngine:
                 df["close"].iloc[-1] if df is not None else 0,
                 df=df,
             )
+            if self.risk_manager:
+                amount = self.risk_manager.apply_position_limits(
+                    amount, balance
+                )
         elif self.risk_manager:
             amount = self.risk_manager.position_size(
                 balance,
@@ -634,6 +681,38 @@ class LiveEngine:
             return float(df["close"].iloc[-1])
         ticker = self.broker.get_ticker(self.symbol)
         return float(ticker.get("last", 0) or 0)
+
+    def _exit_price_range(
+        self, position: Position, df, is_new_bar: bool
+    ) -> tuple[float, float]:
+        """Return prices that are safe to use for live exit checks.
+
+        A closed candle's high/low can only be attributed to a position when
+        the position was already open at the start of that candle.  Otherwise
+        those extrema may predate the fill and cause an immediate false exit.
+        During the entry candle and stale-bar polls, use the latest ticker.
+        """
+        if is_new_bar and len(df) > 0:
+            last_bar_open = df.index[-1]
+            last_bar_open_ms = int(last_bar_open.value // 1_000_000)
+            if position.timestamp <= last_bar_open_ms:
+                return (
+                    float(df["high"].iloc[-1]),
+                    float(df["low"].iloc[-1]),
+                )
+
+        price = float(position.current_price or 0)
+        try:
+            ticker_price = float(
+                self.broker.get_ticker(self.symbol).get("last", 0) or 0
+            )
+            if ticker_price > 0:
+                price = ticker_price
+        except Exception as e:
+            logger.warning(f"Ticker unavailable for exit checks: {e}")
+        if price <= 0 and len(df) > 0:
+            price = float(df["close"].iloc[-1])
+        return price, price
 
     def _quote_to_base_amount(self, quote_amount: float, price: float) -> float:
         if quote_amount <= 0 or price <= 0:
@@ -688,25 +767,56 @@ class LiveEngine:
         self,
         position: Position,
         order: Order,
-        balance_before: float,
-        balance_after: float,
-    ) -> None:
-        if not self.risk_manager:
-            return
-
-        exit_price = order.price or position.current_price
-        if position.entry_price > 0 and exit_price:
-            if position.side == "long":
-                pnl_pct = (exit_price / position.entry_price - 1) * 100
-            else:
-                pnl_pct = (1 - exit_price / position.entry_price) * 100
-        else:
-            pnl_pct = 0.0
-
-        pnl_abs = balance_after - balance_before
+        balance_after: float | None,
+        settlement: ClosedTrade | None = None,
+    ) -> tuple[float, float]:
+        pnl_pct, pnl_abs = self._calculate_realized_pnl(
+            position, order, settlement
+        )
         self._total_pnl_pct += pnl_pct
-        self.risk_manager.record_exit(self.symbol, pnl_pct, pnl_abs)
-        self.risk_manager.update_balance(balance_after, calibrate=True)
+
+        if self.risk_manager:
+            self.risk_manager.record_exit(self.symbol, pnl_pct, pnl_abs)
+            if balance_after is not None:
+                self.risk_manager.update_balance(balance_after, calibrate=True)
+        return pnl_pct, pnl_abs
+
+    def _calculate_realized_pnl(
+        self,
+        position: Position,
+        order: Order,
+        settlement: ClosedTrade | None = None,
+    ) -> tuple[float, float]:
+        """Calculate realized PnL from fills, never from cash-flow deltas."""
+        if settlement is not None:
+            return settlement.realized_pnl_pct, settlement.realized_pnl
+
+        exit_price = float(order.price or position.current_price or 0)
+        entry_price = float(position.entry_price or 0)
+        if entry_price <= 0 or exit_price <= 0:
+            return 0.0, 0.0
+
+        if position.side == "long":
+            gross_pnl_pct = (exit_price / entry_price - 1) * 100
+        else:
+            gross_pnl_pct = (1 - exit_price / entry_price) * 100
+
+        amount = float(order.filled or position.amount)
+        converter = getattr(self.broker, "order_amount_to_quote", None)
+        entry_notional = 0.0
+        if callable(converter):
+            converted = converter(self.symbol, amount, entry_price)
+            if isinstance(converted, (int, float)):
+                entry_notional = float(converted)
+        if entry_notional <= 0:
+            entry_notional = amount * entry_price
+
+        exit_fee = float((order.fee or {}).get("cost", 0.0) or 0.0)
+        pnl_abs = entry_notional * gross_pnl_pct / 100 - exit_fee
+        pnl_pct = (
+            pnl_abs / entry_notional * 100 if entry_notional > 0 else 0.0
+        )
+        return pnl_pct, pnl_abs
 
     def run(self, interval: int = 60, heartbeat_ticks: int = 60):
         """Start live trading loop.
@@ -804,7 +914,7 @@ class LiveEngine:
                 stats = self.risk_manager.get_daily_stats()
                 status["daily_trades"] = stats.total_trades
                 status["daily_pnl_pct"] = round(stats.total_pnl_pct, 2)
-                position_value = self._get_position_value()
+                position_value = self._get_position_value(position)
                 tier = self.risk_manager.current_tier(balance + position_value)
                 status["drawdown_tier"] = tier.value
 
@@ -852,6 +962,9 @@ class LiveEngine:
                     self.position_ledger.to_dict() if self.position_ledger else {}
                 ),
                 trailing_anchor=self._trailing_anchor,
+                risk_state=(
+                    self.risk_manager.to_dict() if self.risk_manager else {}
+                ),
             )
             self.state_mgr.save(state)
         except Exception as e:

@@ -8,21 +8,8 @@ from loguru import logger
 from cryptoquant.data.fetcher import OHLCVFetcher, validate_ohlcv
 from cryptoquant.data.quality import DataQualityChecker, QualityReport
 from cryptoquant.data.store import OHLCVStore
-from cryptoquant.exceptions import DataValidationError
-
-
-def _timeframe_to_seconds(tf: str) -> int:
-    """Convert timeframe string like '5m' to seconds."""
-    tf = tf.lower().strip()
-    if tf.endswith("m"):
-        return int(tf[:-1]) * 60
-    elif tf.endswith("h"):
-        return int(tf[:-1]) * 3600
-    elif tf.endswith("d"):
-        return int(tf[:-1]) * 86400
-    elif tf.endswith("w"):
-        return int(tf[:-1]) * 604800
-    return 3600  # default 1h
+from cryptoquant.exceptions import DataError, DataFetchError, DataValidationError
+from cryptoquant.utils import timeframe_to_seconds
 
 
 class LiveDataFeed:
@@ -60,7 +47,7 @@ class LiveDataFeed:
         import time
 
         now_ms = int(time.time() * 1000)
-        tf_seconds = _timeframe_to_seconds(self.timeframe)
+        tf_seconds = timeframe_to_seconds(self.timeframe)
         needed_ms = lookback * tf_seconds * 1000
         since_ms = now_ms - needed_ms
 
@@ -75,16 +62,19 @@ class LiveDataFeed:
                 df_new = self.fetcher.fetch_range(
                     self.symbol, self.timeframe, start=since_ms, end=now_ms
                 )
-        except Exception:
-            df_new = pd.DataFrame(columns=pd.Index(["open", "high", "low", "close", "volume"]))
-
-        # If no new data but cache exists, return cached tail
-        if df_new.empty and self._df_cache is not None and not self._df_cache.empty:
-            return self._df_cache.iloc[-lookback:]
+        except DataError:
+            raise
+        except Exception as e:
+            raise DataFetchError(
+                f"Live fetch failed for {self.symbol} {self.timeframe}: {e}"
+            ) from e
 
         if df_new.empty:
             self._last_quality_report = None
-            return df_new
+            raise DataFetchError(
+                f"Exchange returned no OHLCV data for "
+                f"{self.symbol} {self.timeframe}"
+            )
 
         validate_ohlcv(df_new, strict=self.strict_validation)
 

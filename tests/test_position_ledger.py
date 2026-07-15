@@ -23,6 +23,7 @@ class TestRecordBuy:
         ledger.record_buy("BTC/USDT", 0.1, 60000.0, timestamp=2000)
 
         pos = ledger.get_position("BTC/USDT")
+        assert pos is not None
         assert pos.amount == 0.2
         # (0.1*50000 + 0.1*60000) / 0.2 = 55000
         assert pos.avg_entry_price == pytest.approx(55000.0)
@@ -34,6 +35,8 @@ class TestRecordBuy:
 
         btc = ledger.get_position("BTC/USDT")
         eth = ledger.get_position("ETH/USDT")
+        assert btc is not None
+        assert eth is not None
         assert btc.amount == 0.1
         assert eth.amount == 1.0
 
@@ -46,6 +49,11 @@ class TestRecordBuy:
         ledger = ManagedPositionLedger()
         with pytest.raises(ValueError):
             ledger.record_buy("BTC/USDT", -0.1, 50000.0)
+
+    def test_non_positive_price_raises(self):
+        ledger = ManagedPositionLedger()
+        with pytest.raises(ValueError, match="price must be positive"):
+            ledger.record_buy("BTC/USDT", 0.1, 0.0)
 
 
 class TestRecordSell:
@@ -84,6 +92,7 @@ class TestRecordSell:
 
         # Remaining position: lot 2 (0.1 @ 60000)
         pos = ledger.get_position("BTC/USDT")
+        assert pos is not None
         assert pos.amount == 0.1
         assert pos.avg_entry_price == 60000.0
 
@@ -105,6 +114,7 @@ class TestRecordSell:
 
         # Remaining: 0.05 from lot2 at 60000
         pos = ledger.get_position("BTC/USDT")
+        assert pos is not None
         assert pos.amount == pytest.approx(0.05)
         assert pos.avg_entry_price == pytest.approx(60000.0)
 
@@ -178,6 +188,12 @@ class TestFees:
         # Half the lot → half the entry fee: 50
         # pnl = 0.05*51000 - 0.05*50000 - 50 = 2550 - 2500 - 50 = 0
         assert trade.entry_fee == pytest.approx(50.0)
+        remaining = ledger.get_position("BTC/USDT")
+        assert remaining is not None
+        assert remaining.total_fees == pytest.approx(50.0)
+
+        second = ledger.record_sell("BTC/USDT", 0.05, 51000.0, fee=0.0)
+        assert second.entry_fee == pytest.approx(50.0)
         assert trade.realized_pnl == pytest.approx(0.0)
 
 
@@ -208,6 +224,7 @@ class TestPositionSnapshot:
         ledger.record_buy("BTC/USDT", 0.1, 50000.0, fee=50.0)
 
         pos = ledger.get_position("BTC/USDT")
+        assert pos is not None
         assert pos.total_fees == 50.0
         assert pos.cost_basis == pytest.approx(5000.0 + 50.0)
 
@@ -225,10 +242,12 @@ class TestSerialization:
 
         # Verify position
         btc = restored.get_position("BTC/USDT")
+        assert btc is not None
         assert btc.amount == 0.05
         assert btc.avg_entry_price == 50000.0
 
         eth = restored.get_position("ETH/USDT")
+        assert eth is not None
         assert eth.amount == 1.0
 
         # Verify closed trade
@@ -255,5 +274,7 @@ class TestSerialization:
 
         shared.restore(data)
 
-        assert other_ref.get_position("BTC/USDT").amount == 0.1
+        restored_position = other_ref.get_position("BTC/USDT")
+        assert restored_position is not None
+        assert restored_position.amount == 0.1
         assert other_ref is shared

@@ -1,5 +1,6 @@
 """Shared utility helpers used across cryptoquant subpackages."""
 import functools
+import hashlib
 import os
 import random
 import re
@@ -53,6 +54,31 @@ def timeframe_to_timedelta(timeframe: str) -> pd.Timedelta:
     return cast(
         pd.Timedelta, pd.Timedelta(seconds=int(amount) * _TIMEFRAME_SECONDS[unit])
     )
+
+
+def timeframe_to_seconds(timeframe: str) -> int:
+    """Convert a validated exchange timeframe to whole seconds."""
+    return int(timeframe_to_timedelta(timeframe).total_seconds())
+
+
+def dataframe_fingerprint(df: pd.DataFrame) -> str:
+    """Return a content-sensitive cache key for a DataFrame.
+
+    Hashing only length and the last timestamp misses corrected OHLCV values
+    and can make a dashboard silently reuse a stale backtest.
+    """
+    digest = hashlib.sha256()
+    payload = df.to_json(
+        orient="split",
+        date_format="iso",
+        date_unit="ns",
+        double_precision=15,
+    )
+    if payload is None:  # defensive: pandas only returns None when a buffer is supplied
+        raise ValueError("Failed to serialize DataFrame for fingerprinting")
+    digest.update(payload.encode())
+    digest.update(repr(tuple(str(dtype) for dtype in df.dtypes)).encode())
+    return digest.hexdigest()
 
 
 def safe_filename(text: str, *, extra_chars: str = "", lower: bool = False) -> str:

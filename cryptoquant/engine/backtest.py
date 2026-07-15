@@ -1,8 +1,8 @@
 """Vectorized backtesting engine."""
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false
 
 from collections import Counter
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -59,10 +59,10 @@ def _index_to_ms(index: pd.Index) -> np.ndarray:
     """Convert a DatetimeIndex to Unix-ms int64, handling ms/us/ns dtypes."""
     dtype_unit = str(index.dtype)
     if dtype_unit == "datetime64[ms]":
-        return index.astype("int64")
+        return index.astype("int64").to_numpy(dtype=np.int64)
     if dtype_unit == "datetime64[us]":
-        return index.astype("int64") // 1_000
-    return index.astype("int64") // 1_000_000
+        return index.astype("int64").to_numpy(dtype=np.int64) // 1_000
+    return index.astype("int64").to_numpy(dtype=np.int64) // 1_000_000
 
 
 @dataclass
@@ -178,13 +178,13 @@ class BacktestEngine:
         )
 
         current_equity = self.initial_capital
-        timestamps_ms = _index_to_ms(df.index) if self.sizer is not None else None
+        timestamps_ms = _index_to_ms(df.index)
         for trade in trades:
             trade.symbol = symbol
             if self.sizer is not None:
                 # History up to (not including) the entry bar — the entry
                 # fills at that bar's open, so only prior bars are known.
-                entry_pos = int(np.searchsorted(timestamps_ms, trade.entry_time))
+                entry_pos = int(timestamps_ms.searchsorted(trade.entry_time))
                 history = df.iloc[max(0, entry_pos - SIZER_LOOKBACK_BARS) : entry_pos]
                 position_size = self.sizer.calculate(
                     current_equity,
@@ -193,7 +193,9 @@ class BacktestEngine:
                 )
                 trade.pnl_abs = position_size * trade.pnl_pct / 100
             else:
-                trade.pnl_abs = current_equity * trade.pnl_pct / 100
+                position_size = current_equity
+                trade.pnl_abs = position_size * trade.pnl_pct / 100
+            trade.position_size = position_size
             current_equity += trade.pnl_abs
 
         equity_curve = self._compute_equity_curve(trades, df)
@@ -207,8 +209,8 @@ class BacktestEngine:
             # The bars simulated, not the ones the strategy asked for — the
             # report must not name a timeframe the run never used.
             timeframe=_format_bar_hours(self._bars_to_hours),
-            start_time=int(df.index[0].timestamp() * 1000),
-            end_time=int(df.index[-1].timestamp() * 1000),
+            start_time=int(timestamps_ms[0]),
+            end_time=int(timestamps_ms[-1]),
             initial_capital=self.initial_capital,
             final_equity=equity_curve.iloc[-1],
             trades=trades,
@@ -245,10 +247,10 @@ class BacktestEngine:
         pending_delay: int = 0
         pending_exit_reason: str = ""
 
-        opens = df["open"].values
-        highs = df["high"].values
-        lows = df["low"].values
-        closes = df["close"].values
+        opens = df["open"].to_numpy(dtype=float)
+        highs = df["high"].to_numpy(dtype=float)
+        lows = df["low"].to_numpy(dtype=float)
+        closes = df["close"].to_numpy(dtype=float)
         timestamps_ms = _index_to_ms(df.index)
 
         n = len(df)
@@ -437,6 +439,14 @@ class BacktestEngine:
             price = position.stop_loss_price
             if price is None:
                 return float(bar["open"])
+            bar_open = float(bar["open"])
+            # A stop becomes a market order once triggered. If the market
+            # opens beyond it, the unavailable stop price cannot be filled.
+            price = (
+                min(price, bar_open)
+                if position.side == "long"
+                else max(price, bar_open)
+            )
             if position.side == "long":
                 price *= 1 - slippage
             else:
@@ -447,6 +457,14 @@ class BacktestEngine:
             price = position.take_profit_price
             if price is None:
                 return float(bar["open"])
+            bar_open = float(bar["open"])
+            # A favorable opening gap receives the opening price rather than
+            # being artificially capped at the take-profit trigger.
+            price = (
+                max(price, bar_open)
+                if position.side == "long"
+                else min(price, bar_open)
+            )
             if position.side == "long":
                 price *= 1 - slippage
             else:
@@ -536,24 +554,34 @@ class BacktestEngine:
         if not trades:
             return pd.Series(self.initial_capital, index=df.index, dtype=float)
 
-        exit_times = []
-        equity_values = []
-        current_equity = self.initial_capital
+        index_ms = _index_to_ms(df.index)
+        closes = df["close"].to_numpy(dtype=float)
+        curve_values = np.full(len(df), self.initial_capital, dtype=float)
+        realized_equity = self.initial_capital
+
         for trade in trades:
-            exit_times.append(pd.Timestamp(trade.exit_time, unit="ms"))
-            current_equity += trade.pnl_abs
-            equity_values.append(current_equity)
+            active = (index_ms >= trade.entry_time) & (index_ms < trade.exit_time)
+            position_size = trade.position_size or realized_equity
 
-        equity_jumps = pd.Series(equity_values, index=exit_times, dtype=float)
-        equity_jumps.sort_index(inplace=True)
+            if active.any() and trade.entry_price > 0:
+                if trade.side == "long":
+                    gross_returns = closes[active] / trade.entry_price - 1
+                else:
+                    gross_returns = 1 - closes[active] / trade.entry_price
 
-        curve = pd.Series(self.initial_capital, index=df.index, dtype=float)
-        for ts, equity in equity_jumps.items():
-            mask = df.index >= ts
-            if mask.any():
-                curve[mask] = equity
+                entry_fee = self.commission_model.calculate(
+                    trade.entry_price, 1.0, trade.side, is_maker=False
+                )
+                entry_fee_pct = entry_fee / trade.entry_price
+                curve_values[active] = (
+                    realized_equity
+                    + position_size * (gross_returns - entry_fee_pct)
+                )
 
-        return curve
+            realized_equity += trade.pnl_abs
+            curve_values[index_ms >= trade.exit_time] = realized_equity
+
+        return pd.Series(curve_values, index=df.index, dtype=float)
 
     def _calculate_metrics(
         self,
@@ -694,11 +722,12 @@ def _compute_drawdown_curve(equity_curve: pd.Series) -> pd.Series:
 
 
 def _find_drawdown_periods(
-    drawdown_curve: pd.Series, index: pd.DatetimeIndex
+    drawdown_curve: pd.Series, index: pd.Index
 ) -> list[dict]:
     periods = []
     in_drawdown = False
     start_idx = 0
+    timestamps_ms = _index_to_ms(index)
 
     for i in range(len(drawdown_curve)):
         if drawdown_curve.iloc[i] < 0 and not in_drawdown:
@@ -708,26 +737,39 @@ def _find_drawdown_periods(
             in_drawdown = False
             dd_slice = drawdown_curve.iloc[start_idx:i]
             periods.append({
-                "start": int(index[start_idx].timestamp() * 1000),
-                "end": int(index[i - 1].timestamp() * 1000),
+                "start": int(timestamps_ms[start_idx]),
+                "end": int(timestamps_ms[i - 1]),
                 "depth_pct": round(float(abs(dd_slice.min())), 4),
-                "days": max(1, (index[i - 1] - index[start_idx]).days),
+                "days": max(
+                    1,
+                    int(
+                        (timestamps_ms[i - 1] - timestamps_ms[start_idx])
+                        / 86_400_000
+                    ),
+                ),
             })
 
     if in_drawdown:
         dd_slice = drawdown_curve.iloc[start_idx:]
         periods.append({
-            "start": int(index[start_idx].timestamp() * 1000),
-            "end": int(index[-1].timestamp() * 1000),
+            "start": int(timestamps_ms[start_idx]),
+            "end": int(timestamps_ms[-1]),
             "depth_pct": round(float(abs(dd_slice.min())), 4),
-            "days": max(1, (index[-1] - index[start_idx]).days),
+            "days": max(
+                1,
+                int(
+                    (timestamps_ms[-1] - timestamps_ms[start_idx])
+                    / 86_400_000
+                ),
+            ),
         })
 
     return sorted(periods, key=lambda x: x["depth_pct"], reverse=True)
 
 
 def _fmt_time(ts_ms: int) -> str:
-    return pd.Timestamp(ts_ms, unit="ms").strftime("%Y-%m-%d %H:%M")
+    timestamp = cast(pd.Timestamp, pd.Timestamp(ts_ms, unit="ms"))
+    return timestamp.strftime("%Y-%m-%d %H:%M")
 
 
 def _price_decimals(trades: list[Trade]) -> int:
@@ -844,7 +886,8 @@ def generate_report(result: BacktestResult, include_trades: bool = False) -> str
         lines.append("")
         lines.append("-- MONTHLY RETURNS --")
         for ts, ret in m.monthly_returns.items():
-            lines.append(f"  {pd.Timestamp(ts).strftime('%Y-%m')}: {ret:>+8.2f}%")
+            timestamp = cast(pd.Timestamp, ts)
+            lines.append(f"  {timestamp.strftime('%Y-%m')}: {ret:>+8.2f}%")
 
     if include_trades and result.trades:
         lines.append("")

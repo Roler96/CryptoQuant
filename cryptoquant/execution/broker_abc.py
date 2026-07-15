@@ -44,6 +44,18 @@ class BrokerABC(ABC):
             return 0.0
         return quote_amount / price
 
+    def order_amount_to_quote(
+        self, symbol: str, amount: float, price: float
+    ) -> float:
+        """Convert an exchange order amount back to quote-currency notional.
+
+        Spot amounts are base units. Derivative brokers override this when an
+        amount represents contracts rather than base currency.
+        """
+        if amount <= 0 or price <= 0:
+            return 0.0
+        return amount * price
+
     @abstractmethod
     def market_buy(self, symbol: str, amount: float) -> Order:
         """Execute a market buy order."""

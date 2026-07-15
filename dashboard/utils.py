@@ -15,6 +15,7 @@ from cryptoquant.engine.types import BacktestResult
 from cryptoquant.monitor.journal import TradeJournal
 from cryptoquant.risk.sizer import ATRSizer, FixedSizer
 from cryptoquant.strategy.base import Strategy
+from cryptoquant.utils import dataframe_fingerprint
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STRATEGIES_DIR = PROJECT_ROOT / "strategies"
@@ -94,9 +95,8 @@ def strategy_name_from_journal_path(path: Path) -> str:
 
 
 def data_fingerprint(exchange: str, symbol: str, timeframe: str, df: pd.DataFrame) -> tuple:
-    """Cheap cache key for an OHLCV frame without hashing every row."""
-    last_ts = int(df.index[-1].timestamp()) if len(df) else 0
-    return (exchange, symbol, timeframe, len(df), last_ts)
+    """Content-sensitive cache key for one stored OHLCV series."""
+    return (exchange, symbol, timeframe, dataframe_fingerprint(df))
 
 
 def make_sizer(sizer_items: tuple):

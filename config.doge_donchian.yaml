@@ -33,3 +33,8 @@ trading:
 
 paper_trading:
   enabled: false
+
+# The validated realized-volatility sizer is capped at 10% notional. State it
+# explicitly now that max_per_trade_risk_pct is an enforced hard ceiling.
+risk:
+  max_per_trade_risk_pct: 10.0

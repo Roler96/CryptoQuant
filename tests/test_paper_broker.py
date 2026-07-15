@@ -69,6 +69,31 @@ class TestPaperBroker:
         assert pos.unrealized_pnl == pytest.approx(10.0)
         assert pos.unrealized_pnl_abs == pytest.approx(100.0)
 
+    def test_scaling_position_preserves_entry_time_and_refreshes_pnl(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            latency_ms=0,
+            commission_bps=0,
+        )
+        broker.market_buy("BTC/USDT", 1.0)
+        pos = broker.get_position("BTC/USDT")
+        assert pos is not None
+        pos.timestamp = 123
+        broker.update_price("BTC/USDT", 110.0)
+
+        broker.market_buy("BTC/USDT", 1.0)
+
+        assert pos.timestamp == 123
+        assert pos.entry_price == pytest.approx(105.0)
+        assert pos.unrealized_pnl == pytest.approx((110 / 105 - 1) * 100)
+        assert pos.unrealized_pnl_abs == pytest.approx(10.0)
+
+        broker.market_sell("BTC/USDT", 0.5)
+        assert pos.timestamp == 123
+        assert pos.unrealized_pnl_abs == pytest.approx(7.5)
+
     def test_normalize_order_amount_rounds_to_paper_precision(self):
         broker = PaperBroker()
         assert broker.normalize_order_amount("BTC/USDT", 0.123456789) == pytest.approx(
@@ -109,9 +134,26 @@ class TestPaperBroker:
             commission_bps=0,
         )
         # 100 bps = 1% slippage
-        broker.market_buy("BTC/USDT", 10.0)
+        order = broker.market_buy("BTC/USDT", 10.0)
         # Cost = 10 * 100 * 1.01 = 1010
         assert broker.get_balance("USDT") == pytest.approx(8990.0)
+        pos = broker.get_position("BTC/USDT")
+        assert pos is not None
+        assert pos.entry_price == pytest.approx(order.price)
+
+    def test_order_exposes_commission_for_settlement(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            latency_ms=0,
+            commission_bps=100,
+        )
+
+        order = broker.market_buy("BTC/USDT", 10.0)
+
+        assert order.fee is not None
+        assert order.fee["cost"] == pytest.approx(10.0)
 
     def test_slippage_applied_to_sell(self):
         broker = PaperBroker(

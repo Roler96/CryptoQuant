@@ -24,6 +24,7 @@ class Trade:
     hold_hours: float
     mae_pct: float  # Maximum Adverse Excursion (%)
     mfe_pct: float  # Maximum Favorable Excursion (%)
+    position_size: float = 0.0  # Quote-currency notional allocated at entry
 
 
 @dataclass

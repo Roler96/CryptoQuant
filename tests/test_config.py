@@ -8,6 +8,7 @@ import yaml
 from cryptoquant.engine.backtest import BacktestEngine
 from cryptoquant.config import (
     AppConfig,
+    ExchangeConfig,
     load_config,
     invalidate_config_cache,
     get_data_config,
@@ -72,6 +73,15 @@ class TestLoadConfig:
         assert isinstance(config, AppConfig)
         assert config.exchange.default == "okx"
 
+    def test_cache_is_scoped_to_config_path(self, tmp_path):
+        first = tmp_path / "first.yaml"
+        second = tmp_path / "second.yaml"
+        first.write_text("trading:\n  default_quote: USDT\n")
+        second.write_text("trading:\n  default_quote: USDC\n")
+
+        assert load_config(first).trading.default_quote == "USDT"
+        assert load_config(second).trading.default_quote == "USDC"
+
 
 class TestGetDataConfig:
     def test_returns_data_config(self):
@@ -96,6 +106,19 @@ class TestFieldConstraints:
             TradingConfig(min_order_usdt=0)
         with pytest.raises(Exception):
             TradingConfig(min_order_usdt=-1)
+
+    def test_exchange_must_have_a_configured_profile(self):
+        with pytest.raises(Exception):
+            ExchangeConfig.model_validate({"default": "unsupported"})
+
+    def test_binance_credentials_are_distinct(self):
+        config = AppConfig(
+            okx_api_key="okx-key",
+            binance_api_key="binance-key",
+            binance_api_secret="binance-secret",
+        )
+        assert config.binance_api_key == "binance-key"
+        assert config.binance_api_secret == "binance-secret"
 
 
 class TestPaperTradingConfig:

@@ -176,7 +176,7 @@ with tab_overview:
     st.plotly_chart(equity_curve_fig(result.equity_curve), use_container_width=True)
     st.plotly_chart(drawdown_fig(result.drawdown_curve), use_container_width=True)
     if m.monthly_returns is not None and len(m.monthly_returns) > 0:
-        st.plotly_chart(monthly_returns_fig(m.monthly_returns * 100), use_container_width=True)
+        st.plotly_chart(monthly_returns_fig(m.monthly_returns), use_container_width=True)
 
 with tab_trades:
     if not trades:

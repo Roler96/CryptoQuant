@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from cryptoquant.data.live_feed import LiveDataFeed
-from cryptoquant.exceptions import DataValidationError
+from cryptoquant.exceptions import DataFetchError, DataValidationError
 
 
 def _make_df(n=20, start_price=100.0, trend=0.05):
@@ -67,12 +67,12 @@ class TestFetch:
         empty_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         mock_fetcher.fetch.return_value = empty_df
 
-        result = feed.fetch(lookback=10)
-        assert result.empty
+        with pytest.raises(DataFetchError, match="returned no OHLCV"):
+            feed.fetch(lookback=10)
         assert feed.last_quality_report is None
         mock_store.save.assert_not_called()
 
-    def test_empty_fetch_clears_previous_quality_report(self, feed, mock_fetcher):
+    def test_empty_fetch_does_not_fall_back_to_stale_cache(self, feed, mock_fetcher):
         mock_fetcher.fetch.return_value = _make_df(50)
         feed.fetch(lookback=50)
         assert feed.last_quality_report is not None
@@ -80,9 +80,19 @@ class TestFetch:
         mock_fetcher.fetch.return_value = pd.DataFrame(
             columns=["open", "high", "low", "close", "volume"]
         )
-        feed.fetch(lookback=10)
+        with pytest.raises(DataFetchError, match="returned no OHLCV"):
+            feed.fetch(lookback=10)
 
-        assert feed.last_quality_report is not None  # preserved when cache used
+    def test_fetch_exception_is_not_hidden_by_cache(self, feed, mock_fetcher):
+        mock_fetcher.fetch.return_value = _make_df(20)
+        feed.fetch(lookback=20)
+        previous_fetch_ts = feed.last_fetch_ts
+        mock_fetcher.fetch.side_effect = RuntimeError("exchange down")
+
+        with pytest.raises(DataFetchError, match="exchange down"):
+            feed.fetch(lookback=20)
+
+        assert feed.last_fetch_ts == previous_fetch_ts
 
     def test_strict_validation_rejects_gaps(self, feed, mock_fetcher, mock_store):
         dates = pd.DatetimeIndex(

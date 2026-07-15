@@ -149,12 +149,24 @@ class TestGetPosition:
         _, mock_exchange = mock_ccxt
         mock_exchange.fetch_ticker.return_value = {"last": 50000.0, "timestamp": 0}
         # Simulate a prior buy: 0.5 BTC at 48000
-        broker.position_ledger.record_buy("BTC/USDT", 0.5, 48000.0, fee=0.0, timestamp=0)
+        broker.position_ledger.record_buy(
+            "BTC/USDT", 0.5, 48000.0, fee=0.0, timestamp=1234
+        )
         pos = broker.get_position("BTC/USDT")
         assert pos is not None
         assert pos.amount == 0.5
         assert pos.side == "long"
         assert pos.entry_price == 48000.0  # P0: correct entry price, not 0.0
+        assert pos.timestamp == 1234
+
+    def test_swap_amount_to_quote_uses_contract_size(self, mock_ccxt):
+        _, mock_exchange = mock_ccxt
+        broker = Broker(exchange="okx", testnet=True, account_type="swap")
+        mock_exchange.market.return_value = {"contractSize": 10.0}
+
+        assert broker.order_amount_to_quote(
+            "DOGE/USDT:USDT", amount=2.0, price=0.2
+        ) == pytest.approx(4.0)
 
 
 class TestCancelOrder:

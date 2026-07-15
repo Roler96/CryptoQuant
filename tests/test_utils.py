@@ -8,11 +8,13 @@ import pytest
 from cryptoquant.exceptions import DataValidationError
 from cryptoquant.utils import (
     REQUIRED_OHLCV_COLUMNS,
+    dataframe_fingerprint,
     get_proxy_from_env,
     missing_ohlcv_columns,
     retry_on_network,
     safe_filename,
     timeframe_to_timedelta,
+    timeframe_to_seconds,
 )
 
 _PROXY_ENV_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
@@ -199,3 +201,21 @@ class TestTimeframeToTimedelta:
 
         assert len(df.resample(timeframe_to_timedelta("4h")).last()) == 12
         assert len(df.resample(timeframe_to_timedelta("1d")).last()) == 2
+
+    def test_seconds_uses_same_validated_parser(self):
+        assert timeframe_to_seconds("5m") == 300
+        with pytest.raises(DataValidationError):
+            timeframe_to_seconds("nonsense")
+
+
+class TestDataframeFingerprint:
+    def test_value_change_changes_fingerprint(self):
+        idx = pd.date_range("2024-01-01", periods=2, freq="1h")
+        original = pd.DataFrame({"close": [1.0, 2.0]}, index=idx)
+        corrected = pd.DataFrame({"close": [1.0, 999.0]}, index=idx)
+
+        assert dataframe_fingerprint(original) != dataframe_fingerprint(corrected)
+
+    def test_equal_frames_have_equal_fingerprint(self):
+        df = pd.DataFrame({"close": [1.0, 2.0]})
+        assert dataframe_fingerprint(df) == dataframe_fingerprint(df.copy())

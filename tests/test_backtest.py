@@ -1,5 +1,7 @@
 """Tests for backtesting engine."""
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -153,6 +155,32 @@ class TestBacktestEngine:
         assert result.trades, "AlwaysBuy with a 10% low spike must produce a trade"
         assert result.trades[0].exit_reason == "stop_loss"
 
+    def test_gap_through_stop_fills_at_adverse_open(self):
+        df = _make_df(50, trend="flat")
+        df.iloc[10, df.columns.get_loc("open")] = 80.0
+        df.iloc[10, df.columns.get_loc("high")] = 82.0
+        df.iloc[10, df.columns.get_loc("low")] = 79.0
+        df.iloc[10, df.columns.get_loc("close")] = 80.0
+        engine = BacktestEngine(commission=0.0, slippage=0.0)
+
+        result = engine.run(df, AlwaysBuy(), stop_loss_pct=5.0)
+
+        assert result.trades[0].exit_reason == "stop_loss"
+        assert result.trades[0].exit_price == pytest.approx(80.0)
+
+    def test_equity_curve_marks_open_position_to_market(self):
+        df = _make_df(50, trend="flat")
+        df.iloc[10, df.columns.get_loc("open")] = 50.0
+        df.iloc[10, df.columns.get_loc("high")] = 51.0
+        df.iloc[10, df.columns.get_loc("low")] = 49.0
+        df.iloc[10, df.columns.get_loc("close")] = 50.0
+        engine = BacktestEngine(commission=0.0, slippage=0.0)
+
+        result = engine.run(df, AlwaysBuy())
+
+        assert result.metrics.max_drawdown_pct > 49.0
+        assert result.equity_curve.iloc[10] < 5100.0
+
     def test_take_profit_triggered_by_high(self, engine):
         # Uptrend gains 0.5/bar from ~100: a 2% TP is reached long before
         # the data ends, so the exit reason must be take_profit exactly.
@@ -294,7 +322,9 @@ class TestSignalSemantics:
         trade = result.trades[0]
         assert trade.exit_reason == "signal_exit"
         # Signal is 0 at bar 15 close -> exit fills at bar 16 open.
-        assert trade.exit_time == int(df.index[16].timestamp() * 1000)
+        assert trade.exit_time == int(
+            cast(pd.Timestamp, df.index[16]).timestamp() * 1000
+        )
 
     def test_pulse_strategy_ignores_zero_signal(self, engine):
         # AlwaysBuy emits a single pulse then zeros; without the
@@ -310,10 +340,14 @@ class TestSignalSemantics:
         result = engine.run(df, BuyThenSell({"buy_bar": 5, "sell_bar": 15}))
         long_trade = result.trades[0]
         assert long_trade.exit_reason == "signal_reverse"
-        assert long_trade.exit_time == int(df.index[16].timestamp() * 1000)
+        assert long_trade.exit_time == int(
+            cast(pd.Timestamp, df.index[16]).timestamp() * 1000
+        )
         short_trade = result.trades[1]
         assert short_trade.side == "short"
-        assert short_trade.entry_time == int(df.index[16].timestamp() * 1000)
+        assert short_trade.entry_time == int(
+            cast(pd.Timestamp, df.index[16]).timestamp() * 1000
+        )
 
 
 class TestDrawdownCurve:

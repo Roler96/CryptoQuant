@@ -88,6 +88,24 @@ class TestHealthCheck:
         assert not status.balance_sane
         assert "error" in status.details["balance"]
 
+    def test_custom_quote_currency_is_used(
+        self, mock_broker, mock_data_feed, mock_risk_manager
+    ):
+        checker = HealthChecker(quote_currency="USDC")
+
+        checker.check(mock_broker, mock_data_feed, mock_risk_manager)
+
+        mock_broker.get_balance.assert_called_with("USDC")
+
+    def test_exchange_check_uses_feed_symbol(
+        self, checker, mock_broker, mock_data_feed, mock_risk_manager
+    ):
+        mock_data_feed.symbol = "DOGE/USDT"
+
+        checker.check(mock_broker, mock_data_feed, mock_risk_manager)
+
+        mock_broker.get_ticker.assert_called_with("DOGE/USDT")
+
     def test_data_error(self, checker, mock_broker, mock_data_feed, mock_risk_manager):
         from unittest.mock import PropertyMock
         type(mock_data_feed).last_fetch_ts = PropertyMock(side_effect=Exception("db locked"))

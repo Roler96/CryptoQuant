@@ -126,3 +126,16 @@ class TestPosition:
         }
         pos = Position.from_ccxt(raw)
         assert pos.unrealized_pnl == 0.0
+
+    def test_short_unrealized_pnl_uses_short_direction(self):
+        pos = Position.from_ccxt({
+            "symbol": "BTC/USDT:USDT",
+            "side": "short",
+            "contracts": 1.0,
+            "entryPrice": 100.0,
+            "markPrice": 90.0,
+            "unrealizedPnl": 10.0,
+            "timestamp": 0,
+        })
+
+        assert pos.unrealized_pnl == pytest.approx(10.0)

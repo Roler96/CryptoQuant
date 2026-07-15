@@ -7,10 +7,12 @@ See review 2.1: "实盘用尚未闭合的 K 线生成信号"
 """
 
 import time as _time
+from typing import cast
 
 import pandas as pd
 
-from cryptoquant.data.live_feed import LiveDataFeed, _timeframe_to_seconds
+from cryptoquant.data.live_feed import LiveDataFeed
+from cryptoquant.utils import timeframe_to_seconds
 
 
 class ClosedBarFeed:
@@ -45,14 +47,15 @@ class ClosedBarFeed:
         if df.empty:
             return df, BarFetchMeta(has_new_closed=False, stripped=0)
 
-        tf_ms = _timeframe_to_seconds(self._feed.timeframe) * 1000
+        tf_ms = timeframe_to_seconds(self._feed.timeframe) * 1000
         now_ms = int(_time.time() * 1000)
 
         # A bar at timestamp T closes at T + tf_ms.
         # If now < T + tf_ms, the bar is still forming.
         stripped = 0
         while len(df) > 0:
-            last_bar_open_ms = int(df.index[-1].timestamp() * 1000)
+            last_bar_open = cast(pd.Timestamp, df.index[-1])
+            last_bar_open_ms = int(last_bar_open.value // 1_000_000)
             last_bar_close_ms = last_bar_open_ms + tf_ms
 
             if now_ms < last_bar_close_ms:
@@ -65,7 +68,8 @@ class ClosedBarFeed:
         # Determine if we have a NEW closed bar since last fetch
         has_new = False
         if len(df) > 0:
-            latest_ts = int(df.index[-1].timestamp() * 1000)
+            latest = cast(pd.Timestamp, df.index[-1])
+            latest_ts = int(latest.value // 1_000_000)
             if latest_ts != self._last_closed_ts:
                 has_new = True
                 self._last_closed_ts = latest_ts

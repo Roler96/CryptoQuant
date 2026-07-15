@@ -1,7 +1,7 @@
 """Risk management — pre-trade checks and daily limits."""
 import time
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from enum import Enum
 
 import numpy as np
@@ -15,6 +15,11 @@ class DrawdownTier(Enum):
     REDUCE_HALF = "reduce_half"
     REDUCE_QUARTER = "reduce_quarter"
     HALT = "halt"
+
+
+def _utc_today() -> str:
+    """Current trading day, consistently defined at midnight UTC."""
+    return datetime.now(UTC).date().isoformat()
 
 
 @dataclass
@@ -82,7 +87,7 @@ class RiskManager:
         self.drawdown_tier3_pct = drawdown_tier3_pct
         self.tier_cooldown_minutes = tier_cooldown_minutes
 
-        today = date.today().isoformat()
+        today = _utc_today()
         self._daily_stats = DailyStats(
             date=today,
             start_balance=initial_balance,
@@ -102,7 +107,6 @@ class RiskManager:
         self._adaptive_lookback = 50
         self._base_max_daily_trades = max_daily_trades
         self._trade_history: list[dict] = []
-        self._adaptive_last_adjusted: float | None = None
 
     def can_enter(
         self,
@@ -116,7 +120,7 @@ class RiskManager:
         Returns:
             (allowed, reason)
         """
-        if self._emergency_stop:
+        if self.is_emergency_stop():
             return False, "emergency stop triggered"
 
         if current_balance < self.min_balance:
@@ -182,7 +186,18 @@ class RiskManager:
             amount = self.sizer.calculate(balance, price, **kwargs)
         else:
             amount = balance * 0.98
-        return amount * self.position_size_multiplier(balance)
+        return self.apply_position_limits(amount, balance)
+
+    def apply_position_limits(self, amount: float, balance: float) -> float:
+        """Apply the configured per-trade cap and drawdown multiplier.
+
+        Without a guaranteed stop price, the only enforceable worst-case cap
+        is quote notional. Treat max_per_trade_risk_pct as that hard ceiling;
+        sizing models may always choose less.
+        """
+        max_notional = max(balance, 0.0) * self.max_per_trade_risk_pct / 100
+        capped = min(max(amount, 0.0), max_notional)
+        return capped * self.position_size_multiplier(balance)
 
     def record_entry(self, symbol: str, side: str) -> None:
         self._positions[symbol] = side
@@ -216,7 +231,7 @@ class RiskManager:
 
     def reset_daily(self, new_balance: float) -> None:
         self._daily_stats = DailyStats(
-            date=date.today().isoformat(),
+            date=_utc_today(),
             start_balance=new_balance,
             current_balance=new_balance,
         )
@@ -385,12 +400,55 @@ class RiskManager:
     def get_positions(self) -> dict[str, str]:
         return dict(self._positions)
 
+    def to_dict(self) -> dict:
+        """Serialize dynamic risk state for crash-safe engine restarts."""
+        return {
+            "daily_stats": asdict(self._daily_stats),
+            "positions": dict(self._positions),
+            "emergency_stop": self._emergency_stop,
+            "emergency_triggered_at": self._emergency_triggered_at,
+            "peak_balance": self._peak_balance,
+            "current_drawdown_tier": self._current_drawdown_tier.value,
+            "tier_triggered_at": self._tier_triggered_at,
+            "rolling_returns": list(self._rolling_returns),
+            "max_positions": self.max_positions,
+            "max_daily_trades": self.max_daily_trades,
+            "trade_history": list(self._trade_history),
+        }
+
+    def restore(self, data: dict) -> None:
+        """Restore dynamic risk state from a trusted EngineState snapshot."""
+        stats = data.get("daily_stats")
+        if isinstance(stats, dict):
+            self._daily_stats = DailyStats(**stats)
+        self._positions = dict(data.get("positions", {}))
+        self._emergency_stop = bool(data.get("emergency_stop", False))
+        self._emergency_triggered_at = data.get("emergency_triggered_at")
+        self._peak_balance = float(data.get("peak_balance", self._peak_balance))
+        tier = data.get("current_drawdown_tier", DrawdownTier.NORMAL.value)
+        self._current_drawdown_tier = DrawdownTier(tier)
+        self._tier_triggered_at = data.get("tier_triggered_at")
+        self._rolling_returns = [
+            float(value) for value in data.get("rolling_returns", [])
+        ]
+        # A snapshot may preserve runtime reductions, but it must never relax
+        # stricter limits supplied by a newer configuration.
+        self.max_positions = min(
+            self.max_positions,
+            int(data.get("max_positions", self.max_positions)),
+        )
+        self.max_daily_trades = min(
+            self.max_daily_trades,
+            int(data.get("max_daily_trades", self.max_daily_trades)),
+        )
+        self._trade_history = list(data.get("trade_history", []))
+
     def check_daily_reset(self) -> bool:
         """Check if day changed and auto-reset daily stats.
 
         Call this at start of each tick. Returns True if reset occurred.
         """
-        today = date.today().isoformat()
+        today = _utc_today()
         if self._daily_stats.date != today:
             prev_date = self._daily_stats.date
             logger.info(

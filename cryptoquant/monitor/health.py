@@ -27,9 +27,11 @@ class HealthChecker:
         self,
         max_data_staleness_ms: int = 300_000,
         min_balance_threshold: float = 50.0,
+        quote_currency: str = "USDT",
     ):
         self.max_data_staleness_ms = max_data_staleness_ms
         self.min_balance_threshold = min_balance_threshold
+        self.quote_currency = quote_currency
 
     def check(
         self, broker, data_feed: LiveDataFeed | ClosedBarFeed, risk_manager
@@ -47,7 +49,8 @@ class HealthChecker:
         now_ms = int(time.time() * 1000)
         details: dict = {}
 
-        exchange_ok, exchange_detail = self._check_exchange(broker)
+        symbol = getattr(data_feed, "symbol", "BTC/USDT")
+        exchange_ok, exchange_detail = self._check_exchange(broker, symbol)
         details["exchange"] = exchange_detail
 
         data_fresh, data_detail = self._check_data_freshness(data_feed)
@@ -73,9 +76,9 @@ class HealthChecker:
 
         return status
 
-    def _check_exchange(self, broker) -> tuple[bool, str]:
+    def _check_exchange(self, broker, symbol: str) -> tuple[bool, str]:
         try:
-            ticker = broker.get_ticker("BTC/USDT")
+            ticker = broker.get_ticker(symbol)
             if ticker.get("last", 0) > 0:
                 return True, "connected"
             return False, "zero price"
@@ -95,9 +98,9 @@ class HealthChecker:
 
     def _check_balance_sanity(self, broker) -> tuple[bool, str]:
         try:
-            balance = broker.get_balance("USDT")
+            balance = broker.get_balance(self.quote_currency)
             if balance >= self.min_balance_threshold:
-                return True, f"{balance:.2f} USDT"
+                return True, f"{balance:.2f} {self.quote_currency}"
             return False, f"balance {balance:.2f} < {self.min_balance_threshold}"
         except Exception as e:
             return False, f"error: {e}"

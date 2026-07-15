@@ -100,6 +100,21 @@ class TestExecutionLifecycle:
         # P0 fix: remaining MUST be cancelled
         broker.cancel_order.assert_called_once_with("test-123", "BTC/USDT")
 
+    def test_partial_fill_cancel_failure_keeps_state_unknown(self, executor, broker):
+        """A live remainder must never be relabelled as a closed order."""
+        partial = _make_order(
+            status="partially_filled", filled=0.95, amount=1.0
+        )
+        broker.market_buy.return_value = partial
+        broker.wait_for_fill.return_value = partial
+        broker.cancel_order.side_effect = RuntimeError("exchange unreachable")
+
+        with pytest.raises(OrderRejectedError, match="state is unknown"):
+            executor.execute_market("BTC/USDT", "buy", 1.0)
+
+        assert partial.status == OrderStatus.PARTIALLY_FILLED
+        assert partial.amount == 1.0
+
     def test_partial_fill_below_threshold_cancels(self, executor, broker):
         """<90% filled → cancel remaining."""
         partial = _make_order(
@@ -111,7 +126,23 @@ class TestExecutionLifecycle:
         order = executor.execute_market("BTC/USDT", "buy", 1.0)
 
         assert order.amount == 0.5  # adjusted to filled amount
+        assert order.remaining == 0.0
+        assert order.status == OrderStatus.CLOSED
         broker.cancel_order.assert_called_once_with("test-123", "BTC/USDT")
+
+    def test_small_partial_fill_cancel_failure_is_unknown(self, executor, broker):
+        partial = _make_order(
+            status="partially_filled", filled=0.5, amount=1.0
+        )
+        broker.market_buy.return_value = partial
+        broker.wait_for_fill.return_value = partial
+        broker.cancel_order.side_effect = RuntimeError("exchange unreachable")
+
+        with pytest.raises(OrderRejectedError, match="state is unknown"):
+            executor.execute_market("BTC/USDT", "buy", 1.0)
+
+        assert partial.status == OrderStatus.PARTIALLY_FILLED
+        assert partial.remaining == pytest.approx(0.5)
 
     def test_rejected_order_raises(self, executor, broker):
         """Immediately rejected → raise."""
@@ -123,6 +154,28 @@ class TestExecutionLifecycle:
     def test_invalid_side_raises(self, executor):
         with pytest.raises(ValueError, match="side must be"):
             executor.execute_market("BTC/USDT", "hold", 0.1)
+
+    def test_paper_roundtrip_exposes_exact_realized_pnl(self):
+        from cryptoquant.execution.paper_broker import PaperBroker
+        from cryptoquant.position.ledger import ManagedPositionLedger
+
+        paper = PaperBroker(
+            initial_balance=1000.0,
+            default_price=100.0,
+            slippage_bps=0,
+            commission_bps=100,
+            latency_ms=0,
+        )
+        ledger = ManagedPositionLedger()
+        executor = ExecutionLifecycle(paper, position_ledger=ledger)
+        executor.execute_market("BTC/USDT", "buy", 1.0)
+        paper.update_price("BTC/USDT", 90.0)
+
+        executor.execute_market("BTC/USDT", "sell", 1.0)
+
+        settlement = executor.last_closed_trade
+        assert settlement is not None
+        assert settlement.realized_pnl == pytest.approx(-11.9)
 
     def test_custom_threshold(self, broker):
         """Custom fill_threshold_pct is respected."""

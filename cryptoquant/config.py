@@ -1,5 +1,6 @@
 """Global configuration management with pydantic-settings."""
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import Field
@@ -19,7 +20,7 @@ class BinanceConfig(BaseSettings):
 
 class ExchangeConfig(BaseSettings):
     """Exchange configuration."""
-    default: str = "okx"
+    default: Literal["okx", "binance"] = "okx"
     okx: OKXConfig = OKXConfig()
     binance: BinanceConfig = BinanceConfig()
 
@@ -43,7 +44,7 @@ class RiskConfig(BaseSettings):
     max_daily_trades: int = 20
     max_daily_loss_pct: float = 5.0
     max_daily_loss_abs: float = 500.0
-    max_per_trade_risk_pct: float = 2.0
+    max_per_trade_risk_pct: float = Field(default=2.0, gt=0, le=100)
     max_drawdown_pct: float = 20.0
     min_balance: float = 50.0
     emergency_cooldown_minutes: int = 60
@@ -117,9 +118,11 @@ class AppConfig(BaseSettings):
     okx_api_key: str = ""
     okx_api_secret: str = ""
     okx_passphrase: str = ""
+    binance_api_key: str = ""
+    binance_api_secret: str = ""
 
 
-_config_cache: AppConfig | None = None
+_config_cache: dict[Path, AppConfig] = {}
 
 
 def load_config(config_path: str | Path | None = None, *, use_cache: bool = True) -> AppConfig:
@@ -135,15 +138,16 @@ def load_config(config_path: str | Path | None = None, *, use_cache: bool = True
         AppConfig instance (type-safe, IDE autocomplete)
     """
     global _config_cache
-    if use_cache and _config_cache is not None:
-        return _config_cache
-
     if config_path is None:
         config_path = Path(__file__).parent.parent / "config.yaml"
+    resolved_path = Path(config_path).resolve()
+
+    if use_cache and resolved_path in _config_cache:
+        return _config_cache[resolved_path]
 
     yaml_data: dict = {}
-    if Path(config_path).exists():
-        with open(config_path) as f:
+    if resolved_path.exists():
+        with open(resolved_path) as f:
             yaml_data = yaml.safe_load(f) or {}
 
     # Load .env if present
@@ -155,7 +159,7 @@ def load_config(config_path: str | Path | None = None, *, use_cache: bool = True
     config = AppConfig(**yaml_data)
 
     if use_cache:
-        _config_cache = config
+        _config_cache[resolved_path] = config
 
     return config
 
@@ -163,7 +167,7 @@ def load_config(config_path: str | Path | None = None, *, use_cache: bool = True
 def invalidate_config_cache() -> None:
     """Clear config cache, forcing next load_config() to reload."""
     global _config_cache
-    _config_cache = None
+    _config_cache = {}
 
 
 def get_data_config(config: AppConfig | None = None) -> DataConfig:

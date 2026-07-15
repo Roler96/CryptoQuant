@@ -276,6 +276,18 @@ class Broker(BrokerABC):
         contract_size = float(market.get("contractSize", 1) or 1)
         return quote_amount / (price * contract_size)
 
+    def order_amount_to_quote(
+        self, symbol: str, amount: float, price: float
+    ) -> float:
+        """Convert spot base units or derivative contracts to quote notional."""
+        if amount <= 0 or price <= 0:
+            return 0.0
+        if self.account_type != "swap":
+            return amount * price
+        market = self._get_market(symbol)
+        contract_size = float(market.get("contractSize", 1) or 1)
+        return amount * contract_size * price
+
     def _get_market(self, symbol: str) -> dict:
         try:
             market = self.exchange.market(symbol)
@@ -397,7 +409,9 @@ class Broker(BrokerABC):
             current_price=current_price,
             unrealized_pnl=0.0,
             unrealized_pnl_abs=0.0,
-            timestamp=int(time.time() * 1000),
+            # Preserve the strategy's actual entry time. Replacing this with
+            # "now" on every query prevents max_hold_hours from ever expiring.
+            timestamp=snapshot.timestamp,
         )
 
     def _get_swap_position(self, symbol: str) -> Position | None:

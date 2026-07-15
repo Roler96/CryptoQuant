@@ -110,7 +110,10 @@ class PaperBroker(BrokerABC):
             filled=amount,
             remaining=0.0,
             cost=round(amount * slippage_price, 8),
-            fee=None,
+            fee={
+                "cost": round(amount * price * self._commission, 8),
+                "currency": self._quote,
+            },
             status=OrderStatus.CLOSED,
             timestamp=int(time.time() * 1000),
         )
@@ -122,6 +125,7 @@ class PaperBroker(BrokerABC):
         ticker = self.get_ticker(symbol)
         price = float(ticker["last"])
         trade_value = amount * price
+        fill_price = price * (1 + self._slippage)
         cost = trade_value * (1 + self._slippage) + trade_value * self._commission
         if self._balance[self._quote] < cost:
             raise InsufficientFundsError(
@@ -135,19 +139,22 @@ class PaperBroker(BrokerABC):
                 symbol=symbol,
                 side="long",
                 amount=amount,
-                entry_price=price,
+                entry_price=fill_price,
                 current_price=price,
-                unrealized_pnl=0.0,
-                unrealized_pnl_abs=0.0,
+                unrealized_pnl=(price / fill_price - 1) * 100,
+                unrealized_pnl_abs=(price - fill_price) * amount,
                 timestamp=int(time.time() * 1000),
             )
         else:
             total_amount = pos.amount + amount
-            avg_price = (pos.amount * pos.entry_price + amount * price) / total_amount
+            avg_price = (
+                pos.amount * pos.entry_price + amount * fill_price
+            ) / total_amount
             pos.amount = total_amount
             pos.entry_price = avg_price
             pos.current_price = price
-            pos.timestamp = int(time.time() * 1000)
+            pos.unrealized_pnl = (price / avg_price - 1) * 100
+            pos.unrealized_pnl_abs = (price - avg_price) * total_amount
 
         return self._make_order(symbol, OrderSide.BUY, amount, price)
 
@@ -168,7 +175,10 @@ class PaperBroker(BrokerABC):
             del self._positions[symbol]
         else:
             pos.current_price = price
-            pos.timestamp = int(time.time() * 1000)
+            pos.unrealized_pnl = (price / pos.entry_price - 1) * 100
+            pos.unrealized_pnl_abs = (
+                (price - pos.entry_price) * pos.amount
+            )
 
         return self._make_order(symbol, OrderSide.SELL, amount, price)
 

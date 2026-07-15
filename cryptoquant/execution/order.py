@@ -96,15 +96,19 @@ class Position:
     def from_ccxt(cls, raw: dict) -> "Position":
         entry_price = float(raw.get("entryPrice", raw.get("entry_price", 0)))
         current_price = float(raw.get("markPrice", raw.get("mark_price", 0)))
+        side = raw.get("side", "long")
 
         if entry_price > 0:
-            unrealized_pnl = (current_price / entry_price - 1) * 100
+            if side == "short":
+                unrealized_pnl = (1 - current_price / entry_price) * 100
+            else:
+                unrealized_pnl = (current_price / entry_price - 1) * 100
         else:
             unrealized_pnl = 0.0
 
         return cls(
             symbol=raw.get("symbol", ""),
-            side=raw.get("side", "long"),
+            side=side,
             amount=float(raw.get("contracts", raw.get("amount", 0))),
             entry_price=entry_price,
             current_price=current_price,

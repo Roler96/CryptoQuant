@@ -1,11 +1,16 @@
 """Tests for ClosedBarFeed — unclosed candle stripping."""
 
 import time
+from typing import cast
 from unittest.mock import MagicMock
 
 import pandas as pd
 
 from cryptoquant.data.closed_bar import ClosedBarFeed
+
+
+def _timestamp(value: object) -> float:
+    return cast(pd.Timestamp, value).value / 1_000_000_000
 
 
 def _make_live_feed(df: pd.DataFrame, timeframe: str = "1h"):
@@ -30,7 +35,7 @@ class TestClosedBarFeed:
             index=dates,
         )
         # Current time is well after all bars have closed
-        fake_now = dates[-1].timestamp() + 7200  # 2 hours after last bar open
+        fake_now = _timestamp(dates[-1]) + 7200  # 2 hours after last bar open
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df, timeframe="1h")
@@ -52,7 +57,7 @@ class TestClosedBarFeed:
             index=dates,
         )
         # Current time is 09:30 — last bar (09:00) hasn't closed yet
-        fake_now = pd.Timestamp("2024-01-01 09:30").timestamp()
+        fake_now = _timestamp(pd.Timestamp("2024-01-01 09:30"))
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df, timeframe="1h")
@@ -73,7 +78,7 @@ class TestClosedBarFeed:
             index=dates,
         )
         # Current time is just after the first bar opened — none closed
-        fake_now = pd.Timestamp("2024-01-01 00:01").timestamp()
+        fake_now = _timestamp(pd.Timestamp("2024-01-01 00:01"))
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df, timeframe="1h")
@@ -93,7 +98,7 @@ class TestClosedBarFeed:
              "close": [100] * 10, "volume": [1000] * 10},
             index=dates,
         )
-        fake_now = dates[-1].timestamp() + 7200
+        fake_now = _timestamp(dates[-1]) + 7200
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df, timeframe="1h")
@@ -109,7 +114,9 @@ class TestClosedBarFeed:
 
     def test_empty_feed(self, monkeypatch):
         """Empty DataFrame from raw feed passes through."""
-        df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        df = pd.DataFrame(
+            columns=pd.Index(["open", "high", "low", "close", "volume"])
+        )
         raw = _make_live_feed(df)
         cbf = ClosedBarFeed(raw)
 
@@ -128,7 +135,7 @@ class TestClosedBarFeed:
             index=dates,
         )
         # Current time: 10:43. Last bar (10:40) closes at 10:45 — still forming!
-        fake_now = pd.Timestamp("2024-01-01 10:43").timestamp()
+        fake_now = _timestamp(pd.Timestamp("2024-01-01 10:43"))
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df, timeframe="5m")
@@ -147,7 +154,7 @@ class TestClosedBarFeed:
              "close": [100] * 5, "volume": [1000] * 5},
             index=dates,
         )
-        fake_now = dates[-1].timestamp() + 7200
+        fake_now = _timestamp(dates[-1]) + 7200
         monkeypatch.setattr(time, "time", lambda: fake_now)
 
         raw = _make_live_feed(df)

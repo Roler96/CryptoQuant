@@ -91,6 +91,10 @@ class ManagedPositionLedger:
         """Record a buy order fill. Adds a FIFO lot."""
         if amount <= 0:
             raise ValueError(f"Buy amount must be positive, got {amount}")
+        if price <= 0:
+            raise ValueError(f"Buy price must be positive, got {price}")
+        if fee < 0:
+            raise ValueError(f"Buy fee cannot be negative, got {fee}")
         lot = Lot(
             amount=amount,
             price=price,
@@ -115,6 +119,10 @@ class ManagedPositionLedger:
         """
         if amount <= 0:
             raise ValueError(f"Sell amount must be positive, got {amount}")
+        if price <= 0:
+            raise ValueError(f"Sell price must be positive, got {price}")
+        if fee < 0:
+            raise ValueError(f"Sell fee cannot be negative, got {fee}")
 
         lots = self._lots.get(symbol, [])
         total_held = sum(lot.amount for lot in lots)
@@ -135,8 +143,12 @@ class ManagedPositionLedger:
             consumed.append((lot, take))
             entry_cost += take * lot.price
             # Prorate the lot's fee
-            entry_fee += (take / lot.amount) * lot.fee if lot.amount > 0 else 0
+            allocated_fee = (
+                (take / lot.amount) * lot.fee if lot.amount > 0 else 0
+            )
+            entry_fee += allocated_fee
             lot.amount -= take
+            lot.fee -= allocated_fee
             remaining -= take
             if lot.amount <= 0:
                 lots.pop(0)

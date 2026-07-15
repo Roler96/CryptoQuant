@@ -32,6 +32,7 @@ class EngineState:
     last_tick_time: int
     ledger_state: dict = field(default_factory=dict)
     trailing_anchor: float = 0.0
+    risk_state: dict = field(default_factory=dict)
 
 
 class StateManager:
