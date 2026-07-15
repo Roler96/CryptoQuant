@@ -2,13 +2,20 @@
 import functools
 import os
 import random
+import re
 import time
+from typing import cast
 
 import ccxt
 import pandas as pd
 from loguru import logger
 
+from cryptoquant.exceptions import DataValidationError
+
 REQUIRED_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+_TIMEFRAME_RE = re.compile(r"^(\d+)([mhdw])$")
+_TIMEFRAME_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
 def get_proxy_from_env() -> str | None:
@@ -24,6 +31,28 @@ def get_proxy_from_env() -> str | None:
 def missing_ohlcv_columns(df: pd.DataFrame) -> list[str]:
     """Return which of the required OHLCV columns are absent from df."""
     return [c for c in REQUIRED_OHLCV_COLUMNS if c not in df.columns]
+
+
+def timeframe_to_timedelta(timeframe: str) -> pd.Timedelta:
+    """Convert an exchange timeframe ('5m', '4h', '1d') to a Timedelta.
+
+    Never hand an exchange timeframe straight to pandas: their alias
+    vocabularies overlap with different meanings. df.resample("5m") buckets
+    by five *months* — pandas reads 'm' as month-end — and only emits a
+    FutureWarning while doing it, so a 5-minute resample silently collapses
+    the whole history into a couple of bars. Timedelta has no such
+    ambiguity, and resample() accepts one directly.
+    """
+    match = _TIMEFRAME_RE.match(timeframe.strip())
+    if not match:
+        raise DataValidationError(
+            f"Unsupported timeframe {timeframe!r}; expected <n><m|h|d|w>, e.g. '4h'"
+        )
+    amount, unit = match.groups()
+    # cast: the stub admits NaTType, which a finite seconds value cannot produce.
+    return cast(
+        pd.Timedelta, pd.Timedelta(seconds=int(amount) * _TIMEFRAME_SECONDS[unit])
+    )
 
 
 def safe_filename(text: str, *, extra_chars: str = "", lower: bool = False) -> str:
