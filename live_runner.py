@@ -27,8 +27,10 @@ from cryptoquant.monitor.journal import TradeJournal
 from cryptoquant.monitor.logger import setup_logging
 from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.risk.manager import RiskManager
+from cryptoquant.exceptions import StrategyError
 from cryptoquant.risk.sizer import SizerMethod, create_sizer
 from cryptoquant.strategy.base import Strategy
+from cryptoquant.strategy.resolve import resolve_strategy as _resolve_strategy
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -82,10 +84,7 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def resolve_strategy(strategy_name: str | None, config) -> Strategy:
     """Resolve strategy class from name or config."""
-    if strategy_name:
-        name = strategy_name
-    else:
-        name = getattr(config.trading, "strategy", None)
+    name = strategy_name or getattr(config.trading, "strategy", None)
 
     if not name:
         logger.error(
@@ -93,30 +92,11 @@ def resolve_strategy(strategy_name: str | None, config) -> Strategy:
         )
         sys.exit(1)
 
-    # Try to import from strategies package
     try:
-        import importlib
-        module = importlib.import_module(f"strategies.{name}")
-
-        # Find the Strategy subclass (skip the base class and re-exports)
-        strategy_cls = None
-        for attr_name in dir(module):
-            obj = getattr(module, attr_name)
-            if (
-                isinstance(obj, type)
-                and issubclass(obj, Strategy)
-                and obj is not Strategy
-            ):
-                strategy_cls = obj
-                break
-
-        if strategy_cls:
-            return strategy_cls()
-    except ImportError:
-        pass
-
-    logger.error(f"Strategy '{name}' not found in strategies/ package")
-    sys.exit(1)
+        return _resolve_strategy(name)
+    except StrategyError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
 
 def health_check_startup(broker, data_feed, risk_manager) -> bool:
