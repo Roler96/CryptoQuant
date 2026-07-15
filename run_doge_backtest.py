@@ -2,10 +2,9 @@
 
 Usage:
     uv run python run_doge_backtest.py
-    uv run python run_doge_backtest.py --strategy doge_spot_regime_switch
     uv run python run_doge_backtest.py --symbol ASTR/USDT --exchange binance
     uv run python run_doge_backtest.py --start 2021-01-01 --end 2026-07-12 \
-        --commission-bps 10 --slippage-bps 2
+        --resample-from 1h --commission-bps 10 --slippage-bps 5
 
 The strategy is resolved by module name from strategies/, the same way
 live_runner resolves trading.strategy, so both run the same class.
@@ -27,7 +26,7 @@ TIMEFRAME = "4h"
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--strategy", default="doge_spot_donchian_sma",
+    p.add_argument("--strategy", default="doge_donchian_trend",
                    help="module name under strategies/ (default: %(default)s)")
     p.add_argument("--symbol", default="DOGE/USDT")
     p.add_argument("--exchange", default="okx")

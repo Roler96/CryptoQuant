@@ -24,7 +24,15 @@ trading:
   stop_loss_pct: null
   take_profit_pct: null
   max_hold_hours: null
-  strategy: atr_breakout_trend
+  # Deliberately empty: there is no validated default strategy. The only
+  # surviving candidate is DogeDonchianTrend, and it needs 4h/swap rather
+  # than the 5m/spot defaults above — naming it here would hand a bare
+  # `live_runner.py` a strategy running on the wrong timeframe and account
+  # type. Run it through its own profile instead:
+  #     uv run python live_runner.py --config config.doge_donchian.yaml
+  # Leaving this empty makes live_runner exit with that instruction rather
+  # than start something unvalidated.
+  strategy: ""
 
 risk:
   max_positions: 3

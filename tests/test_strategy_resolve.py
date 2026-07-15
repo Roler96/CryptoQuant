@@ -6,6 +6,7 @@ classes.
 """
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -18,10 +19,7 @@ class TestResolveShippedStrategies:
     @pytest.mark.parametrize(
         "name, expected",
         [
-            ("atr_breakout_trend", "ATRBreakoutTrend"),
             ("doge_donchian_trend", "DogeDonchianTrend"),
-            ("doge_spot_donchian_sma", "DogeSpotDonchianSma"),
-            ("doge_spot_regime_switch", "DogeSpotRegimeSwitch"),
         ],
     )
     def test_resolves_to_expected_class(self, name, expected):
@@ -29,6 +27,18 @@ class TestResolveShippedStrategies:
 
     def test_returns_an_instance(self):
         assert isinstance(resolve_strategy("doge_donchian_trend"), Strategy)
+
+    def test_every_shipped_strategy_resolves(self):
+        """Catches a strategy module that resolution cannot reach — and keeps
+        the parametrize list above honest as strategies come and go."""
+        modules = sorted(
+            p.stem
+            for p in (Path(__file__).resolve().parent.parent / "strategies").glob("*.py")
+            if p.stem != "__init__"
+        )
+        assert modules, "no strategies found — this guard would be vacuous"
+        for name in modules:
+            assert issubclass(resolve_strategy_class(name), Strategy)
 
 
 class TestResolveErrors:
