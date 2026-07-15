@@ -16,11 +16,19 @@ def mock_ccxt():
         mock.okx = mock_cls
         import ccxt as real_ccxt
 
-        mock.NetworkError = real_ccxt.NetworkError
-        mock.AuthenticationError = real_ccxt.AuthenticationError
-        mock.InsufficientFunds = real_ccxt.InsufficientFunds
-        mock.InvalidOrder = real_ccxt.InvalidOrder
-        mock.ExchangeError = real_ccxt.ExchangeError
+        # Exception types must be the real classes — Broker's retry and
+        # order-lookup paths branch on isinstance/except against them, and
+        # a MagicMock in an except clause raises TypeError instead.
+        for name in (
+            "NetworkError",
+            "RateLimitExceeded",
+            "AuthenticationError",
+            "InsufficientFunds",
+            "InvalidOrder",
+            "OrderNotFound",
+            "ExchangeError",
+        ):
+            setattr(mock, name, getattr(real_ccxt, name))
         yield mock, mock_instance
 
 

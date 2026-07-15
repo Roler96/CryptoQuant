@@ -1,5 +1,8 @@
 """Exchange broker abstraction — ccxt wrapper with retry logic."""
 import time
+import uuid
+from collections.abc import Callable
+from typing import NoReturn, TypeVar
 
 import ccxt
 from loguru import logger
@@ -13,6 +16,8 @@ from cryptoquant.execution.broker_abc import BrokerABC
 from cryptoquant.execution.order import Order, OrderStatus, Position
 from cryptoquant.position.ledger import ManagedPositionLedger
 from cryptoquant.utils import get_proxy_from_env, retry_on_network
+
+T = TypeVar("T")
 
 
 class Broker(BrokerABC):
@@ -70,7 +75,7 @@ class Broker(BrokerABC):
     def can_short(self) -> bool:
         return self.account_type == "swap"
 
-    def _handle_ccxt_error(self, e: Exception, context: str) -> None:
+    def _handle_ccxt_error(self, e: Exception, context: str) -> NoReturn:
         if isinstance(e, ccxt.NetworkError):
             logger.error(f"[{context}] Network error: {e}")
             raise ExecutionError(f"Exchange network error: {e}") from e
@@ -87,31 +92,138 @@ class Broker(BrokerABC):
             logger.error(f"[{context}] Unknown error: {e}")
             raise
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
-    def get_balance(self, quote: str = "USDT") -> float:
+    def _call_with_retry(
+        self,
+        call: Callable[[], T],
+        context: str,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+    ) -> T:
+        """Run a read-only or idempotent ccxt call, retrying network failures.
+
+        The retry must wrap the ccxt call itself: retry_on_network only
+        recognizes ccxt's own network types, so _handle_ccxt_error's
+        conversion to ExecutionError has to happen out here, once the
+        retries are spent. Permanent failures (AuthenticationError,
+        InvalidOrder) are not network types and so convert on the first
+        attempt without burning the backoff budget.
+
+        Order placement is NOT idempotent — see _place_order.
+        """
+
+        @retry_on_network(max_retries=max_retries, base_delay=base_delay)
+        def attempt() -> T:
+            return call()
+
         try:
-            balance = self.exchange.fetch_balance()
-            free = balance.get(quote, {}).get("free", 0)
-            if free is None:
-                free = 0.0
-            return float(free)
+            return attempt()
         except Exception as e:
-            self._handle_ccxt_error(e, "get_balance")
-            raise
+            self._handle_ccxt_error(e, context)
+
+    def _new_client_order_id(self) -> str:
+        """Mint an idempotency key. Alphanumeric and 22 chars to satisfy
+        the tightest exchange limit we target (OKX clOrdId, 32)."""
+        return f"cq{uuid.uuid4().hex[:20]}"
 
     @retry_on_network(max_retries=3, base_delay=1.0)
-    def get_ticker(self, symbol: str) -> dict:
+    def _find_order_by_client_id(
+        self, symbol: str, client_order_id: str
+    ) -> Order | None:
+        """Return the order carrying our key, or None if the exchange has none.
+
+        Raises rather than returning None when the exchange cannot be
+        reached: "could not check" must never be read as "never placed",
+        or the caller would re-send an order that is already live.
+        """
         try:
-            ticker = self.exchange.fetch_ticker(symbol)
-            return {
-                "bid": ticker.get("bid", 0),
-                "ask": ticker.get("ask", 0),
-                "last": ticker.get("last", 0),
-                "timestamp": ticker.get("timestamp", 0),
-            }
-        except Exception as e:
-            self._handle_ccxt_error(e, f"get_ticker({symbol})")
+            raw = self.exchange.fetch_order(
+                client_order_id, symbol, {"clientOrderId": client_order_id}
+            )
+            if raw:
+                return Order.from_ccxt(raw, exchange=self.exchange_name)
+        except ccxt.OrderNotFound:
+            return None
+        except (ccxt.NetworkError, ConnectionError, TimeoutError):
             raise
+        except Exception:
+            pass  # exchange can't look up by key — fall back to listing orders
+
+        scanned = False
+        for fetch in (self.exchange.fetch_open_orders, self.exchange.fetch_closed_orders):
+            try:
+                candidates = fetch(symbol)
+            except (ccxt.NetworkError, ConnectionError, TimeoutError):
+                raise
+            except Exception:
+                continue
+            scanned = True
+            for candidate in candidates:
+                if candidate.get("clientOrderId") == client_order_id:
+                    return Order.from_ccxt(candidate, exchange=self.exchange_name)
+
+        if not scanned:
+            raise ExecutionError(
+                f"Cannot confirm whether order {client_order_id} on {symbol} "
+                f"was placed: {self.exchange_name} supports no lookup by "
+                f"clientOrderId. Refusing to re-send."
+            )
+        return None
+
+    def _place_order(
+        self,
+        symbol: str,
+        context: str,
+        place: Callable[[str], dict],
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+    ) -> Order:
+        """Place an order, retrying network failures under an idempotency key.
+
+        A lost response is ambiguous — the order may already be live on the
+        exchange. Before every re-send we look the key up and adopt the
+        order if it landed, so a timeout can never open a second position.
+        """
+        client_order_id = self._new_client_order_id()
+        sent = False
+
+        @retry_on_network(max_retries=max_retries, base_delay=base_delay)
+        def attempt() -> Order:
+            nonlocal sent
+            if sent:
+                existing = self._find_order_by_client_id(symbol, client_order_id)
+                if existing is not None:
+                    logger.warning(
+                        f"[{context}] Response was lost but order "
+                        f"{client_order_id} did land — adopting it instead "
+                        f"of re-sending."
+                    )
+                    return existing
+            sent = True
+            raw = place(client_order_id)
+            return Order.from_ccxt(raw, exchange=self.exchange_name)
+
+        try:
+            return attempt()
+        except Exception as e:
+            self._handle_ccxt_error(e, context)
+
+    def get_balance(self, quote: str = "USDT") -> float:
+        balance = self._call_with_retry(self.exchange.fetch_balance, "get_balance")
+        free = balance.get(quote, {}).get("free", 0)
+        if free is None:
+            free = 0.0
+        return float(free)
+
+    def get_ticker(self, symbol: str) -> dict:
+        ticker = self._call_with_retry(
+            lambda: self.exchange.fetch_ticker(symbol), f"get_ticker({symbol})"
+        )
+        return {
+            "bid": ticker.get("bid", 0),
+            "ask": ticker.get("ask", 0),
+            "last": ticker.get("last", 0),
+            "timestamp": ticker.get("timestamp", 0),
+        }
 
     def normalize_order_amount(
         self, symbol: str, amount: float, price: float | None = None
@@ -180,90 +292,82 @@ class Broker(BrokerABC):
             logger.warning(f"Could not load market metadata for {symbol}")
             return {}
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def market_buy(self, symbol: str, amount: float) -> Order:
         logger.info(f"MARKET BUY {symbol}: amount={amount}")
-        try:
-            raw = self.exchange.create_market_buy_order(symbol, amount)
-            return Order.from_ccxt(raw, exchange=self.exchange_name)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"market_buy({symbol})")
-            raise
+        return self._place_order(
+            symbol,
+            f"market_buy({symbol})",
+            lambda coid: self.exchange.create_market_buy_order(
+                symbol, amount, {"clientOrderId": coid}
+            ),
+        )
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def market_sell(self, symbol: str, amount: float) -> Order:
         logger.info(f"MARKET SELL {symbol}: amount={amount}")
-        try:
-            raw = self.exchange.create_market_sell_order(symbol, amount)
-            return Order.from_ccxt(raw, exchange=self.exchange_name)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"market_sell({symbol})")
-            raise
+        return self._place_order(
+            symbol,
+            f"market_sell({symbol})",
+            lambda coid: self.exchange.create_market_sell_order(
+                symbol, amount, {"clientOrderId": coid}
+            ),
+        )
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def limit_buy(self, symbol: str, amount: float, price: float) -> Order:
         logger.info(f"LIMIT BUY {symbol}: amount={amount}, price={price}")
-        try:
-            raw = self.exchange.create_limit_buy_order(symbol, amount, price)
-            return Order.from_ccxt(raw, exchange=self.exchange_name)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"limit_buy({symbol})")
-            raise
+        return self._place_order(
+            symbol,
+            f"limit_buy({symbol})",
+            lambda coid: self.exchange.create_limit_buy_order(
+                symbol, amount, price, {"clientOrderId": coid}
+            ),
+        )
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def limit_sell(self, symbol: str, amount: float, price: float) -> Order:
         logger.info(f"LIMIT SELL {symbol}: amount={amount}, price={price}")
-        try:
-            raw = self.exchange.create_limit_sell_order(symbol, amount, price)
-            return Order.from_ccxt(raw, exchange=self.exchange_name)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"limit_sell({symbol})")
-            raise
+        return self._place_order(
+            symbol,
+            f"limit_sell({symbol})",
+            lambda coid: self.exchange.create_limit_sell_order(
+                symbol, amount, price, {"clientOrderId": coid}
+            ),
+        )
 
-    @retry_on_network(max_retries=2, base_delay=0.5)
     def cancel_order(self, order_id: str, symbol: str) -> bool:
-        try:
-            self.exchange.cancel_order(order_id, symbol)
-            return True
-        except Exception as e:
-            self._handle_ccxt_error(e, f"cancel_order({order_id})")
-            return False
+        self._call_with_retry(
+            lambda: self.exchange.cancel_order(order_id, symbol),
+            f"cancel_order({order_id})",
+            max_retries=2,
+            base_delay=0.5,
+        )
+        return True
 
-    @retry_on_network(max_retries=2, base_delay=0.5)
     def cancel_all_orders(self, symbol: str) -> int:
-        try:
-            orders = self.exchange.fetch_open_orders(symbol)
-            count = 0
-            for o in orders:
-                try:
-                    self.exchange.cancel_order(o["id"], symbol)
-                    count += 1
-                except Exception:
-                    pass
-            return count
-        except Exception as e:
-            self._handle_ccxt_error(e, f"cancel_all_orders({symbol})")
-            return 0
+        orders = self._call_with_retry(
+            lambda: self.exchange.fetch_open_orders(symbol),
+            f"cancel_all_orders({symbol})",
+            max_retries=2,
+            base_delay=0.5,
+        )
+        count = 0
+        for o in orders:
+            try:
+                self.cancel_order(o["id"], symbol)
+                count += 1
+            except Exception:
+                pass
+        return count
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def get_open_orders(self, symbol: str) -> list[Order]:
-        try:
-            raw_orders = self.exchange.fetch_open_orders(symbol)
-            return [Order.from_ccxt(o, exchange=self.exchange_name) for o in raw_orders]
-        except Exception as e:
-            self._handle_ccxt_error(e, f"get_open_orders({symbol})")
-            return []
+        raw_orders = self._call_with_retry(
+            lambda: self.exchange.fetch_open_orders(symbol),
+            f"get_open_orders({symbol})",
+        )
+        return [Order.from_ccxt(o, exchange=self.exchange_name) for o in raw_orders]
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def get_position(self, symbol: str) -> Position | None:
-        try:
-            if self.account_type == "spot":
-                return self._get_spot_position(symbol)
-            else:
-                return self._get_swap_position(symbol)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"get_position({symbol})")
-            return None
+        if self.account_type == "spot":
+            return self._get_spot_position(symbol)
+        return self._get_swap_position(symbol)
 
     def _get_spot_position(self, symbol: str) -> Position | None:
         """Return strategy-owned spot position only.
@@ -281,8 +385,7 @@ class Broker(BrokerABC):
             return None
 
         try:
-            ticker = self.exchange.fetch_ticker(symbol)
-            current_price = float(ticker.get("last", 0))
+            current_price = float(self.get_ticker(symbol)["last"])
         except Exception:
             current_price = snapshot.avg_entry_price
 
@@ -298,18 +401,24 @@ class Broker(BrokerABC):
         )
 
     def _get_swap_position(self, symbol: str) -> Position | None:
-        try:
-            positions = self.exchange.fetch_positions([symbol])
-            for pos in positions:
-                amount = float(pos.get("contracts", 0) or 0)
-                if amount > 0:
-                    return Position.from_ccxt(pos)
-        except Exception:
-            pass
+        """Return the open swap position, or None if genuinely flat.
+
+        Failures propagate: swallowing them here would report an
+        unreachable exchange as "no position" and invite a double entry.
+        """
+        positions = self._call_with_retry(
+            lambda: self.exchange.fetch_positions([symbol]),
+            f"get_position({symbol})",
+        )
+        for pos in positions:
+            amount = float(pos.get("contracts", 0) or 0)
+            if amount > 0:
+                return Position.from_ccxt(pos)
         return None
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def wait_for_fill(self, order_id: str, symbol: str, timeout: int = 30) -> Order:
+        """Poll until the order fills. fetch_order retries network blips
+        internally, so retrying out here would only restart the clock."""
         start = time.time()
         while time.time() - start < timeout:
             order = self.fetch_order(order_id, symbol)
@@ -324,14 +433,12 @@ class Broker(BrokerABC):
             time.sleep(1)
         raise ExecutionError(f"Order {order_id} not filled within {timeout}s")
 
-    @retry_on_network(max_retries=3, base_delay=1.0)
     def fetch_order(self, order_id: str, symbol: str) -> Order:
-        try:
-            raw = self.exchange.fetch_order(order_id, symbol)
-            return Order.from_ccxt(raw, exchange=self.exchange_name)
-        except Exception as e:
-            self._handle_ccxt_error(e, f"fetch_order({order_id})")
-            raise
+        raw = self._call_with_retry(
+            lambda: self.exchange.fetch_order(order_id, symbol),
+            f"fetch_order({order_id})",
+        )
+        return Order.from_ccxt(raw, exchange=self.exchange_name)
 
     def reconnect(self) -> None:
         logger.warning(f"Reconnecting to {self.exchange_name}...")
