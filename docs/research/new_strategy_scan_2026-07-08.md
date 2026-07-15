@@ -1,8 +1,25 @@
 # New Strategy Family Scan (2026-07-08)
 
+> ## ⚠️ 基准已作废（审计于 2026-07-15）
+>
+> 本文的判据是「打不过 ATRBreakoutTrend」，而**该基准本身已被推翻**：它的
+> 数字产自 2026-07-13 引擎语义修复之前，修复后同一段数据实测为 **-90.6%
+> / Sharpe -5.10**（详见 `sl_tp_study_atr_breakout_trend.md` 的批注）。
+> 该策略已于 2026-07-15 从仓库移除。
+>
+> 因此第 1 条结论「Nothing beats the incumbent」**不再成立** —— 现役策略在
+> 修正后的引擎上是净亏的，「输给它」不再是否决理由。
+>
+> 但这**不等于**六个候选族就此翻案。它们各自的绝对数字（IS/OOS Sharpe）同样
+> 产自修复前引擎，方向未知：修复主要惩罚频繁离场的策略，而 5m 级别的候选族
+> 大多如此。要复活其中任何一族，必须在修正后的引擎上重跑，不能引用本文数字。
+>
+> 保留有效的是**方法论结论**：不要在同一年数据上重刷网格（第 4 条），以及
+> 「拒绝族登记表」作为「已试过什么」的记录 —— 但每一格的数字都要重测。
+
 > Six candidate strategy families — none present in `strategies/` — were
-> implemented and backtested against the production baseline. **Verdict: no
-> candidate beats ATRBreakoutTrend; all six are rejected for deployment.**
+> implemented and backtested against the production baseline. **Verdict (作废):
+> no candidate beats ATRBreakoutTrend; all six are rejected for deployment.**
 > This doc records what was tried so it is not re-tried from scratch.
 
 **Data:** OKX BTC/USDT 5m, 2025-07-08 → 2026-07-08 (105,130 bars), plus a 1h

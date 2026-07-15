@@ -14,28 +14,34 @@
 
 ## P1 — 高优先级
 
-### 1. DogeSpotRegimeSwitch 的残余优势极薄，且没有可用的 OOS 证据
+### 1. 仓库只剩一个候选策略，且它不是 OOS 证据
 
-**位置:** `strategies/doge_spot_regime_switch.py`、`config.doge_regime_switch.yaml`
+**位置:** `strategies/doge_donchian_trend.py`、`config.doge_donchian.yaml`
 
-**状态:** 原条目"从未被端到端回测验证过"已于 2026-07-15 处理——基线跑出来了，但过程中发现该策略带 20 小时前视（详见下方已完成）。修复后基线为：
+**状态:** 2026-07-15 移除三个已失效策略后（详见下方已完成），`strategies/` 只剩 `DogeDonchianTrend`。它是唯一在 2026-07-13 引擎修复后重校过的，实测复现：全期 **+1,747% / Sharpe 0.69 / MaxDD 77.8% / 54 笔**（15 bps/边），与协议文档的 +1,756% / 54 笔逐笔对上。
 
-| 分段 | 修正后（切片） | 修正后（冷启动） | 研究笔记声称 |
-|---|---|---|---|
-| Train | +1317% Sh 0.97 | +1317% Sh 0.97 | +891% Sh 1.15 |
-| Val | +16% Sh 0.51 | **+5%** Sh 0.40 | +98% Sh 1.31 |
-| Test | +34% Sh 0.97 | **+13%** Sh 0.53 | +131% Sh 2.19 |
+**影响:** 但它**不构成独立 OOS 证据**：该族此前已接触全样本；去掉最佳一笔全期 +1,756% → **+330%**；trade-level bootstrap 全期亏损概率约 **10%**；locked test 段已烧毁（见记忆 `doge-research-protocol`）。1x 下必须接受 50–90% 级别的 MTM 回撤。
 
-**影响:** 修正后仍满足研究笔记自定的「通过标准」（三分段为正、Test Sharpe > 0），但该标准只要求"为正"，极弱。冷启动口径下 Val 一年 23 笔 +5%、Test 一年 13 笔 +13%，与噪声难以区分。且笔记自述该族已接触全样本，**locked test 段已被烧毁**（见记忆 doge-research-protocol）——这些数字不是 OOS 证据。
-
-**建议:** 不要基于重跑历史决定上线。该配置自称"testnet 验证档"，真正的下一步是测试网/纸面交易攒新样本；若要重新评估参数，按协议算新研究，且 test 段只能等新数据。
+**建议:** 唯一能产生新信息的是**测试网/纸面交易的新样本**，重跑历史不会。上线门槛沿用 `doge_donchian_trend_2026-07-13.md` 第四节（测试网 20 笔逐单核对、费用回写、100 USDT 灰度限额）。
 
 **复现:**
 ```
-uv run python run_doge_backtest.py --strategy doge_spot_regime_switch \
-  --symbol DOGE/USDT --exchange okx --start 2021-01-01 --end 2026-07-12 \
-  --resample-from 1h --commission-bps 10 --slippage-bps 2
+uv run python run_doge_backtest.py --strategy doge_donchian_trend \
+  --symbol DOGE-USDT-SWAP --exchange okx --start 2021-01-01 --end 2026-07-12 \
+  --resample-from 1h --commission-bps 10 --slippage-bps 5
 ```
+
+---
+
+### 2. 回测脚本的 timeframe 写死为 4h
+
+**位置:** `run_doge_backtest.py:23`（`TIMEFRAME = "4h"`）
+
+**证据:** 2026-07-15 参数化时加了 `--strategy`，但周期仍是常量。核对 ATRBreakoutTrend（5m）时因此无法用该脚本，只能写内联脚本。
+
+**影响:** 任何非 4h 策略都无法用标准脚本跑基线——而"能不能一条命令复现基线"正是这轮审计反复用到的能力。
+
+**建议:** 加 `--timeframe`，默认取 `strategy.timeframe`（策略类已声明），与 `--resample-from` 组合。
 
 ---
 
@@ -48,11 +54,20 @@ uv run python run_doge_backtest.py --strategy doge_spot_regime_switch \
 | 位置 | 写法 | 为什么是空的 |
 |------|------|--------------|
 | `tests/test_fetcher.py` chunk-count 测试 | 喂 4 个 `NetworkError` 却只断言错误信息 | 多余的 side_effect 从未被消费，掩盖了重试失效 |
-| `tests/test_doge_spot_donchian_sma.py` | `assert (sig == 0).any()` | 序列本来就全是 0，恒真 |
-| `tests/test_doge_spot_regime_switch.py` | `assert (sig == 0).any()` | 同上 |
+| ~~`tests/test_doge_spot_donchian_sma.py`~~ | `assert (sig == 0).any()` | 序列本来就全是 0，恒真（文件已随策略移除） |
+| ~~`tests/test_doge_spot_regime_switch.py`~~ | `assert (sig == 0).any()` | 同上（文件已随策略移除） |
 | `tests/test_p0_regression.py:478` | 测独立装饰器函数 | 没穿过 Broker，测不到真正的 bug |
 
 **建议:** 用"改坏源码，测试是否变红"的方式抽查关键路径测试（历次修复均已用 `git stash` 验证过新测试在旧代码上确实 FAILED）。重点排查 `.any()` / `>= 0` / 只断言异常信息 这几类写法。
+
+**2026-07-15 新增两个反面教材**（均为本次写测试时自己踩到、`git stash` 验证后否决的写法，记下来免得后人再试）：
+
+| 试过的写法 | 为什么在坏代码上是绿的 |
+|------|--------------|
+| 对 `generate_signal()` 做端到端前缀不变性检查 | bull/bear 状态机会吸收孤立的门控翻转，除非正好落在决策 bar 上。检查 400 根仍 0 违例 |
+| 扰动某天最后一根 bar，看当天更早的 bar 是否变化 | 是否翻转取决于样本；换个随机种子就变绿 |
+
+有效的是**门控层前缀不变性**（旧代码上 42 处违例）。教训：不变量要挑在**缺陷所在的那一层**断言，套在下游会被状态机吃掉。
 
 ---
 
@@ -60,13 +75,13 @@ uv run python run_doge_backtest.py --strategy doge_spot_regime_switch \
 
 **ruff:** 已清零（2026-07-14 commit 9829c3e），`uv run ruff check .` 通过。
 
-**pyright — 35 项:** 集中在 `tests/test_position_ledger.py`(14)、`tests/test_closed_bar.py`(7)，其余分散。多为 `reportOptionalMemberAccess`（对 `X | None` 直接取属性）。
+**pyright — 29 项:** 集中在 `tests/test_position_ledger.py`(14)、`tests/test_closed_bar.py`(7)，其余分散。多为 `reportOptionalMemberAccess`（对 `X | None` 直接取属性）。（2026-07-15 从 35 降至 29，纯粹因为移除策略带走了 6 项，不是修的。）
 
 ---
 
 ### 4. `review-2026-07-10.md` 的指标已过期，且需逐项复核
 
-**证据:** 该文档称「Ruff（已跟踪文件）通过」「Pyright 4 errors」，实测当前为 **ruff 0 项、pyright 35 项**。文档还称「测试 494 passed」，当前为 **618 passed**。
+**证据:** 该文档称「Ruff（已跟踪文件）通过」「Pyright 4 errors」，实测当前为 **ruff 0 项、pyright 29 项**。文档还称「测试 494 passed」，当前为 **585 passed**。
 
 另一方面，它列的部分 P0 看起来**已经修了**（`live.py` 里有 `P0: Unknown != Flat` 的注释和对应实现，`tests/test_p0_regression.py` 覆盖了未闭合 K 线、持仓未知、策略持仓归属、PnL 符号、signal_reverse look-ahead 等）。3.4 已于 2026-07-15 修复。
 
@@ -75,6 +90,17 @@ uv run python run_doge_backtest.py --strategy doge_spot_regime_switch \
 ---
 
 ## 附：2026-07-15 已完成
+
+- **移除三个已失效策略，`strategies/` 只剩 `doge_donchian_trend.py`**（历史上共出现过 13 个策略实现）：
+  | 移除 | 理由 |
+  |---|---|
+  | `atr_breakout_trend.py` | **基线全部来自引擎缺陷**。它是 `config.yaml` 的默认策略、且是 `new_strategy_scan` 里六个候选族的否决基准，但从未在 2026-07-13 引擎修复后重跑过。同数据同成本只切引擎版本实测：修复前 **+57.2%/Sharpe 1.34** → 修复后 **-90.6%/Sharpe -5.10**。另：它输出即持仓却未设 `signal_is_position`；打开后更差（-98.4%）。**遗留疑点**：实测 1020 笔 vs 文档 430 笔，窗口仅差 2 天不足以解释，复活前须先查清。 |
+  | `doge_spot_donchian_sma.py` | 2026-07-14 已正式否决（20h 前视 / test 段选择偏差 / 实盘永不平仓），记忆记着「不得复活」。 |
+  | `doge_spot_regime_switch.py` | 前视本次已修，修正后仍满足其验收标准，但那标准只要求「为正」；冷启动 Val +5%（23 笔）/ Test +13%（13 笔），与噪声难分，不值得占测试网名额。连同 `config.doge_regime_switch.yaml` 一并移除。 |
+
+  连带处理：`config.yaml` 的 `trading.strategy` **置空**（而非改指 `doge_donchian_trend`）—— 后者是 4h/swap，而 `config.yaml` 是 5m/spot，指过去会让裸跑 `live_runner.py` 拿到一个配错周期与账户类型的策略；置空则给出「请指定 --strategy」的明确报错。跑唯一候选请用 `--config config.doge_donchian.yaml`。`run_doge_backtest.py` 默认策略改为 `doge_donchian_trend`；`test_strategy_resolve.py` 新增守卫，遍历 `strategies/` 下每个模块确认都能解析，免得参数化列表随策略增删而腐烂。
+
+- **补齐 5 份研究文档的审计批注**（此前读起来像绿灯）：`doge_spot_donchian_sma`（已否决却无批注，正文仍写「进入测试网候选阶段」）、`sl_tp_study_atr_breakout_trend`（基线作废）、`new_strategy_scan_2026-07-08`（判据是「打不过现役」，而现役已作废——但六个候选族**不因此翻案**，它们的绝对数字同样产自修复前引擎，要复活须重跑）、`streak_exhaustion_fade`（代码已被 `f61ea64` 删除且未记原因；数字同批作废）、`filter_rationale`（描述的两个策略已不在仓库，自称「唯一真相来源」已脱节）。
 
 - **DogeSpotRegimeSwitch 的 20 小时前视（新发现，原 P1-4 的副产品）**：`_daily_trend()` 用 `resample("1D").last()` 取当日最终收盘、无 shift 地 ffill 回当天全部 4h bar —— 当天 00:00 的 bar 用上了当天 20:00 的收盘。**与 2026-07-14 否决 `DogeSpotDonchianSma` 的是同一个构造**；那次审计的结论只落到了那一个策略上，这个兄弟策略共用同一段代码却没人回头查。同文件里 `_bull_channels` / `_bear_drawdown` / `_vol_filter` 全都 `.shift(1)` 了，只有它漏了；研究笔记还明写「所有通道和均线均 shift(1)」。已加 daily `shift(1)` 修复，并给 `docs/research/doge_regime_switch_2026-07-14.md` 加了审计批注。
   - 测试：`TestDailyGateCausality::test_gate_is_prefix_invariant`（门控在第 i 根的值不得随之后的 bar 变化）。旧代码上抓到 42 处违例。**另有两种写法被试过并否决**，因为它们在坏代码上是绿的：对 `generate_signal()` 做端到端前缀检查（状态机会吸收孤立的门控翻转），以及扰动某天最后一根 bar（是否翻转取决于样本）。

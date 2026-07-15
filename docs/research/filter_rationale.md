@@ -1,10 +1,20 @@
 # Strategy Filter Rationale
 
-> Why each filter exists, what happens when you disable it, and the backtest
-> evidence. This document is the single source of truth for filter decisions.
-> **Never disable a filter without reading this first.**
+> ## ⚠️ 已脱节（标注于 2026-07-15）
+>
+> 本文覆盖的两个策略 **SpringReversal（`spring.py`）与 WickInversion
+> （`wick.py`）都已不在仓库中**，本文因此不再是任何在产代码的「真相来源」。
+> 现存策略只有 `doge_donchian_trend.py`，它不使用本文描述的任何过滤器。
+>
+> 保留价值在于**方法论**：「General Principles」一节关于过滤器为何存在、
+> 关掉会发生什么的推理仍然适用于新策略。但每条具体数字都产自当时的引擎与
+> 当时的策略版本，不可直接引用。
 
-Last updated: 2026-06-30
+> Why each filter exists, what happens when you disable it, and the backtest
+> evidence. This document was the single source of truth for filter decisions
+> **while those strategies existed**.
+
+Last updated: 2026-06-30（内容）／2026-07-15（脱节标注）
 
 ---
 
