@@ -42,13 +42,11 @@ exclude = [".venv", "data", "logs", "state"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+timeout = 120
 markers = [
     "integration: tests that hit real exchange APIs (skip in CI by default)",
     "slow: tests that take longer than 30 seconds",
 ]
-
-[tool.pytest_timeout]
-timeout = 120
 
 [tool.coverage.run]
 source = ["cryptoquant"]
