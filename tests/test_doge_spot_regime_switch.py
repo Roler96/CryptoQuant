@@ -253,3 +253,69 @@ class TestDogeSpotRegimeSwitch:
         df = _make_4h_df([100.0] * 50)
         with pytest.raises(StrategyError):
             DogeSpotRegimeSwitch().generate_signal_for_position(df, "short")
+
+
+class TestDailyGateCausality:
+    """The daily SMA gate must never see its own day's later bars.
+
+    resample("1D").last() stamps a day's final close onto that day's 00:00
+    index, so ffilling it onto the 4h bars without a daily shift(1) hands
+    every bar of the day a close up to 20h in its own future. That exact
+    construct got DogeSpotDonchianSma vetoed on 2026-07-14 (Test +61% ->
+    -5.9% once corrected), and this strategy shipped with it too.
+
+    test_gate_is_prefix_invariant is pinned against the unshifted
+    implementation, where it finds 42 offending bars. Two formulations
+    were tried and rejected for staying green on the broken gate: an
+    end-to-end prefix check on generate_signal() (the bull/bear state
+    machine absorbs an isolated gate flip unless it lands on a decision
+    bar), and perturbing a single day's final bar (whether the flip shows
+    up depends on the sample).
+    """
+
+    @staticmethod
+    def _frame(close: pd.Series) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=close.index,
+        )
+
+    @staticmethod
+    def _random_close(n: int = 600) -> pd.Series:
+        idx = pd.date_range("2024-01-01", periods=n, freq="4h")
+        rng = np.random.default_rng(11)
+        return pd.Series(
+            100 * np.exp(np.cumsum(rng.normal(0.0005, 0.02, n))), index=idx
+        )
+
+    def test_gate_is_prefix_invariant(self):
+        """The gate at bar i must not depend on bars after i."""
+        close = self._random_close()
+        df = self._frame(close)
+        strategy = DogeSpotRegimeSwitch()
+        full = strategy._daily_trend(df)
+
+        offenders = [
+            df.index[i]
+            for i in range(200, len(df))
+            if strategy._daily_trend(df.iloc[: i + 1]).iloc[-1] != full.iloc[i]
+        ]
+        assert not offenders, (
+            f"{len(offenders)} bars change value once later bars are visible, "
+            f"first at {offenders[0]} — the gate is reading its own future"
+        )
+
+    def test_gate_still_tracks_the_trend(self):
+        """Causality must not be bought by making the gate inert."""
+        idx = pd.date_range("2024-01-01", periods=400, freq="4h")
+        rally = pd.Series(np.linspace(100, 300, 400), index=idx)
+        gate = DogeSpotRegimeSwitch()._daily_trend(self._frame(rally))
+
+        assert gate.iloc[-1] == 1, "a sustained rally must end with the gate open"
+        assert gate.sum() > 0

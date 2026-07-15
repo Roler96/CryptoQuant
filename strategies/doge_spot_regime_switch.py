@@ -67,12 +67,20 @@ class DogeSpotRegimeSwitch(Strategy):
     # ------------------------------------------------------------------ #
 
     def _daily_trend(self, df: pd.DataFrame) -> pd.Series:
-        """Daily SMA trend gate, forward-filled onto the 4h index."""
+        """Daily SMA trend gate, forward-filled onto the 4h index.
+
+        The daily shift(1) is load-bearing. resample("1D").last() stamps a
+        day's *final* close onto that day's 00:00 index, so ffilling it
+        straight onto the 4h bars hands every bar of the day a close up to
+        20h in its own future — the look-ahead that got DogeSpotDonchianSma
+        vetoed on 2026-07-14. Shifting a day back means each bar sees only
+        the previous day's completed close.
+        """
         close = df["close"]
         sma_period = self.params["sma_period"]
         daily_close = close.resample("1D").last().dropna()
         daily_sma = daily_close.rolling(sma_period).mean()
-        daily_trend = (daily_close > daily_sma).astype(int)
+        daily_trend = (daily_close > daily_sma).astype(int).shift(1)
         return daily_trend.reindex(df.index, method="ffill").fillna(0)
 
     def _bull_channels(self, df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
