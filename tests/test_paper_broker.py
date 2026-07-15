@@ -196,6 +196,23 @@ class TestPaperBroker:
         # Round trip charges commission on BOTH fills: 10000 - 1010 + 990 = 9980
         assert broker.get_balance("USDT") == pytest.approx(9980.0)
 
+    def test_commission_is_charged_on_slipped_fill_not_reference_price(self):
+        broker = PaperBroker(
+            initial_balance=10000.0,
+            default_price=100.0,
+            slippage_bps=100,
+            latency_ms=0,
+            commission_bps=100,
+        )
+
+        buy = broker.market_buy("BTC/USDT", 10.0)
+        sell = broker.market_sell("BTC/USDT", 10.0)
+
+        assert buy.fee is not None and sell.fee is not None
+        assert buy.fee["cost"] == pytest.approx(10.1)
+        assert sell.fee["cost"] == pytest.approx(9.9)
+        assert broker.get_balance("USDT") == pytest.approx(9960.0)
+
     def test_latency_sleep(self):
         broker = PaperBroker(
             initial_balance=10000.0,

@@ -56,6 +56,7 @@ class RiskConfig(BaseSettings):
 
 class TradingConfig(BaseSettings):
     """Trading configuration."""
+    symbol: str = "BTC/USDT"
     default_quote: str = "USDT"
     default_timeframe: str = "5m"
     min_order_usdt: float = Field(default=10.0, gt=0)
@@ -148,7 +149,10 @@ def load_config(config_path: str | Path | None = None, *, use_cache: bool = True
     yaml_data: dict = {}
     if resolved_path.exists():
         with open(resolved_path) as f:
-            yaml_data = yaml.safe_load(f) or {}
+            loaded = yaml.safe_load(f)
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(f"Config root must be a mapping: {resolved_path}")
+        yaml_data = loaded or {}
 
     # Load .env if present
     from dotenv import load_dotenv

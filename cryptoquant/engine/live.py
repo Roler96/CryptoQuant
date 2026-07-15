@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
+import pandas as pd
 from loguru import logger
 
-from cryptoquant.data.closed_bar import ClosedBarFeed
+from cryptoquant.data.closed_bar import BarFetchMeta, ClosedBarFeed
 from cryptoquant.engine.exit_logic import (
     ExitCheck,
     check_signal_flat,
@@ -112,6 +113,7 @@ class LiveEngine:
         self._tick_counter: int = 0
         self._position_unknown: bool = False  # True when get_position() failed
         self._trailing_anchor: float = 0.0
+        self._last_decision_bar_ts: int = 0
 
         # Restore state if exists
         saved = self.state_mgr.load(strategy.name, symbol)
@@ -121,6 +123,7 @@ class LiveEngine:
             self._total_pnl_pct = saved.total_pnl_pct
             self._initial_capital = saved.initial_capital
             self._trailing_anchor = saved.trailing_anchor
+            self._last_decision_bar_ts = saved.last_decision_bar_ts
             if saved.ledger_state and self.position_ledger is not None:
                 self.position_ledger.restore(saved.ledger_state)
             if saved.risk_state and self.risk_manager is not None:
@@ -194,65 +197,9 @@ class LiveEngine:
         if self.risk_manager:
             self.risk_manager.check_daily_reset()
 
-        # 1. Cooldown check
-        if self._cooldown_remaining > 0:
-            self._cooldown_remaining -= 1
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=0,
-                reason=f"cooldown ({self._cooldown_remaining} bars remaining)",
-                order=None,
-                balance=self._safe_balance(),
-                timestamp=timestamp,
-            )
-
-        # 1. Fetch data (data_feed guarantees the last bar is closed)
-        lookback = max(self.strategy.min_bars, 200)
-        try:
-            df, bar_meta = self.data_feed.fetch(lookback)
-        except DataError as e:
-            logger.error(f"Live data fetch/validation failed: {e}")
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=0,
-                reason=f"data error: {e}",
-                order=None,
-                balance=self._safe_balance(),
-                timestamp=timestamp,
-            )
-
-        if len(df) < self.strategy.min_bars:
-            logger.warning(
-                f"Insufficient data: {len(df)} < {self.strategy.min_bars}"
-            )
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=0,
-                reason="insufficient data",
-                order=None,
-                balance=self._safe_balance(),
-                timestamp=timestamp,
-            )
-
-        quality_report = getattr(self.data_feed, "last_quality_report", None)
-        if quality_report is not None and not quality_report.is_healthy:
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=0,
-                reason="data quality unhealthy",
-                order=None,
-                balance=self._safe_balance(),
-                timestamp=timestamp,
-            )
-
-        self._update_simulated_price(df)
-
-        # 1.5. Skip signal generation if no new closed bar since last tick.
-        #      Still check exits and update risk state every poll.
-        is_new_bar = bar_meta.has_new_closed
-
-        # 3. Check current position (broker is source of truth).
-        #    P0: Unknown != Flat — if position fetch fails, refuse new entries.
+        # Position state comes before every data/entry gate. Auxiliary or
+        # primary market-data failure may forbid a new trade, but it must not
+        # prevent an existing position's ticker stop or time exit.
         try:
             position = self.broker.get_position(self.symbol)
             self._position_unknown = False
@@ -263,11 +210,68 @@ class LiveEngine:
             )
             position = None
             self._position_unknown = True
-
         has_position = position is not None and position.amount > 0
-
         if not self._position_unknown and not has_position:
             self._trailing_anchor = 0.0
+
+        # 1. Fetch data (data_feed guarantees the last bar is closed)
+        # Exchanges normally include the currently forming candle; the
+        # ClosedBarFeed strips it, so request one extra to retain min_bars
+        # fully closed observations for the strategy.
+        lookback = max(self.strategy.min_bars + 1, 201)
+        try:
+            df, bar_meta = self.data_feed.fetch(lookback)
+        except DataError as e:
+            logger.error(f"Live data fetch/validation failed: {e}")
+            if not has_position:
+                return TickResult(
+                    action=TickAction.SKIP,
+                    signal=0,
+                    reason=f"data error: {e}",
+                    order=None,
+                    balance=self._safe_balance(),
+                    timestamp=timestamp,
+                )
+            df = pd.DataFrame(
+                columns=pd.Index(["open", "high", "low", "close", "volume"])
+            )
+            bar_meta = BarFetchMeta(
+                has_new_closed=False,
+                decision_ready=False,
+                issues=(f"primary data error: {e}",),
+            )
+
+        data_insufficient = len(df) < self.strategy.min_bars
+        if data_insufficient:
+            logger.warning(
+                f"Insufficient data: {len(df)} < {self.strategy.min_bars}"
+            )
+
+        quality_report = getattr(self.data_feed, "last_quality_report", None)
+        quality_unhealthy = bool(
+            quality_report is not None and not quality_report.is_healthy
+        )
+
+        if not df.empty:
+            self._update_simulated_price(
+                df,
+                execution_price=getattr(bar_meta, "execution_price", None),
+            )
+
+        # 1.5. Skip signal generation if no new closed bar since last tick.
+        #      Still check exits and update risk state every poll.
+        decision_bar_ts = int(getattr(bar_meta, "common_bar_ts", 0))
+        decision_ready = bool(getattr(bar_meta, "decision_ready", True))
+        is_new_bar = bool(
+            bar_meta.has_new_closed
+            and decision_ready
+            and not data_insufficient
+            and not quality_unhealthy
+            and (
+                decision_bar_ts <= 0
+                or decision_bar_ts > self._last_decision_bar_ts
+            )
+        )
 
         signal_is_position = bool(
             getattr(self.strategy, "signal_is_position", False)
@@ -285,30 +289,69 @@ class LiveEngine:
                 )
                 signals = self.strategy.generate_signal_for_position(df, side)
                 signal = int(signals.iloc[-1])
+                if decision_bar_ts > 0:
+                    # Conservative acknowledgement: once a valid decision is
+                    # admitted to risk/execution, a restart must not replay it.
+                    self._last_decision_bar_ts = decision_bar_ts
             except Exception as e:
                 logger.error(f"Signal generation failed: {e}")
-                return TickResult(
-                    action=TickAction.SKIP,
-                    signal=0,
-                    reason=f"signal error: {e}",
-                    order=None,
-                    balance=self._safe_balance(),
-                    timestamp=timestamp,
-                )
+                signal = 0
+                is_new_bar = False
+                if not has_position:
+                    return TickResult(
+                        action=TickAction.SKIP,
+                        signal=0,
+                        reason=f"signal error: {e}",
+                        order=None,
+                        balance=self._safe_balance(),
+                        timestamp=timestamp,
+                    )
+
+        # Entry-only gates. Existing positions must still reach hard/time exits.
+        if not has_position and self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            return TickResult(
+                action=TickAction.SKIP,
+                signal=0,
+                reason=f"cooldown ({self._cooldown_remaining} bars remaining)",
+                order=None,
+                balance=self._safe_balance(),
+                timestamp=timestamp,
+            )
+        if not has_position and data_insufficient:
+            return TickResult(
+                action=TickAction.SKIP,
+                signal=0,
+                reason="insufficient data",
+                order=None,
+                balance=self._safe_balance(),
+                timestamp=timestamp,
+            )
+        if not has_position and quality_unhealthy:
+            return TickResult(
+                action=TickAction.SKIP,
+                signal=0,
+                reason="data quality unhealthy",
+                order=None,
+                balance=self._safe_balance(),
+                timestamp=timestamp,
+            )
 
         # 4. Decision
         try:
             balance = self._get_balance()
         except Exception as e:
             logger.error(f"Failed to fetch {self.quote_currency} balance: {e}")
-            return TickResult(
-                action=TickAction.SKIP,
-                signal=signal,
-                reason=f"balance state unknown: {e}",
-                order=None,
-                balance=0.0,
-                timestamp=timestamp,
-            )
+            if not has_position:
+                return TickResult(
+                    action=TickAction.SKIP,
+                    signal=signal,
+                    reason=f"balance state unknown: {e}",
+                    order=None,
+                    balance=0.0,
+                    timestamp=timestamp,
+                )
+            balance = 0.0
         # Compute total equity including open position value for accurate drawdown
         position_value = self._get_position_value(position)
         total_equity = balance + position_value
@@ -758,10 +801,19 @@ class LiveEngine:
                 return ExitCheck(True, "trailing_stop")
         return ExitCheck(False, "")
 
-    def _update_simulated_price(self, df) -> None:
+    def _update_simulated_price(
+        self,
+        df,
+        execution_price: float | None = None,
+    ) -> None:
         update_price = getattr(self.broker, "update_price", None)
         if callable(update_price):
-            update_price(self.symbol, self._current_price(df))
+            price = (
+                execution_price
+                if execution_price is not None and execution_price > 0
+                else self._current_price(df)
+            )
+            update_price(self.symbol, price)
 
     def _record_risk_exit(
         self,
@@ -965,6 +1017,7 @@ class LiveEngine:
                 risk_state=(
                     self.risk_manager.to_dict() if self.risk_manager else {}
                 ),
+                last_decision_bar_ts=self._last_decision_bar_ts,
             )
             self.state_mgr.save(state)
         except Exception as e:

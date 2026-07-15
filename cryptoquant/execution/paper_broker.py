@@ -111,7 +111,7 @@ class PaperBroker(BrokerABC):
             remaining=0.0,
             cost=round(amount * slippage_price, 8),
             fee={
-                "cost": round(amount * price * self._commission, 8),
+                "cost": round(amount * slippage_price * self._commission, 8),
                 "currency": self._quote,
             },
             status=OrderStatus.CLOSED,
@@ -124,9 +124,8 @@ class PaperBroker(BrokerABC):
         self._sleep_latency()
         ticker = self.get_ticker(symbol)
         price = float(ticker["last"])
-        trade_value = amount * price
         fill_price = price * (1 + self._slippage)
-        cost = trade_value * (1 + self._slippage) + trade_value * self._commission
+        cost = amount * fill_price * (1 + self._commission)
         if self._balance[self._quote] < cost:
             raise InsufficientFundsError(
                 f"Insufficient balance: {self._balance[self._quote]:.4f} < {cost:.4f}"
@@ -167,8 +166,8 @@ class PaperBroker(BrokerABC):
             raise InsufficientFundsError(
                 f"Insufficient position: {pos.amount if pos else 0:.4f} < {amount:.4f}"
             )
-        trade_value = amount * price
-        proceeds = trade_value * (1 - self._slippage) - trade_value * self._commission
+        fill_price = price * (1 - self._slippage)
+        proceeds = amount * fill_price * (1 - self._commission)
         self._balance[self._quote] += proceeds
         pos.amount -= amount
         if pos.amount <= 0:

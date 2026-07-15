@@ -223,6 +223,23 @@ class TestLiveEngineTick:
         assert result.action == TickAction.SKIP
         assert "insufficient data" in result.reason
 
+    def test_paper_fill_uses_forming_bar_open_hint(
+        self, engine, mock_data_feed, mock_broker
+    ):
+        frame, _meta = mock_data_feed.fetch.return_value
+        mock_data_feed.fetch.return_value = (
+            frame,
+            BarFetchMeta(
+                has_new_closed=True,
+                stripped=1,
+                execution_price=123.45,
+            ),
+        )
+
+        engine.tick()
+
+        mock_broker.update_price.assert_called_once_with("BTC/USDT", 123.45)
+
     def test_skip_on_data_validation_error(self, engine, mock_data_feed, mock_broker):
         mock_data_feed.fetch.side_effect = DataValidationError("gap detected")
 
@@ -231,6 +248,29 @@ class TestLiveEngineTick:
         assert result.action == TickAction.SKIP
         assert "data error" in result.reason
         mock_broker.market_buy.assert_not_called()
+
+    def test_primary_data_error_does_not_block_existing_position_time_exit(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=MockStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_hold_hours=12,
+        )
+        position = _long_position()
+        position.timestamp = 0
+        mock_broker.get_position.return_value = position
+        mock_broker.market_sell.return_value = _make_order(side="sell")
+        mock_data_feed.fetch.side_effect = DataValidationError("primary gap")
+
+        result = engine.tick()
+
+        assert result.action == TickAction.EXIT
+        assert "time_exit" in result.reason
+        mock_broker.market_sell.assert_called_once()
 
     def test_skip_on_unhealthy_quality_report(self, engine, mock_data_feed, mock_broker):
         mock_data_feed.last_quality_report = QualityReport(
@@ -253,6 +293,80 @@ class TestLiveEngineTick:
         assert result.action == TickAction.SKIP
         assert "cooldown" in result.reason
         assert engine._cooldown_remaining == 1
+
+    @pytest.mark.parametrize("gate", ["quality", "cooldown", "balance"])
+    def test_entry_gate_does_not_block_existing_position_time_exit(
+        self, gate, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        engine = LiveEngine(
+            broker=mock_broker,
+            strategy=MockStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_hold_hours=12,
+        )
+        position = _long_position()
+        position.timestamp = 0
+        mock_broker.get_position.return_value = position
+        mock_broker.market_sell.return_value = _make_order(side="sell")
+        if gate == "quality":
+            mock_data_feed.last_quality_report = QualityReport(
+                is_healthy=False,
+                gap_count=1,
+                stale_bars=0,
+                outlier_count=0,
+                volume_anomaly_count=0,
+            )
+        elif gate == "cooldown":
+            engine._cooldown_remaining = 2
+        else:
+            mock_broker.get_balance.side_effect = RuntimeError("balance down")
+
+        result = engine.tick()
+
+        assert result.action == TickAction.EXIT
+        assert "time_exit" in result.reason
+        mock_broker.market_sell.assert_called_once()
+
+    def test_persisted_decision_watermark_prevents_restart_replay(
+        self, mock_broker, mock_data_feed, mock_state_mgr
+    ):
+        frame, _meta = mock_data_feed.fetch.return_value
+        bar_ts = int(frame.index[-1].value // 1_000_000)
+        mock_data_feed.fetch.return_value = (
+            frame,
+            BarFetchMeta(
+                has_new_closed=True,
+                stripped=0,
+                common_bar_ts=bar_ts,
+                decision_ready=True,
+            ),
+        )
+        mock_broker.get_position.return_value = None
+        mock_broker.market_buy.return_value = _make_order()
+        first = LiveEngine(
+            broker=mock_broker,
+            strategy=BuySignalStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+
+        assert first.tick().action == TickAction.ENTRY_LONG
+        first._save_state()
+        restarted = LiveEngine(
+            broker=mock_broker,
+            strategy=BuySignalStrategy(),
+            data_feed=mock_data_feed,
+            state_dir=str(mock_state_mgr.state_dir),
+            symbol="BTC/USDT",
+            max_order_usdt=10000.0,
+        )
+
+        assert restarted.tick().action == TickAction.NOOP
+        assert mock_broker.market_buy.call_count == 1
 
 
 class TestPositionStyleSignalExit:
@@ -668,6 +782,7 @@ class TestStatePersistence:
         assert restored is not None
         assert restored.strategy_name == engine.strategy.name
         assert restored.has_position is False
+        assert restored.last_decision_bar_ts == engine._last_decision_bar_ts
 
     def test_restore_state(
         self, mock_broker, mock_data_feed, mock_state_mgr

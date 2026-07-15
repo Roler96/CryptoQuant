@@ -13,6 +13,7 @@ cannot silently run it on bars it was never designed for.
 """
 import argparse
 import sys
+from typing import cast
 
 import pandas as pd
 
@@ -20,6 +21,8 @@ from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.store import OHLCVStore
 from cryptoquant.engine.backtest import BacktestEngine, generate_report
 from cryptoquant.exceptions import DataError, DataValidationError, StrategyError
+from cryptoquant.risk.sizer import FixedSizer
+from cryptoquant.strategy.base import Strategy
 from cryptoquant.strategy.resolve import resolve_strategy
 from cryptoquant.utils import timeframe_to_timedelta
 
@@ -42,6 +45,8 @@ def build_argparser() -> argparse.ArgumentParser:
                         "research ran on 1h aggregated to 4h, and only the 1h "
                         "table covers the full 2021-2026 range.")
     p.add_argument("--capital", type=float, default=10_000.0)
+    p.add_argument("--position-pct", type=float, default=100.0,
+                   help="fixed percentage of equity per trade (default: %(default)s)")
     p.add_argument("--commission-bps", type=float, default=10.0,
                    help="fee per side in bps (default: %(default)s)")
     p.add_argument("--slippage-bps", type=float, default=5.0,
@@ -49,6 +54,56 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--no-trades", action="store_true",
                    help="omit the per-trade table")
     return p
+
+
+def load_market_context(
+    df: pd.DataFrame,
+    strategy: Strategy,
+    exchange: str,
+    timeframe: str,
+    start_ms: int,
+    end_ms: int,
+) -> pd.DataFrame:
+    """Join a strategy's auxiliary markets to its primary OHLCV bars."""
+    if not strategy.context_markets:
+        return df
+
+    result = df.copy()
+    store = OHLCVStore()
+    try:
+        for context in strategy.context_markets:
+            context_df = store.load(
+                exchange,
+                context.historical_symbol,
+                timeframe,
+                start=start_ms,
+                end=end_ms,
+            )
+            if context_df.empty:
+                raise DataValidationError(
+                    f"Missing {exchange} context data: "
+                    f"{context.historical_symbol} {timeframe}"
+                )
+            missing = sorted(set(context.columns).difference(context_df.columns))
+            if missing:
+                raise DataValidationError(
+                    f"Context {context.historical_symbol} missing columns: {missing}"
+                )
+            renamed = context_df.loc[:, list(context.columns)].rename(
+                columns={
+                    column: f"{context.alias}_{column}"
+                    for column in context.columns
+                }
+            )
+            collisions = sorted(set(renamed.columns).intersection(result.columns))
+            if collisions:
+                raise DataValidationError(
+                    f"Context output columns collide with primary data: {collisions}"
+                )
+            result = result.join(renamed, how="left")
+    finally:
+        store.close()
+    return result
 
 
 def load_resampled(
@@ -144,6 +199,21 @@ def main() -> None:
         sys.exit(1)
 
     timeframe = args.timeframe or strategy.timeframe
+    if strategy.execution_exchange and args.exchange != strategy.execution_exchange:
+        print(
+            f"ERROR: {strategy.name} requires exchange "
+            f"{strategy.execution_exchange}, got {args.exchange}"
+        )
+        sys.exit(1)
+    if strategy.execution_symbol and args.symbol != strategy.execution_symbol:
+        print(
+            f"ERROR: {strategy.name} trades {strategy.execution_symbol}, "
+            f"got {args.symbol}"
+        )
+        sys.exit(1)
+    if not 0 < args.position_pct <= 100:
+        print("ERROR: --position-pct must be in (0, 100]")
+        sys.exit(1)
     try:
         target = timeframe_to_timedelta(timeframe)
         if args.resample_from and timeframe_to_timedelta(args.resample_from) >= target:
@@ -154,8 +224,16 @@ def main() -> None:
         print(f"ERROR: {e}")
         sys.exit(1)
 
-    end = pd.Timestamp(args.end) if args.end else pd.Timestamp.now()
-    start = pd.Timestamp(args.start) if args.start else end - pd.Timedelta(days=365)
+    end: pd.Timestamp = (
+        cast(pd.Timestamp, pd.Timestamp(args.end))
+        if args.end
+        else pd.Timestamp.now()
+    )
+    start: pd.Timestamp = (
+        cast(pd.Timestamp, pd.Timestamp(args.start))
+        if args.start
+        else cast(pd.Timestamp, end - pd.Timedelta(days=365))
+    )
     start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
     if args.resample_from:
@@ -168,7 +246,14 @@ def main() -> None:
         print(f"ERROR: Insufficient data ({len(df)} bars). Need at least 200.")
         sys.exit(1)
 
-    df = df[(df.index >= start) & (df.index <= end)]
+    df = cast(pd.DataFrame, df.loc[(df.index >= start) & (df.index <= end)])
+    try:
+        df = load_market_context(
+            df, strategy, args.exchange, timeframe, start_ms, end_ms
+        )
+    except DataValidationError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
     print(f"\n{'=' * 60}")
     print(f"Strategy: {strategy.name}  ({args.strategy})")
@@ -179,14 +264,30 @@ def main() -> None:
     print(f"Price range: {df['close'].min():.4f} - {df['close'].max():.4f}")
     print(f"Costs: {args.commission_bps:.0f} bps fee + {args.slippage_bps:.0f} "
           f"bps slippage per side")
+    print(f"Position: {args.position_pct:g}% of equity")
+    if strategy.context_markets:
+        names = ", ".join(
+            f"{item.alias}={item.historical_symbol}" for item in strategy.context_markets
+        )
+        print(f"Context: {names}")
     print(f"{'=' * 60}\n")
 
     engine = BacktestEngine(
         initial_capital=args.capital,
         commission=args.commission_bps / 10_000,
         slippage=args.slippage_bps / 10_000,
+        sizer=(
+            None
+            if args.position_pct >= 100
+            else FixedSizer(risk_pct=args.position_pct, min_order=0.0)
+        ),
     )
-    result = engine.run(df, strategy, symbol=args.symbol)
+    result = engine.run(
+        df,
+        strategy,
+        symbol=args.symbol,
+        max_hold_bars=strategy.max_hold_bars,
+    )
 
     print(generate_report(result, include_trades=not args.no_trades))
 

@@ -153,3 +153,50 @@ class TestStats:
         assert "quality_healthy" in stats
         assert stats["exchange"] == "okx"
         assert stats["symbol"] == "BTC/USDT"
+        assert stats["storage_symbol"] == "BTC/USDT"
+
+
+def test_storage_symbol_can_differ_from_ccxt_symbol(mock_fetcher, mock_store):
+    feed = LiveDataFeed(
+        fetcher=mock_fetcher,
+        store=mock_store,
+        exchange="okx",
+        symbol="DOGE/USDT:USDT",
+        storage_symbol="DOGE-USDT-SWAP",
+        timeframe="1h",
+    )
+    frame = _make_df(10)
+    mock_fetcher.fetch.return_value = frame
+
+    feed.fetch(lookback=10)
+
+    mock_fetcher.fetch.assert_called_once_with("DOGE/USDT:USDT", "1h", limit=10)
+    mock_store.save.assert_called_once_with(
+        frame, "okx", "DOGE-USDT-SWAP", "1h"
+    )
+
+
+def test_long_lookback_uses_stored_window_then_one_recent_fetch(
+    mock_fetcher, mock_store
+):
+    feed = LiveDataFeed(
+        fetcher=mock_fetcher,
+        store=mock_store,
+        exchange="okx",
+        symbol="DOGE/USDT:USDT",
+        storage_symbol="DOGE-USDT-SWAP",
+        timeframe="1h",
+    )
+    stored = _make_df(2300)
+    recent = stored.iloc[-300:].copy()
+    mock_store.load.return_value = stored
+    mock_fetcher.fetch.return_value = recent
+
+    result = feed.fetch(lookback=2200)
+
+    assert len(result) == 2200
+    mock_fetcher.fetch.assert_called_once_with(
+        "DOGE/USDT:USDT", "1h", limit=300
+    )
+    mock_fetcher.fetch_range.assert_not_called()
+    mock_store.load.assert_called_once()

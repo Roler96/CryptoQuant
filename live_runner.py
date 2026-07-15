@@ -11,11 +11,13 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Mapping
 
 from loguru import logger
 
 from cryptoquant.config import load_config
 from cryptoquant.data.closed_bar import ClosedBarFeed
+from cryptoquant.data.context_feed import ContextualClosedBarFeed
 from cryptoquant.data.fetcher import OHLCVFetcher
 from cryptoquant.data.live_feed import LiveDataFeed
 from cryptoquant.data.store import OHLCVStore
@@ -31,6 +33,7 @@ from cryptoquant.exceptions import StrategyError
 from cryptoquant.risk.sizer import SizerMethod, create_sizer
 from cryptoquant.strategy.base import Strategy
 from cryptoquant.strategy.resolve import resolve_strategy as _resolve_strategy
+from cryptoquant.utils import timeframe_to_seconds
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -39,7 +42,8 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "--symbol", default="BTC/USDT", help="Trading symbol (default: BTC/USDT)"
+        "--symbol", default=None,
+        help="traded symbol (default: trading.symbol from config)"
     )
     p.add_argument(
         "--timeframe", default=None,
@@ -99,6 +103,103 @@ def resolve_strategy(strategy_name: str | None, config) -> Strategy:
         sys.exit(1)
 
 
+def build_strategy_data_feed(
+    *,
+    fetcher: OHLCVFetcher,
+    store: OHLCVStore,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    strategy: Strategy,
+    context_fetchers: Mapping[str, OHLCVFetcher] | None = None,
+) -> ClosedBarFeed:
+    """Build a closed primary feed plus any strategy-declared context feeds."""
+
+    def closed_feed(
+        feed_symbol: str,
+        *,
+        data_fetcher: OHLCVFetcher = fetcher,
+        storage_symbol: str | None = None,
+        strict_validation: bool = True,
+    ) -> ClosedBarFeed:
+        return ClosedBarFeed(
+            LiveDataFeed(
+                fetcher=data_fetcher,
+                store=store,
+                exchange=exchange,
+                symbol=feed_symbol,
+                timeframe=timeframe,
+                strict_validation=strict_validation,
+                quality_check=True,
+                fail_on_quality=False,
+                storage_symbol=storage_symbol,
+            )
+        )
+
+    primary = closed_feed(symbol)
+    if not strategy.context_markets:
+        return primary
+    fetchers = context_fetchers or {}
+    contexts = []
+    for market in strategy.context_markets:
+        contexts.append(
+            (
+                market,
+                closed_feed(
+                    market.live_symbol,
+                    data_fetcher=fetchers.get(market.market_type, fetcher),
+                    storage_symbol=market.historical_symbol,
+                    # A historical auxiliary gap becomes NaN and disables
+                    # only affected signals; it must not collapse the clock.
+                    strict_validation=False,
+                ),
+            )
+        )
+    return ContextualClosedBarFeed(primary, contexts)
+
+
+def validate_strategy_runtime(
+    strategy: Strategy,
+    *,
+    exchange: str,
+    symbol: str,
+    account_type: str,
+    timeframe: str,
+    trading_config,
+) -> None:
+    """Reject a live profile that changes the strategy's signed contract."""
+    mismatches: list[str] = []
+    expected_values = (
+        ("exchange", strategy.execution_exchange, exchange),
+        ("symbol", strategy.execution_symbol, symbol),
+        ("account_type", strategy.execution_market_type, account_type),
+        ("timeframe", strategy.timeframe, timeframe),
+    )
+    for label, expected, actual in expected_values:
+        if expected is not None and actual != expected:
+            mismatches.append(f"{label}={actual!r}, expected {expected!r}")
+
+    if strategy.max_hold_bars is not None:
+        expected_hours = (
+            strategy.max_hold_bars * timeframe_to_seconds(timeframe) / 3600
+        )
+        if trading_config.max_hold_hours != expected_hours:
+            mismatches.append(
+                f"max_hold_hours={trading_config.max_hold_hours!r}, "
+                f"expected {expected_hours:g}"
+            )
+    if not strategy.allows_external_exits:
+        for field in ("stop_loss_pct", "trailing_stop_pct", "take_profit_pct"):
+            value = getattr(trading_config, field)
+            if value is not None:
+                mismatches.append(f"{field} must be null, got {value!r}")
+    if mismatches:
+        raise StrategyError(
+            f"Runtime profile does not match {strategy.name}: "
+            + "; ".join(mismatches)
+        )
+
+
 def health_check_startup(
     broker, data_feed, risk_manager, quote_currency: str = "USDT"
 ) -> bool:
@@ -128,6 +229,7 @@ def main():
     # 1. Load config
     config = load_config(args.config)
     logger.info(f"Config loaded: exchange={config.exchange.default}")
+    symbol = args.symbol or config.trading.symbol
 
     # 2. Setup logging
     setup_logging(
@@ -144,6 +246,10 @@ def main():
         ),
     )
     logger.info("Logging initialized")
+
+    # Resolve before wiring data: a strategy may declare auxiliary markets.
+    strategy = resolve_strategy(getattr(args, "strategy", None), config)
+    logger.info(f"Strategy: {strategy.name}")
 
     # 2.5. Require an explicit acknowledgement before real-money startup.
     paper_mode = args.paper or config.paper_trading.enabled
@@ -174,6 +280,19 @@ def main():
 
     # 3. Initialize broker
     account_type = getattr(config.trading, "account_type", "spot")
+    timeframe = args.timeframe or getattr(config.trading, "default_timeframe", "1h")
+    try:
+        validate_strategy_runtime(
+            strategy,
+            exchange=config.exchange.default,
+            symbol=symbol,
+            account_type=account_type,
+            timeframe=timeframe,
+            trading_config=config.trading,
+        )
+    except StrategyError as error:
+        logger.error(str(error))
+        sys.exit(1)
 
     # Strategy-owned position tracking for real spot trading. Not needed for
     # PaperBroker (has its own simulated positions) or swap accounts (the
@@ -228,24 +347,41 @@ def main():
     fetch_cfg = config.data.fetch
 
     # --timeframe from CLI or fall back to config default
-    timeframe = args.timeframe or getattr(config.trading, "default_timeframe", "1h")
     fetcher = OHLCVFetcher(
         exchange=exchange_name,
         testnet=exchange_cfg.testnet,
         timeout=fetch_cfg.timeout_ms,
         max_candles=fetch_cfg.max_candles_per_request,
+        market_type=account_type,
     )
-    data_feed = ClosedBarFeed(LiveDataFeed(
+    context_fetchers = {"spot": fetcher}
+    for market_type in {market.market_type for market in strategy.context_markets}:
+        if market_type not in context_fetchers:
+            context_fetchers[market_type] = OHLCVFetcher(
+                exchange=exchange_name,
+                testnet=exchange_cfg.testnet,
+                timeout=fetch_cfg.timeout_ms,
+                max_candles=fetch_cfg.max_candles_per_request,
+                market_type=market_type,
+            )
+    data_feed = build_strategy_data_feed(
         fetcher=fetcher,
         store=store,
         exchange=exchange_name,
-        symbol=args.symbol,
+        symbol=symbol,
         timeframe=timeframe,
-        strict_validation=True,
-        quality_check=True,
-        fail_on_quality=False,
-    ))
-    logger.info(f"Data feed: {args.symbol} {timeframe}")
+        strategy=strategy,
+        context_fetchers=context_fetchers,
+    )
+    logger.info(f"Data feed: {symbol} {timeframe}")
+    if strategy.context_markets:
+        logger.info(
+            "Context feeds: "
+            + ", ".join(
+                f"{market.alias}={market.live_symbol}"
+                for market in strategy.context_markets
+            )
+        )
 
     # 5. Initialize risk manager
     risk_cfg = config.risk
@@ -266,10 +402,6 @@ def main():
     )
     logger.info("Risk manager initialized")
 
-    # 6. Initialize strategy
-    strategy = resolve_strategy(getattr(args, "strategy", None), config)
-    logger.info(f"Strategy: {strategy.name}")
-
     # 7. Initialize journal
     journal = TradeJournal(
         journal_dir=config.logging.dir,
@@ -283,13 +415,13 @@ def main():
         logger.info("Pre-fetching data for startup validation...")
         # Scale lookback: need enough bars to satisfy min_bars + warmup
         tf_map = {"1m": 3000, "3m": 2000, "5m": 1000, "15m": 500, "30m": 400, "1h": 200, "4h": 200}
-        lookback = tf_map.get(timeframe, 500)
+        lookback = max(tf_map.get(timeframe, 500), strategy.min_bars + 1)
         df_initial, _initial_bar_meta = data_feed.fetch(lookback=lookback)
         if not df_initial.empty:
             last_price = float(df_initial["close"].iloc[-1])
             update_price = getattr(broker, "update_price", None)
             if callable(update_price):
-                update_price(args.symbol, last_price)
+                update_price(symbol, last_price)
             logger.info(
                 f"Pre-fetch OK: {len(df_initial)} bars, "
                 f"last close={last_price}"
@@ -331,7 +463,7 @@ def main():
         data_feed=data_feed,
         risk_manager=risk,
         state_dir=args.state_dir,
-        symbol=args.symbol,
+        symbol=symbol,
         min_order_usdt=trading_cfg.min_order_usdt,
         max_order_usdt=trading_cfg.max_order_usdt,
         cooldown_bars=trading_cfg.cooldown_bars,
@@ -348,7 +480,7 @@ def main():
     )
 
     logger.info(
-        f"Starting live engine: {strategy.name} on {args.symbol} "
+        f"Starting live engine: {strategy.name} on {symbol} "
         f"interval={args.interval}s"
     )
     engine.run(interval=args.interval)

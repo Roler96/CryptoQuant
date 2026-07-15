@@ -98,16 +98,20 @@ class OHLCVFetcher:
         proxy: str | None = None,
         max_retries: int = 3,
         retry_base_delay: float = 1.0,
+        market_type: str = "spot",
     ):
+        if market_type not in {"spot", "swap", "future"}:
+            raise ValueError(f"Unsupported market_type: {market_type}")
         exchange_class = getattr(ccxt, exchange)
         self.exchange: ccxt.Exchange = exchange_class(
             {
                 "enableRateLimit": True,
                 "timeout": timeout,
-                "options": {"defaultType": "spot"},
+                "options": {"defaultType": market_type},
             }
         )
         self.exchange_name = exchange
+        self.market_type = market_type
         self.max_candles = max(1, max_candles)
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay

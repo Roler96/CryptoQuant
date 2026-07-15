@@ -115,6 +115,15 @@ class TestValidateOHLCV:
 
 
 class TestOHLCVFetcherFetch:
+    def test_market_type_is_passed_to_ccxt(self, mock_exchange):
+        fetcher = OHLCVFetcher(exchange="okx", testnet=True, market_type="swap")
+
+        assert fetcher.market_type == "swap"
+
+    def test_invalid_market_type_fails(self, mock_exchange):
+        with pytest.raises(ValueError, match="Unsupported market_type"):
+            OHLCVFetcher(exchange="okx", testnet=True, market_type="margin")
+
     def test_fetch_returns_dataframe(self, fetcher, mock_exchange):
         raw = _make_raw_ohlcv(10)
         mock_exchange.fetch_ohlcv.return_value = raw

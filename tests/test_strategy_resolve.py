@@ -20,6 +20,8 @@ class TestResolveShippedStrategies:
         "name, expected",
         [
             ("doge_donchian_trend", "DogeDonchianTrend"),
+            ("doge_attention_handoff_spot", "DogeAttentionHandoffSpot"),
+            ("doge_reflexivity_router_spot", "DogeReflexivityRouterSpot"),
         ],
     )
     def test_resolves_to_expected_class(self, name, expected):

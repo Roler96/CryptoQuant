@@ -44,6 +44,7 @@ class TestLoadConfig:
 
     def test_trading_config_defaults(self):
         config = load_config()
+        assert config.trading.symbol == "BTC/USDT"
         assert config.trading.default_quote == "USDT"
         assert config.trading.min_order_usdt == 10.0
 
@@ -184,6 +185,7 @@ class TestShippedConfigsMatchBacktest:
         offenders = []
         for path in self._configs():
             raw = yaml.safe_load(path.read_text()) or {}
+            assert isinstance(raw, dict), f"{path.name} root must be a mapping"
             value = (raw.get("trading") or {}).get(field)
             if value is not None:
                 offenders.append(f"{path.name}: {field}={value}")
@@ -202,3 +204,15 @@ class TestShippedConfigsMatchBacktest:
             "BacktestEngine.run now models a trailing stop — drop this guard "
             "and let configs enable trailing_stop_pct again."
         )
+
+    def test_attention_profile_is_spot_paper_and_matches_time_exit(self):
+        config = load_config("config.doge_attention_handoff.yaml", use_cache=False)
+
+        assert config.paper_trading.enabled is True
+        assert config.trading.symbol == "DOGE/USDT"
+        assert config.trading.account_type == "spot"
+        assert config.trading.strategy == "doge_attention_handoff_spot"
+        assert config.trading.default_timeframe == "1h"
+        assert config.trading.max_hold_hours == 12
+        assert config.trading.sizer_method == "fixed"
+        assert config.trading.sizer_config["risk_pct"] == 10.0

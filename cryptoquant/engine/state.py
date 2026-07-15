@@ -33,6 +33,7 @@ class EngineState:
     ledger_state: dict = field(default_factory=dict)
     trailing_anchor: float = 0.0
     risk_state: dict = field(default_factory=dict)
+    last_decision_bar_ts: int = 0
 
 
 class StateManager:

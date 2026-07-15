@@ -5,6 +5,7 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from cryptoquant.data.closed_bar import ClosedBarFeed
 
@@ -56,6 +57,7 @@ class TestClosedBarFeed:
              "close": [100] * 10, "volume": [1000] * 10},
             index=dates,
         )
+        df.iloc[-1, df.columns.get_loc("close")] = 101
         # Current time is 09:30 — last bar (09:00) hasn't closed yet
         fake_now = _timestamp(pd.Timestamp("2024-01-01 09:30"))
         monkeypatch.setattr(time, "time", lambda: fake_now)
@@ -68,6 +70,7 @@ class TestClosedBarFeed:
         assert len(result) == 9, f"Expected 9 closed bars, got {len(result)}"
         assert meta.stripped == 1
         assert meta.has_new_closed  # bar 08:00 is new and closed
+        assert meta.execution_price == pytest.approx(101.0)
 
     def test_all_bars_unclosed_returns_empty(self, monkeypatch):
         """If ALL bars are still forming, return empty DataFrame."""

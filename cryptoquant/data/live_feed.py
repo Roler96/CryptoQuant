@@ -25,11 +25,13 @@ class LiveDataFeed:
         strict_validation: bool = True,
         quality_check: bool = True,
         fail_on_quality: bool = False,
+        storage_symbol: str | None = None,
     ):
         self.fetcher = fetcher
         self.store = store
         self.exchange = exchange
         self.symbol = symbol
+        self.storage_symbol = storage_symbol or symbol
         self.timeframe = timeframe
         self.strict_validation = strict_validation
         self.quality_check = quality_check
@@ -51,12 +53,37 @@ class LiveDataFeed:
         needed_ms = lookback * tf_seconds * 1000
         since_ms = now_ms - needed_ms
 
+        # Seed the in-memory window from the same storage key used by the
+        # historical backtest. A long-lookback strategy should paginate once
+        # on cold start, not refetch 90 days on every hourly tick.
+        if self._df_cache is None:
+            try:
+                stored = self.store.load(
+                    self.exchange,
+                    self.storage_symbol,
+                    self.timeframe,
+                    start=since_ms,
+                    end=now_ms,
+                )
+                if isinstance(stored, pd.DataFrame) and not stored.empty:
+                    validate_ohlcv(stored, strict=self.strict_validation)
+                    self._df_cache = stored.copy()
+            except (DataError, AttributeError, TypeError) as error:
+                logger.warning(
+                    f"Ignoring unusable live cache for {self.storage_symbol}: {error}"
+                )
+
         # 1. Fetch new bars from exchange (paginate if lookback exceeds single-call limit)
         max_per_call = min(self.fetcher.max_candles, 300)  # exchange hard limit
         try:
-            if lookback <= max_per_call:
+            cache_covers_lookback = (
+                self._df_cache is not None and len(self._df_cache) >= lookback
+            )
+            if lookback <= max_per_call or cache_covers_lookback:
                 df_new = self.fetcher.fetch(
-                    self.symbol, self.timeframe, limit=lookback
+                    self.symbol,
+                    self.timeframe,
+                    limit=min(lookback, max_per_call),
                 )
             else:
                 df_new = self.fetcher.fetch_range(
@@ -108,7 +135,12 @@ class LiveDataFeed:
                     )
 
         # 4. Persist to store
-        self.store.save(df_new, self.exchange, self.symbol, self.timeframe)
+        self.store.save(
+            df_new,
+            self.exchange,
+            self.storage_symbol,
+            self.timeframe,
+        )
         self._last_fetch_ts = int(_time.time() * 1000)
 
         # 5. Return last `lookback` bars
@@ -131,6 +163,7 @@ class LiveDataFeed:
             "last_fetch_ts": self.last_fetch_ts,
             "exchange": self.exchange,
             "symbol": self.symbol,
+            "storage_symbol": self.storage_symbol,
             "quality_healthy": (
                 self._last_quality_report.is_healthy
                 if self._last_quality_report is not None
