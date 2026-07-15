@@ -80,6 +80,8 @@ secrets/
 backtest_results/
 live_trades/
 state/
+# live_runner --state-dir, e.g. state_doge_regime/
+state_*/
 positions.json
 orders.json
 
