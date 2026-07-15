@@ -534,12 +534,18 @@ class BacktestEngine:
         ) * 100
 
         total_years = len(df) / self._periods_per_year
-        if total_years > 0:
+        if total_years <= 0:
+            annualized_return_pct = 0.0
+        elif total_return_pct <= -100:
+            # Equity hit zero or went negative (possible for shorts). A
+            # negative base to a fractional power has no real value, and
+            # numpy would hand back a bare NaN that flows on into the
+            # report. The account is wiped out — say so.
+            annualized_return_pct = -100.0
+        else:
             annualized_return_pct = (
                 (1 + total_return_pct / 100) ** (1 / total_years) - 1
             ) * 100
-        else:
-            annualized_return_pct = 0.0
 
         daily_returns = (
             equity_curve.resample("1D").last().pct_change().dropna()
