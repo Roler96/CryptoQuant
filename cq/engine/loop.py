@@ -24,7 +24,7 @@ from typing import Protocol
 
 from cq.context import Context, Series
 from cq.core.clock import duration_ms
-from cq.core.types import CostModel, Fill, Intent, MarketSpec
+from cq.core.types import CostModel, Fill, Intent, MarketSpec, Sizing
 from cq.engine.funding import FundingModel, NoFunding
 from cq.engine.portfolio import FundingPayment, Portfolio
 from cq.engine.sim import Rejection, SimBroker
@@ -52,6 +52,7 @@ class RunResult:
     market_type: str
     funding_label: str
     cost_label: str
+    sizing: str
     initial_cash: float
     portfolio: Portfolio
     timestamps: list[int] = field(default_factory=list)
@@ -80,7 +81,8 @@ class RunResult:
             f"  return {self.total_return * 100:+.2f}%  "
             f"final equity {self.final_equity:,.2f}\n"
             f"  costs {self.cost_label}\n"
-            f"  funding {self.funding_label}"
+            f"  funding {self.funding_label}\n"
+            f"  sizing {self.sizing}"
         )
 
 
@@ -92,6 +94,7 @@ def run_backtest(
     costs: CostModel | None = None,
     funding: FundingModel | None = None,
     aux: Iterable[Series] = (),
+    sizing: Sizing = Sizing.ON_ENTRY,
 ) -> RunResult:
     """Replay `primary` through `strategy`, one bar at a time."""
     costs = costs or CostModel()
@@ -108,6 +111,7 @@ def run_backtest(
         market_type=spec.market_type,
         funding_label=funding.label,
         cost_label=f"{costs.fee_bps:.1f} bps fee + {costs.slippage_bps:.1f} bps slippage per side",
+        sizing=sizing.value,
         initial_cash=initial_cash,
         portfolio=portfolio,
     )
@@ -129,16 +133,21 @@ def run_backtest(
 
         # 2. Last bar's decision fills at this bar's open.
         if pending is not None:
-            delta = broker.quantity_for_target(
-                pending.target, bar.open, portfolio.equity(bar.open), portfolio.quantity
-            )
-            fill = broker.execute(portfolio, bar, delta, reason=pending.reason)
-            if fill is not None:
-                result.fills.append(fill)
+            target_changed = pending.target != active.target
+            if sizing is Sizing.REBALANCE or target_changed:
+                delta = broker.quantity_for_target(
+                    pending.target, bar.open, portfolio.equity(bar.open), portfolio.quantity
+                )
+                fill = broker.execute(portfolio, bar, delta, reason=pending.reason)
+                if fill is not None:
+                    result.fills.append(fill)
+                    active = pending
+                    pending = None
+            else:
+                # ON_ENTRY: an unchanged target holds its quantity. Re-deriving
+                # it every bar would trim the position as it moves in favour.
                 active = pending
                 pending = None
-            # A rejected order stays pending only if it never traded at all;
-            # the next bar's decision supersedes it anyway.
 
         # 3. Protective exits from this bar's range.
         exit_now = broker.triggered_exit(portfolio, bar, active.stop_loss, active.take_profit)

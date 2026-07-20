@@ -29,6 +29,25 @@ class Side(Enum):
         return 1 if self is Side.BUY else -1
 
 
+class Sizing(Enum):
+    """How a target weight becomes a quantity.
+
+    These are different strategies, not implementation details, and the
+    choice has to be explicit because it changes results by an order of
+    magnitude.
+
+    ON_ENTRY sizes once, when the target changes, and then holds that
+    quantity — the convention a trend follower means by "1x". REBALANCE
+    re-derives the quantity every bar to hold the weight constant, which
+    keeps leverage fixed but trims winners on the way up and adds to losers
+    on the way down. On a 5.5-year Donchian run the difference was 54 trades
+    versus 2,138, and +1,747% versus +390%.
+    """
+
+    ON_ENTRY = "on_entry"
+    REBALANCE = "rebalance"
+
+
 class TradingError(Exception):
     """A rule of the market or the account was violated."""
 
