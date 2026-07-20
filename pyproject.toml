@@ -39,13 +39,22 @@ packages = ["cq"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = [".venv", "data", "logs", "state", "reports"]
+# Anchored with a leading slash: these are top-level data directories, and
+# gitignore semantics would otherwise make a bare "data" match `cq/data/`
+# too, silently excluding the entire data package from linting.
+exclude = ["/.venv", "/data", "/logs", "/state", "/reports"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# BLE and S are enabled because the code already carries `noqa` directives for
+# them: broad excepts that isolate per-target failures, and f-string SQL over
+# internal identifiers. Without the rules enabled those suppressions document
+# nothing and nothing is enforced anywhere else.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "BLE", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# Tests assert, and reach into internals to verify what was actually stored.
+"tests/**" = ["S101", "SLF001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -92,7 +92,9 @@ class OkxPublicClient:
                 time.sleep(delay)
                 continue
             return response.get("data", [])
-        assert last is not None
+        if last is None:
+            # Only reachable with max_retries <= 0, i.e. a misconfiguration.
+            raise RuntimeError(f"no attempt was made for {params}: max_retries={self.max_retries}")
         raise last
 
     # ---- endpoints ----------------------------------------------------

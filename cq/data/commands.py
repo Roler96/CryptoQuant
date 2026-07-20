@@ -27,7 +27,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     sync.add_argument("--end", default=None, help="UTC date, exclusive")
     sync.add_argument("--instruments", nargs="*", default=None, help="default: whole universe")
-    sync.add_argument("--full", action="store_true", help="re-walk history, ignoring what is stored")
+    sync.add_argument(
+        "--full", action="store_true", help="re-walk history, ignoring what is stored"
+    )
     sync.set_defaults(handler=cmd_sync)
 
     quality = subparsers.add_parser("quality", help="report gaps and anomalies in stored bars")

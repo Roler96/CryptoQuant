@@ -144,6 +144,29 @@ def test_resync_is_idempotent(store):
     assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == 10
 
 
+def test_interrupted_sync_keeps_the_pages_it_already_fetched(store):
+    # A full history is ~500 pages. Buffering all of it and flushing at the
+    # end means a failure at page 499 stores nothing and resumes from nowhere.
+    class FailsOnThirdPage(FakeCandles):
+        def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+            if len(self.calls) >= 2:
+                raise RuntimeError("connection reset")
+            return super().history_candles(inst_id, bar, before_ts, limit)
+
+    rows = [candle(START + i * HOUR_MS) for i in range(10)]
+    client = FailsOnThirdPage(rows, page_size=2)
+
+    with pytest.raises(RuntimeError):
+        sync_ohlcv(client, store, "DOGE-USDT-SWAP", start_ms=START, max_pages=10)
+
+    stored = store.load_ohlcv("DOGE-USDT-SWAP", "1h")
+    assert len(stored) == 4, "pages fetched before the failure must survive it"
+
+    # And a re-run picks up from there rather than starting over.
+    resume = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
+    assert resume > START
+
+
 def test_incremental_start_refetches_the_newest_stored_bar(store):
     rows = [candle(START + i * HOUR_MS) for i in range(5)]
     sync_ohlcv(FakeCandles(rows), store, "DOGE-USDT-SWAP", start_ms=START)

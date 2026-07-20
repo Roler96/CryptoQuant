@@ -51,13 +51,22 @@ def sync_ohlcv(
 
     OKX only pages backwards, so this walks from the newest bar towards
     `start_ms`. Overlapping re-fetches are harmless: storage ignores rows it
-    already holds, which also makes an interrupted sync resumable.
+    already holds.
+
+    Each page is written as it arrives rather than accumulated and flushed at
+    the end. A full history is ~500 pages per instrument, and buffering all of
+    it means an interruption at page 499 stores nothing and resumes from
+    nowhere — the opposite of the "resumable" property this is supposed to
+    have.
     """
     bar = okx_bar(timeframe)
     cursor = end_ms
-    rows: list[tuple] = []
     pages = 0
     skipped_unclosed = 0
+    seen = 0
+    new = 0
+    oldest_ts: int | None = None
+    newest_ts: int | None = None
 
     while pages < max_pages:
         page = client.history_candles(inst_id, bar=bar, before_ts=cursor, limit=PAGE_SIZE)
@@ -65,6 +74,7 @@ def sync_ohlcv(
         if not page:
             break
 
+        rows: list[tuple] = []
         for entry in page:
             ts = int(entry[_TS])
             if ts < start_ms:
@@ -86,6 +96,15 @@ def sync_ohlcv(
                 )
             )
 
+        if rows:
+            written = store.upsert_ohlcv(rows)
+            seen += written.seen
+            new += written.new
+            page_timestamps = [row[2] for row in rows]
+            page_oldest, page_newest = min(page_timestamps), max(page_timestamps)
+            oldest_ts = page_oldest if oldest_ts is None else min(oldest_ts, page_oldest)
+            newest_ts = page_newest if newest_ts is None else max(newest_ts, page_newest)
+
         # Advance from the raw page, not from the kept rows: dropping the
         # unclosed candle must not stall the cursor.
         oldest_in_page = int(page[-1][_TS])
@@ -97,23 +116,21 @@ def sync_ohlcv(
         # rows than asked would silently truncate the backfill. Terminating
         # only on an empty page or on reaching start_ms costs one request.
 
-    written = store.upsert_ohlcv(rows)
-    timestamps = [r[2] for r in rows]
     result = SyncResult(
         inst_id=inst_id,
         timeframe=timeframe,
-        result=written,
+        result=WriteResult(seen=seen, new=new),
         pages=pages,
         skipped_unclosed=skipped_unclosed,
-        oldest_ts=min(timestamps) if timestamps else None,
-        newest_ts=max(timestamps) if timestamps else None,
+        oldest_ts=oldest_ts,
+        newest_ts=newest_ts,
     )
     logger.info(
         "{} {}: {} new / {} seen over {} pages ({} unclosed dropped)",
         inst_id,
         timeframe,
-        written.new,
-        written.seen,
+        new,
+        seen,
         pages,
         skipped_unclosed,
     )
