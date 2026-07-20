@@ -60,8 +60,12 @@ dmypy.json
 # Data files (keep structure, ignore contents)
 data/historical/*.csv
 data/historical/*.parquet
+data/*.db
+data/*.db-wal
+data/*.db-shm
 data/cryptoquant.db*
 data/*_paper.db*
+reports/
 *.sqlite
 *.sqlite3
 

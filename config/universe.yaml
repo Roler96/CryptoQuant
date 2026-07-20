@@ -1,0 +1,21 @@
+# Instruments the platform tracks. OKX-native instrument ids.
+#
+# Scope is deliberately narrow (BTC / ETH / DOGE, spot + swap). Adding an
+# instrument is a config change, never a code change.
+
+spot:
+  - BTC-USDT
+  - ETH-USDT
+  - DOGE-USDT
+
+swap:
+  - BTC-USDT-SWAP
+  - ETH-USDT-SWAP
+  - DOGE-USDT-SWAP
+
+# Currencies for the open-interest endpoint, which is keyed by currency
+# rather than by instrument.
+open_interest_currencies:
+  - BTC
+  - ETH
+  - DOGE
