@@ -29,6 +29,17 @@ BASELINE = {
 START, END = "2021-01-01", "2026-07-12"
 INSTRUMENT = "DOGE-USDT-SWAP"
 
+# What "matching the baseline" means, decided here rather than by eye. The
+# return tolerance is wide because the pre-rebuild number carries assumptions
+# that were never written down; it is still nowhere near wide enough to admit
+# the 1,053%-vs-390% spread the gate is currently reporting.
+TOLERANCE = {
+    "return": 0.25,  # relative
+    "sharpe": 0.15,  # absolute
+    "max_drawdown": 0.10,  # absolute
+    "trades": 0.30,  # relative
+}
+
 
 def main() -> int:
     with Store("data/cq.db") as store:
@@ -44,6 +55,7 @@ def main() -> int:
         print(f"{'sizing':<12}{'return':>12}{'Sharpe':>9}{'MaxDD':>9}{'trades':>9}{'ex-best':>12}")
         print("-" * 63)
 
+        measured = {}
         for mode in (Sizing.ON_ENTRY, Sizing.REBALANCE):
             result = run_backtest(
                 DonchianTrend(120, 60),
@@ -57,6 +69,7 @@ def main() -> int:
             m = compute_metrics(
                 result.timestamps, result.equity, result.fills, result.initial_cash
             )
+            measured[mode] = m
             print(
                 f"{mode.value:<12}{m.total_return * 100:>11,.1f}%{m.sharpe:>9.2f}"
                 f"{m.max_drawdown * 100:>8.1f}%{m.trades:>9d}"
@@ -69,9 +82,55 @@ def main() -> int:
             f"{BASELINE['trades']:>9d}{330.0:>11,.1f}%"
         )
         print()
-        print("GATE: FAILED — return differs by ~1.6x; see docs/engine_calibration_gate.md")
+
+        # The gate passes only if some sizing mode reproduces the baseline.
+        # Which one it is matters — ON_ENTRY and REBALANCE are different
+        # strategies — but the gate's question is narrower: can this engine
+        # reproduce the one external number at all?
+        failures = {mode: _deviations(m) for mode, m in measured.items()}
+        passed = [mode for mode, bad in failures.items() if not bad]
+
+        for mode, bad in failures.items():
+            for line in bad:
+                print(f"  {mode.value:<12}{line}")
+
+        if passed:
+            print()
+            print(f"GATE: PASSED — {', '.join(m.value for m in passed)} matches the baseline")
+            return 0
+
+        print()
+        print("GATE: FAILED — no sizing mode reproduces the baseline within tolerance.")
+        print("See docs/engine_calibration_gate.md.")
         print("No research conclusions are produced while the gate is closed.")
-    return 0
+    return 1
+
+
+def _deviations(m) -> list[str]:
+    """Every baseline figure this run misses, with the size of the miss."""
+    checks = [
+        ("return", m.total_return, BASELINE["return"], TOLERANCE["return"], True),
+        ("sharpe", m.sharpe, BASELINE["sharpe"], TOLERANCE["sharpe"], False),
+        (
+            "max_drawdown",
+            m.max_drawdown,
+            BASELINE["max_drawdown"],
+            TOLERANCE["max_drawdown"],
+            False,
+        ),
+        ("trades", float(m.trades), float(BASELINE["trades"]), TOLERANCE["trades"], True),
+    ]
+    out = []
+    for name, actual, expected, tolerance, relative in checks:
+        limit = abs(expected) * tolerance if relative else tolerance
+        miss = abs(actual - expected)
+        if miss > limit:
+            kind = "relative" if relative else "absolute"
+            out.append(
+                f"{name}: {actual:,.4f} vs baseline {expected:,.4f} "
+                f"(off by {miss:,.4f}, {kind} tolerance {limit:,.4f})"
+            )
+    return out
 
 
 if __name__ == "__main__":

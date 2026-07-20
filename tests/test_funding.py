@@ -55,10 +55,18 @@ def test_a_range_between_settlements_yields_nothing():
 # ---- off ---------------------------------------------------------------
 
 
-def test_off_yields_no_settlements_and_says_it_is_an_upper_bound():
+def test_off_yields_no_settlements_and_says_which_way_it_is_wrong():
     model = NoFunding()
     assert model.settlements(DAY0, DAY0 + 365 * 24 * HOUR_MS) == []
-    assert "upper bound" in model.label
+    assert "omitted" in model.label
+
+
+def test_off_does_not_claim_to_be_an_upper_bound():
+    # It was labelled one, and that is only true while the position is paying
+    # funding. A short receiving positive funding, or a long receiving
+    # negative funding, earns it — and omitting that understates the result,
+    # so the "bound" runs the other way.
+    assert "upper bound" not in NoFunding().label
 
 
 # ---- assumed -----------------------------------------------------------
@@ -144,6 +152,74 @@ def test_loading_from_the_store_round_trips(tmp_path):
 
         settlements = model.settlements(DAY0, DAY0 + 16 * HOUR_MS)
         assert settlements == [(DAY0, 0.0001), (DAY0 + 8 * HOUR_MS, -0.0002)]
+
+
+def test_loading_uses_the_realized_rate_not_the_predicted_one(tmp_path):
+    # OKX's `fundingRate` is the rate predicted for the coming period and
+    # `realizedRate` is what was actually charged. Reading the first one
+    # charges a backtest a forecast and calls it a measurement.
+    with Store(tmp_path / "test.db") as store:
+        store.upsert_funding([("DOGE-USDT-SWAP", DAY0, 0.0001, 0.0007, 1)])
+
+        model = load_actual_funding(store, "DOGE-USDT-SWAP")
+
+        assert model.settlements(DAY0, DAY0 + 8 * HOUR_MS) == [(DAY0, 0.0007)]
+
+
+def test_a_settlement_with_no_realized_rate_is_missing_not_predicted(tmp_path):
+    # Substituting the prediction would be indistinguishable from a
+    # measurement in the report, which is the whole thing this mode exists to
+    # prevent. It has to raise like any other gap.
+    with Store(tmp_path / "test.db") as store:
+        store.upsert_funding(
+            [
+                ("DOGE-USDT-SWAP", DAY0, 0.0001, 0.0001, 1),
+                ("DOGE-USDT-SWAP", DAY0 + 8 * HOUR_MS, 0.0002, None, 1),
+            ]
+        )
+
+        model = load_actual_funding(store, "DOGE-USDT-SWAP")
+
+        with pytest.raises(MissingFundingError):
+            model.settlements(DAY0, DAY0 + 16 * HOUR_MS)
+
+
+# ---- cadence -----------------------------------------------------------
+
+
+def test_a_four_hour_instrument_is_charged_every_four_hours():
+    # OKX does not promise an eight-hour schedule and has run shorter ones.
+    # Walking a hard-coded eight-hour grid over a four-hour instrument charges
+    # half the funding that was actually paid.
+    rates = {DAY0 + i * 4 * HOUR_MS: 0.0001 for i in range(6)}
+    model = ActualFunding(rates, "DOGE-USDT-SWAP")
+
+    assert model.interval_ms == 4 * HOUR_MS
+    assert len(model.settlements(DAY0, DAY0 + 24 * HOUR_MS)) == 6
+
+
+def test_the_eight_hour_cadence_is_still_inferred_for_ordinary_instruments():
+    rates = {DAY0 + i * 8 * HOUR_MS: 0.0001 for i in range(3)}
+    assert ActualFunding(rates, "X").interval_ms == 8 * HOUR_MS
+
+
+def test_a_window_past_the_end_of_the_archive_raises():
+    # The last archived settlement pays for the period after it and no
+    # further. Anything beyond that is unarchived, not free.
+    rates = {DAY0: 0.0001, DAY0 + 8 * HOUR_MS: 0.0001}
+    model = ActualFunding(rates, "X")
+
+    with pytest.raises(MissingFundingError, match="only covers"):
+        model.settlements(DAY0, DAY0 + 32 * HOUR_MS)
+
+
+def test_the_rates_are_fingerprinted_so_a_report_can_be_reproduced():
+    first = ActualFunding({DAY0: 0.0001}, "X")
+    same = ActualFunding({DAY0: 0.0001}, "X")
+    different = ActualFunding({DAY0: 0.0002}, "X")
+
+    assert first.fingerprint == same.fingerprint
+    assert first.fingerprint != different.fingerprint
 
 
 def test_loading_does_not_mix_instruments(tmp_path):

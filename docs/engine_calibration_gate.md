@@ -99,3 +99,8 @@ Option 3 is the strongest and needs no historical baseline at all.
 ```
 uv run python scripts/calibrate_donchian.py
 ```
+
+The script compares each figure against the baseline within a stated
+tolerance and **exits non-zero while the gate is closed**. It previously
+printed `GATE: FAILED` and exited 0, so anything chained after it — a shell
+`&&`, a cron job, a CI step — read the closed gate as a pass.

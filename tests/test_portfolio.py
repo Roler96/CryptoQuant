@@ -238,6 +238,29 @@ def test_quantity_rounds_towards_zero():
     spec = MarketSpec("X", "spot", lot_size=0.1)
     assert spec.round_quantity(1.29) == pytest.approx(1.2)
     assert spec.round_quantity(-1.29) == pytest.approx(-1.2)
+
+
+def test_a_quantity_already_on_the_lot_grid_survives_rounding():
+    # 0.3 is not representable in binary and `0.3 / 0.1` evaluates to
+    # 2.9999..., so flooring turned an exactly tradable 0.3 into 0.2 and threw
+    # away a third of the order.
+    spec = MarketSpec("X", "spot", lot_size=0.1)
+    for quantity in (0.3, 0.7, 2.9, 1.1, 70.7):
+        assert spec.round_quantity(quantity) == pytest.approx(quantity)
+
+
+def test_rounding_still_never_exceeds_what_was_asked_for():
+    spec = MarketSpec("X", "spot", lot_size=0.1)
+    for quantity in (0.29, 1.99, 0.35, 12.34):
+        assert abs(spec.round_quantity(quantity)) <= abs(quantity)
+
+
+def test_rounded_quantities_are_free_of_float_noise():
+    # `28 * 0.1` is 2.8000000000000003, which then fails equality checks
+    # against the position it is supposed to match.
+    spec = MarketSpec("X", "spot", lot_size=0.1)
+    assert repr(spec.round_quantity(2.9)) == "2.9"
+    assert repr(spec.round_quantity(0.7)) == "0.7"
     # Never rounds up past what was asked for.
     assert abs(spec.round_quantity(1.99)) <= 1.99
 

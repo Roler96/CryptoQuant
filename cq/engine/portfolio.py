@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 from cq.core.types import Fill, MarketSpec, Side, TradingError
 
 QUANTITY_EPSILON = 1e-12
+# Cash comparisons carry the rounding of a price times a quantity, so they are
+# made with a relative tolerance rather than exactly.
+CASH_EPSILON = 1e-9
 
 
 @dataclass
@@ -151,6 +154,17 @@ class Portfolio:
             )
         if self.quantity + delta < -QUANTITY_EPSILON:
             raise TradingError(f"{self.spec.inst_id} is spot and cannot go short")
+        if fill.side is Side.BUY:
+            # The mirror of the rule above. Spot has no lender: cash that is
+            # not there cannot buy anything, and a balance allowed to go
+            # negative is an unfunded margin loan at zero interest.
+            cost = fill.notional + fill.fee
+            if cost > self.cash + CASH_EPSILON * max(1.0, abs(self.cash)):
+                raise TradingError(
+                    f"{self.spec.inst_id}: buying {fill.quantity} at {fill.price} costs "
+                    f"{cost:.8f} including fees but only {self.cash:.8f} cash is held; "
+                    f"spot cannot borrow"
+                )
 
     def _closing_quantity(self, delta: float) -> float:
         """Signed quantity being closed by `delta`, in position terms."""

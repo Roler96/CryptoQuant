@@ -116,6 +116,12 @@ def expected_max_sharpe(trials: int, sharpe_variance: float = 1.0) -> float:
 
     This is the benchmark a real strategy has to clear: with enough attempts,
     something always looks good.
+
+    `sharpe_variance` is the variance *of the Sharpe estimates across the
+    trials*, in the same per-observation units as the Sharpe being deflated —
+    not the variance of the returns. The 1.0 default belongs to the textbook
+    statement of the formula and is far too large for a per-bar Sharpe; see
+    `deflated_sharpe_ratio`, which derives it instead.
     """
     if trials < 2:
         return 0.0
@@ -133,9 +139,24 @@ def deflated_sharpe_ratio(
     trials: int,
     skew: float = 0.0,
     kurtosis: float = 3.0,
-    sharpe_variance: float = 1.0,
+    sharpe_variance: float | None = None,
 ) -> float:
-    """PSR against the Sharpe that `trials` attempts would produce by chance."""
+    """PSR against the Sharpe that `trials` attempts would produce by chance.
+
+    `sharpe_variance` is how much the Sharpe estimates varied across the
+    trials. Left unset it defaults to `1 / (observations - 1)`, the sampling
+    variance of a Sharpe estimator under the null — the right order of
+    magnitude for the *non-annualised* Sharpe this function takes.
+
+    The previous default of 1.0 was a unit error with one visible symptom:
+    it put the benchmark at a per-bar Sharpe of 1.9, which no strategy has
+    ever reached, so every call returned 0.0 — including the 0.976-to-0.50
+    example in this module's own docstring. A correction that always says
+    "no" is not a correction, and it is worse than none, because it looks
+    like a verdict.
+    """
+    if sharpe_variance is None:
+        sharpe_variance = 1.0 / (observations - 1) if observations > 1 else 1.0
     benchmark = expected_max_sharpe(trials, sharpe_variance)
     return probabilistic_sharpe_ratio(sharpe, observations, skew, kurtosis, benchmark)
 

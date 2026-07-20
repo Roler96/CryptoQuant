@@ -7,6 +7,14 @@ from pathlib import Path
 
 import yaml
 
+# The default set, shipped inside the wheel. It lives in the package rather
+# than at the repository root because `cq` is installable: a path relative to
+# the working directory made every subcommand fail with a bare
+# FileNotFoundError anywhere but the repository.
+PACKAGED_UNIVERSE_PATH = Path(__file__).parent / "config" / "universe.yaml"
+
+# An optional working-directory override, for running a different set of
+# instruments without editing the package or passing --universe every time.
 DEFAULT_UNIVERSE_PATH = Path("config/universe.yaml")
 
 
@@ -29,7 +37,20 @@ class Universe:
 
 
 def load_universe(path: Path | str = DEFAULT_UNIVERSE_PATH) -> Universe:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    """Read a universe file, falling back to the packaged default.
+
+    The fallback applies only to the default path: an explicit `--universe`
+    that does not exist is an error, not an invitation to load something else.
+    """
+    target = Path(path)
+    if target == DEFAULT_UNIVERSE_PATH and not target.exists():
+        target = PACKAGED_UNIVERSE_PATH
+    if not target.exists():
+        raise FileNotFoundError(
+            f"no universe file at {target}; pass --universe or create "
+            f"{DEFAULT_UNIVERSE_PATH}"
+        )
+    raw = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
     return Universe(
         spot=tuple(raw.get("spot", ())),
         swap=tuple(raw.get("swap", ())),

@@ -144,15 +144,18 @@ def test_resync_is_idempotent(store):
     assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == 10
 
 
+class FailsOnThirdPage(FakeCandles):
+    """Dies partway through a walk, like a dropped connection."""
+
+    def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+        if len(self.calls) >= 2:
+            raise RuntimeError("connection reset")
+        return super().history_candles(inst_id, bar, before_ts, limit)
+
+
 def test_interrupted_sync_keeps_the_pages_it_already_fetched(store):
     # A full history is ~500 pages. Buffering all of it and flushing at the
     # end means a failure at page 499 stores nothing and resumes from nowhere.
-    class FailsOnThirdPage(FakeCandles):
-        def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
-            if len(self.calls) >= 2:
-                raise RuntimeError("connection reset")
-            return super().history_candles(inst_id, bar, before_ts, limit)
-
     rows = [candle(START + i * HOUR_MS) for i in range(10)]
     client = FailsOnThirdPage(rows, page_size=2)
 
@@ -162,18 +165,69 @@ def test_interrupted_sync_keeps_the_pages_it_already_fetched(store):
     stored = store.load_ohlcv("DOGE-USDT-SWAP", "1h")
     assert len(stored) == 4, "pages fetched before the failure must survive it"
 
-    # And a re-run picks up from there rather than starting over.
+
+def test_rerunning_after_an_interruption_completes_the_history(store):
+    # The property that actually matters, and the one the old resumption
+    # logic did not have. OKX pages newest-first, so an interruption leaves
+    # the *oldest* bars missing; resuming near the newest stored bar fetches
+    # nothing and calls the hole finished.
+    rows = [candle(START + i * HOUR_MS) for i in range(10)]
+
+    with pytest.raises(RuntimeError):
+        sync_ohlcv(
+            FailsOnThirdPage(rows, page_size=2),
+            store,
+            "DOGE-USDT-SWAP",
+            start_ms=START,
+            max_pages=10,
+        )
+    assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == 4
+
     resume = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
-    assert resume > START
+    assert resume == START, "an unfinished walk must restart, not resume at the tip"
+
+    sync_ohlcv(FakeCandles(rows, page_size=2), store, "DOGE-USDT-SWAP", start_ms=resume)
+
+    stored = store.load_ohlcv("DOGE-USDT-SWAP", "1h")
+    assert len(stored) == 10, "the re-run must fill the tail the interruption left"
 
 
 def test_incremental_start_refetches_the_newest_stored_bar(store):
     rows = [candle(START + i * HOUR_MS) for i in range(5)]
     sync_ohlcv(FakeCandles(rows), store, "DOGE-USDT-SWAP", start_ms=START)
 
-    resume = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=0)
+    resume = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
 
     # One bar back: a tail written mid-page gets re-read rather than trusted.
+    assert resume == START + 3 * HOUR_MS
+
+
+def test_a_completed_walk_is_not_undone_by_the_nightly_top_up(store):
+    # The top-up asks only for the last bar onwards. If that shrank the record
+    # of what has been covered, the following night would decide the history
+    # was never walked and start the whole backfill again.
+    rows = [candle(START + i * HOUR_MS) for i in range(5)]
+    sync_ohlcv(FakeCandles(rows), store, "DOGE-USDT-SWAP", start_ms=START)
+
+    first = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
+    sync_ohlcv(FakeCandles(rows), store, "DOGE-USDT-SWAP", start_ms=first)
+    second = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
+
+    assert second == first, "a completed history must stay completed"
+
+
+def test_an_instrument_listed_after_the_requested_start_still_resumes(store):
+    # History that simply does not go back that far is not an interruption:
+    # the walk ran out of candles, which is a finished walk. Treating it as a
+    # hole would re-walk the entire history every single night.
+    rows = [candle(START + i * HOUR_MS) for i in range(5)]
+    sync_ohlcv(
+        FakeCandles(rows), store, "DOGE-USDT-SWAP", start_ms=START - 1000 * HOUR_MS
+    )
+
+    resume = incremental_start(
+        store, "DOGE-USDT-SWAP", "1h", default_start_ms=START - 1000 * HOUR_MS
+    )
     assert resume == START + 3 * HOUR_MS
 
 

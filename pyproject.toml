@@ -36,6 +36,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["cq"]
 
+# The default universe lives inside the package (cq/config/universe.yaml) so
+# that it travels with the wheel. It used to sit at the repository root, and
+# the built wheel therefore installed a `cq` command that could not run a
+# single subcommand outside the repository: every one of them begins by
+# reading the universe from a path relative to the working directory.
+
+[tool.hatch.build.targets.sdist]
+include = ["cq", "scripts", "tests", "docs", "pyproject.toml"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

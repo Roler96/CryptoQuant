@@ -25,6 +25,10 @@ from cq.core.types import Fill
 
 YEAR_MS = 365.25 * 24 * 60 * 60 * 1000
 
+# Below this a position is closed, not merely small: fills never cancel to
+# exactly zero once lot rounding and flips are involved.
+POSITION_EPSILON = 1e-12
+
 
 @dataclass(frozen=True)
 class Trade:
@@ -223,6 +227,94 @@ def trades_from_fills(fills: Sequence[Fill]) -> list[Trade]:
     return trades
 
 
+def _cagr(final: float, initial: float, years: float) -> float:
+    """Annualised growth rate, or infinity where annualising is meaningless.
+
+    A few hours of a good run compounds to something no float can hold — a
+    +50% afternoon is 1.5 ** 1753 annualised — and raising OverflowError out
+    of a metrics call kills the report that was about to disclose exactly how
+    short the run was.
+    """
+    if years <= 0 or final <= 0 or initial <= 0:
+        return 0.0
+    try:
+        return (final / initial) ** (1 / years) - 1.0
+    except OverflowError:
+        return math.inf
+
+
+def position_spans(fills: Sequence[Fill]) -> list[tuple[int, int | None]]:
+    """When the account was in a position: (entry_ts, exit_ts or None).
+
+    A flip closes one span and opens the next at the same instant. The final
+    span's exit is None when the run ended still holding.
+    """
+    spans: list[tuple[int, int | None]] = []
+    quantity = 0.0
+    entry_ts: int | None = None
+
+    for fill in fills:
+        previous = quantity
+        quantity += fill.signed_quantity
+        was_flat = abs(previous) < POSITION_EPSILON
+        now_flat = abs(quantity) < POSITION_EPSILON
+        if was_flat and not now_flat:
+            entry_ts = fill.ts
+        elif not was_flat and now_flat:
+            spans.append((entry_ts if entry_ts is not None else fill.ts, fill.ts))
+            entry_ts = None
+            quantity = 0.0
+        elif not was_flat and (previous > 0) != (quantity > 0):
+            spans.append((entry_ts if entry_ts is not None else fill.ts, fill.ts))
+            entry_ts = fill.ts
+
+    if entry_ts is not None:
+        spans.append((entry_ts, None))
+    return spans
+
+
+def episode_returns(
+    timestamps: Sequence[int],
+    equity: Sequence[float],
+    fills: Sequence[Fill],
+    initial_cash: float,
+) -> list[float]:
+    """What the *portfolio* did across each position, as a fraction of itself.
+
+    This is what a bootstrap has to resample. A trade's own return on its own
+    notional answers a different question, and three ways of getting it wrong
+    all showed up in this project's reports:
+
+    * a trade held at half weight returning +100% moved the account by +50%,
+      but entered the bootstrap as +100%;
+    * a position still open at the end of the run had no completed trade at
+      all, so a run ending 50% down could report a 0% probability of loss;
+    * funding and financing are charged to the account rather than to the
+      trade, so a position that lost 10% entirely to funding entered the
+      bootstrap as a flat 0%.
+
+    Measuring from the equity curve between entry and exit fixes all three
+    by construction: whatever the account actually did is what gets counted.
+    """
+    if not equity or not timestamps:
+        return []
+    index_of = {int(ts): i for i, ts in enumerate(timestamps)}
+    last = len(equity) - 1
+
+    returns: list[float] = []
+    for entry_ts, exit_ts in position_spans(fills):
+        entry_index = index_of.get(int(entry_ts))
+        if entry_index is None:
+            continue
+        # The bar before the entry: the fill happens at this bar's open, so
+        # its close already contains part of the position's result.
+        opening = equity[entry_index - 1] if entry_index > 0 else initial_cash
+        exit_index = last if exit_ts is None else index_of.get(int(exit_ts), last)
+        if opening > 0:
+            returns.append(equity[exit_index] / opening - 1.0)
+    return returns
+
+
 def compute_metrics(
     timestamps: Sequence[int],
     equity: Sequence[float],
@@ -238,7 +330,7 @@ def compute_metrics(
 
     span_ms = (timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0
     years = span_ms / YEAR_MS
-    cagr = (final / initial_cash) ** (1 / years) - 1.0 if years > 0 and final > 0 else 0.0
+    cagr = _cagr(final, initial_cash, years)
 
     wins = [t for t in trades if t.is_win]
     gross_win = sum(t.net_pnl for t in wins)

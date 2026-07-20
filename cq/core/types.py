@@ -19,6 +19,10 @@ MarketType = Literal["spot", "swap"]
 DEFAULT_FEE_BPS = 10.0
 DEFAULT_SLIPPAGE_BPS = 5.0
 
+# How far off a lot boundary a quantity may sit and still count as being on
+# it. Sized for accumulated binary-float error, far below any real lot.
+LOT_TOLERANCE = 1e-9
+
 
 class Side(Enum):
     BUY = "buy"
@@ -66,12 +70,22 @@ class MarketSpec:
     lot_size: float = 0.0
     min_notional: float = 0.0
     max_leverage: float = 1.0
+    # Fraction of position notional the account must keep as equity before the
+    # exchange closes the position. Zero is not "no liquidation": it means
+    # liquidation at bankruptcy, which is the floor no venue lets a position
+    # pass through. Set it to the venue's real tier rate to model the margin
+    # call that actually arrives first.
+    maintenance_margin_rate: float = 0.0
 
     def __post_init__(self) -> None:
         if self.market_type not in ("spot", "swap"):
             raise ValueError(f"unknown market type {self.market_type!r}")
         if self.market_type == "spot" and self.max_leverage != 1.0:
             raise ValueError("spot markets cannot be leveraged")
+        if self.market_type == "spot" and self.maintenance_margin_rate != 0.0:
+            raise ValueError("spot positions are owned outright and cannot be liquidated")
+        if not 0.0 <= self.maintenance_margin_rate < 1.0:
+            raise ValueError("maintenance margin rate must be in [0, 1)")
         if self.lot_size < 0 or self.min_notional < 0:
             raise ValueError("lot size and min notional must be non-negative")
 
@@ -84,11 +98,25 @@ class MarketSpec:
 
         Rounding towards zero rather than nearest keeps a rounded order from
         exceeding the position the caller asked for.
+
+        The tolerance is what makes that safe rather than destructive: 0.3 is
+        not representable in binary, and `0.3 / 0.1` evaluates to 2.9999...,
+        so a bare floor turns an exactly tradable 0.3 into 0.2 and loses a
+        third of the order. A quantity within `LOT_TOLERANCE` of a lot
+        boundary is already on the grid, so it snaps to it instead.
         """
         if self.lot_size <= 0:
             return quantity
-        lots = math.floor(abs(quantity) / self.lot_size)
-        return math.copysign(lots * self.lot_size, quantity)
+        lots = abs(quantity) / self.lot_size
+        nearest = round(lots)
+        if abs(lots - nearest) <= LOT_TOLERANCE * max(1.0, nearest):
+            lots = float(nearest)
+        else:
+            lots = float(math.floor(lots))
+        # Re-snapped the same way: `lots * lot_size` reintroduces the very
+        # representation error this method exists to absorb (28 * 0.1 is
+        # 2.8000000000000003), which then trips equality checks downstream.
+        return math.copysign(_snap(lots * self.lot_size, self.lot_size), quantity)
 
     def validate_target(self, weight: float) -> None:
         """Reject a target this market cannot hold.
@@ -105,6 +133,18 @@ class MarketSpec:
             raise TradingError(
                 f"{self.inst_id}: target {weight} exceeds max leverage {self.max_leverage}"
             )
+
+
+def _lot_decimals(lot_size: float) -> int:
+    """Decimal places `lot_size` is expressed in."""
+    text = f"{lot_size:.12f}".rstrip("0")
+    fraction = text.split(".")[1] if "." in text else ""
+    return len(fraction)
+
+
+def _snap(value: float, lot_size: float) -> float:
+    """`value` cleaned of the float noise in a whole number of lots."""
+    return round(value, _lot_decimals(lot_size))
 
 
 @dataclass(frozen=True)

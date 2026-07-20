@@ -1,5 +1,7 @@
 """Storage layer: dedupe, coverage and the archive-run audit trail."""
 
+import sqlite3
+
 import pytest
 
 from cq.data.store import Store, WriteResult
@@ -28,11 +30,43 @@ def test_upsert_funding_counts_only_new_rows(store):
     assert (count, lo, hi) == (4, 1000, 4000)
 
 
-def test_upsert_funding_does_not_overwrite_stored_rate(store):
-    store.upsert_funding([("DOGE-USDT-SWAP", 1000, 0.0001, 0.0001, 1)])
-    store.upsert_funding([("DOGE-USDT-SWAP", 1000, 0.9999, 0.9999, 2)])
-    row = store._conn.execute("SELECT funding_rate FROM funding WHERE funding_time=1000").fetchone()
-    assert row["funding_rate"] == 0.0001
+def test_re_archiving_corrects_a_stored_rate(store):
+    # A settlement swept moments after it fires carries the predicted rate and
+    # often no realized one at all. The next sweep brings the measurement, and
+    # it has to be allowed to land: `INSERT OR IGNORE` kept the prediction
+    # forever and every swap backtest then charged a forecast as if measured.
+    store.upsert_funding([("DOGE-USDT-SWAP", 1000, 0.0001, None, 1)])
+    store.upsert_funding([("DOGE-USDT-SWAP", 1000, 0.0001, 0.00013, 2)])
+
+    row = store._conn.execute(
+        "SELECT realized_rate, fetched_at FROM funding WHERE funding_time=1000"
+    ).fetchone()
+    assert row["realized_rate"] == 0.00013
+    assert row["fetched_at"] == 2
+
+
+def test_a_row_that_violates_the_schema_raises_instead_of_vanishing(store):
+    # `INSERT OR IGNORE` suppressed NOT NULL violations exactly as quietly as
+    # duplicates, so malformed rows left no trace anywhere.
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert_funding([("DOGE-USDT-SWAP", 1000, None, None, 1)])
+
+    assert store.funding_coverage("DOGE-USDT-SWAP") == (0, None, None)
+
+
+def test_a_refetched_candle_corrects_the_stored_one(store):
+    # OKX revises candles shortly after they close. The exchange's later value
+    # is the right one; keeping the first copy pins the bar to whatever the
+    # tape said in the second after it closed.
+    store.upsert_ohlcv([("DOGE-USDT", "1h", 1000, 1.0, 2.0, 0.5, 1.5, 100.0, 150.0)])
+    result = store.upsert_ohlcv(
+        [("DOGE-USDT", "1h", 1000, 1.0, 2.5, 0.5, 1.6, 120.0, 180.0)]
+    )
+
+    assert result == WriteResult(seen=1, new=0), "a correction is not a new bar"
+    frame = store.load_ohlcv("DOGE-USDT", "1h")
+    assert frame["high"].iloc[0] == 2.5
+    assert frame["close"].iloc[0] == 1.6
 
 
 def test_empty_upsert_is_a_noop(store):

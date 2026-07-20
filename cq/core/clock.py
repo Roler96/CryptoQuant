@@ -35,6 +35,12 @@ TIMEFRAMES: dict[str, int] = {
 BASE_TIMEFRAME = "1h"
 
 # OKX spells timeframes differently from our canonical names.
+#
+# The `utc` suffixes are not cosmetic. OKX aggregates 6H and above in Hong
+# Kong time (UTC+8) unless the code says otherwise, while `resample()` here is
+# epoch-anchored, so a plain `1D` live bar would cover 16:00-16:00 UTC and
+# disagree with every historical daily bar this system builds. 4h and below
+# divide the 8-hour offset evenly and are therefore unaffected.
 _OKX_BAR = {
     "1m": "1m",
     "5m": "5m",
@@ -43,9 +49,9 @@ _OKX_BAR = {
     "1h": "1H",
     "2h": "2H",
     "4h": "4H",
-    "6h": "6H",
-    "12h": "12H",
-    "1d": "1D",
+    "6h": "6Hutc",
+    "12h": "12Hutc",
+    "1d": "1Dutc",
 }
 
 

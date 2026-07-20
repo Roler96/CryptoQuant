@@ -33,8 +33,24 @@ def test_unknown_timeframe_is_rejected_not_guessed():
 
 def test_okx_spelling_differs_from_ours():
     assert okx_bar("1h") == "1H"
-    assert okx_bar("1d") == "1D"
     assert okx_bar("15m") == "15m"
+
+
+def test_timeframes_of_six_hours_and_up_ask_for_the_utc_aligned_bar():
+    # OKX aggregates 6H and above in UTC+8 unless the code says otherwise, so
+    # a plain "1D" is a 16:00-16:00 UTC bar. `resample()` here is epoch
+    # anchored, so live and backtest boundaries would be eight hours apart on
+    # exactly the timeframes a daily gate runs on.
+    assert okx_bar("6h") == "6Hutc"
+    assert okx_bar("12h") == "12Hutc"
+    assert okx_bar("1d") == "1Dutc"
+
+
+def test_timeframes_below_six_hours_need_no_suffix():
+    # 4h and shorter divide the eight-hour offset evenly, so both alignments
+    # produce the same boundaries and OKX offers no `utc` variant.
+    assert okx_bar("4h") == "4H"
+    assert okx_bar("2h") == "2H"
 
 
 def test_floor_is_utc_anchored():

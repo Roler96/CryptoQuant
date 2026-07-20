@@ -121,6 +121,18 @@ def test_non_positive_price_is_flagged():
     assert not report.clean
 
 
+def test_a_series_with_no_data_is_not_clean():
+    # "No data" is the most complete failure a series can have. Reporting it
+    # as clean means an unsynced database, a typo in an instrument id and a
+    # healthy archive all exit zero — the check passes exactly when it has
+    # checked nothing.
+    report = check_ohlcv(frame_from([]), "DOGE-USDT", "1h")
+
+    assert report.bars == 0
+    assert not report.clean
+    assert "no data" in report.summary()
+
+
 def test_zero_volume_is_reported_but_not_unclean():
     # Legal on an illiquid instrument; worth seeing, not worth failing on.
     quiet = frame_from([0, 1], volume=[10.0, 0.0])

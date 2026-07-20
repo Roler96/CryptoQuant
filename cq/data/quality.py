@@ -50,7 +50,14 @@ class QualityReport:
 
     @property
     def clean(self) -> bool:
-        return not (
+        """Whether the series is fit to trade on.
+
+        An empty series is not clean. "No data" is the most complete failure
+        a series can have, and reporting it as clean means an unsynced
+        database, a typo in an instrument id, and a healthy archive all exit
+        zero — the check passes precisely when it has checked nothing.
+        """
+        return bool(self.bars) and not (
             self.gaps
             or self.duplicate_timestamps
             or self.out_of_order

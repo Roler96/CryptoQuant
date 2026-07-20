@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 
+import pandas as pd
+
 from cq.core.clock import BASE_TIMEFRAME
 from cq.data.derivatives import archive_funding, archive_open_interest
 from cq.data.fetch import incremental_start, sync_ohlcv
 from cq.data.okx import OkxPublicClient
 from cq.data.quality import check_ohlcv
+from cq.data.resample import resample
 from cq.data.store import DEFAULT_DB_PATH, Store
 from cq.universe import DEFAULT_UNIVERSE_PATH, load_universe
 
@@ -128,7 +131,7 @@ def cmd_quality(args: argparse.Namespace) -> int:
     unclean = False
     with Store(args.db) as store:
         for inst_id in universe.all_instruments:
-            frame = store.load_ohlcv(inst_id, args.timeframe)
+            frame = _frame_for(store, inst_id, args.timeframe)
             report = check_ohlcv(frame, inst_id, args.timeframe)
             print(report.summary())
             for gap in report.gaps[: args.show_gaps]:
@@ -137,6 +140,19 @@ def cmd_quality(args: argparse.Namespace) -> int:
                 print(f"    ... {len(report.gaps) - args.show_gaps} more gaps")
             unclean |= not report.clean
     return 1 if unclean else 0
+
+
+def _frame_for(store: Store, inst_id: str, timeframe: str) -> pd.DataFrame:
+    """Stored bars at `timeframe`, derived from the base if not stored.
+
+    Only 1h is ever fetched, so querying the `ohlcv` table for 4h returns
+    nothing at all — and an empty frame used to be reported as a clean series
+    with no data, which reads as "4h is fine" rather than "4h was never
+    checked".
+    """
+    if timeframe == BASE_TIMEFRAME:
+        return store.load_ohlcv(inst_id, timeframe)
+    return resample(store.load_ohlcv(inst_id, BASE_TIMEFRAME), timeframe)
 
 
 def _parse_utc_date(text: str) -> int:

@@ -321,9 +321,38 @@ def test_deflating_a_sharpe_by_twenty_trials_moves_it_towards_a_coin_flip():
     undeflated = probabilistic_sharpe_ratio(0.062, 1000)
     deflated = deflated_sharpe_ratio(0.062, 1000, trials=20)
 
-    assert undeflated > 0.9
-    assert deflated < undeflated
-    assert deflated < 0.7, "twenty trials must materially deflate this"
+    assert undeflated == pytest.approx(0.976, abs=0.002)
+    assert deflated == pytest.approx(0.50, abs=0.05), "the documented result"
+
+
+def test_deflation_does_not_collapse_to_zero_for_every_real_strategy():
+    # The default `sharpe_variance` of 1.0 put the benchmark at a per-bar
+    # Sharpe of 1.9, which nothing reaches, so the correction returned 0.0 for
+    # every input it was ever given. A verdict of "no" that cannot be moved is
+    # not a correction; it is a broken instrument that looks like a finding.
+    for observations in (250, 1_000, 5_000):
+        for sharpe in (0.02, 0.05, 0.10):
+            assert deflated_sharpe_ratio(sharpe, observations, trials=20) > 0.0
+
+
+def test_deflation_still_answers_near_zero_for_a_sharpe_that_is_pure_noise():
+    # A zero Sharpe sits 1.9 estimator standard errors below what twenty
+    # trials produce by chance, so the deflated confidence is ~3%.
+    assert deflated_sharpe_ratio(0.0, 1000, trials=20) < 0.05
+
+
+def test_more_trials_deflate_further():
+    strong = deflated_sharpe_ratio(0.08, 1000, trials=2)
+    weak = deflated_sharpe_ratio(0.08, 1000, trials=200)
+    assert strong > weak
+
+
+def test_an_explicit_trial_variance_is_still_honoured():
+    # Callers who measured the spread of Sharpes across their own trials
+    # should use it; the derived default is only for those who did not.
+    assert deflated_sharpe_ratio(
+        0.062, 1000, trials=20, sharpe_variance=1.0
+    ) == pytest.approx(0.0, abs=1e-9)
 
 
 # ---- null comparison ---------------------------------------------------
