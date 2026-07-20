@@ -245,6 +245,15 @@ class Store:
     def open_interest_coverage(self, ccy: str) -> tuple:
         return self.coverage("open_interest", "ccy", ccy, "ts")
 
+    def load_funding(self, inst_id: str) -> dict[int, float]:
+        """Archived funding settlements, keyed by settlement time."""
+        rows = self._conn.execute(
+            "SELECT funding_time, funding_rate FROM funding WHERE inst_id=? "
+            "ORDER BY funding_time",
+            (inst_id,),
+        ).fetchall()
+        return {int(row["funding_time"]): float(row["funding_rate"]) for row in rows}
+
     def recent_runs(self, limit: int = 20) -> list[sqlite3.Row]:
         return list(
             self._conn.execute(
