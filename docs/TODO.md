@@ -1,6 +1,10 @@
 # CryptoQuant 待办清单
 
-> 最后更新: 2026-07-15
+> 最后更新: 2026-07-20
+>
+> **2026-07-20：`docs/research/` 整目录及全部 `research_*.py` 脚本已移除。**
+> 下文保留的研究结论仍然成立（它们同时记在长期记忆里），但**支撑它们的原始报告和复现脚本已不在仓库内**，
+> 只能从 git 历史（`git show 43688ce:docs/research/<file>`）取回。新增结论请勿再指向 `docs/research/` 下的路径。
 >
 > **与 `review-2026-07-10.md` 的关系**：那份审查列了 P0/P1/P2 共 22 项，本文档**不复制**它。
 > 这里只收两类：
@@ -22,7 +26,11 @@
 
 **影响:** 但它**不构成独立 OOS 证据**：该族此前已接触全样本；去掉最佳一笔全期 +1,756% → **+330%**；trade-level bootstrap 全期亏损概率约 **10%**；locked test 段已烧毁（见记忆 `doge-research-protocol`）。1x 下必须接受 50–90% 级别的 MTM 回撤。
 
-**建议:** 唯一能产生新信息的是**测试网/纸面交易的新样本**，重跑历史不会。上线门槛沿用 `doge_donchian_trend_2026-07-13.md` 第四节（测试网 20 笔逐单核对、费用回写、100 USDT 灰度限额）。
+**建议:** 唯一能产生新信息的是**测试网/纸面交易的新样本**，重跑历史不会。上线门槛（原 `doge_donchian_trend_2026-07-13.md` 第四节，该文档已随 `docs/research/` 移除，条款转录于此以免失传）：
+
+1. 测试网累计 **20 笔**，逐单与回测信号核对方向、时点、数量；
+2. 实际成交费用**回写**进回测成本假设，确认 15 bps/边 未低估；
+3. 灰度限额 **100 USDT**，达标前不得放大。
 
 **复现:**
 ```
@@ -93,9 +101,9 @@ uv run python run_doge_backtest.py --strategy doge_donchian_trend \
 
   连带处理：`config.yaml` 的 `trading.strategy` **置空**（而非改指 `doge_donchian_trend`）—— 后者是 4h/swap，而 `config.yaml` 是 5m/spot，指过去会让裸跑 `live_runner.py` 拿到一个配错周期与账户类型的策略；置空则给出「请指定 --strategy」的明确报错。跑唯一候选请用 `--config config.doge_donchian.yaml`。`run_doge_backtest.py` 默认策略改为 `doge_donchian_trend`；`test_strategy_resolve.py` 新增守卫，遍历 `strategies/` 下每个模块确认都能解析，免得参数化列表随策略增删而腐烂。
 
-- **补齐 5 份研究文档的审计批注**（此前读起来像绿灯）：`doge_spot_donchian_sma`（已否决却无批注，正文仍写「进入测试网候选阶段」）、`sl_tp_study_atr_breakout_trend`（基线作废）、`new_strategy_scan_2026-07-08`（判据是「打不过现役」，而现役已作废——但六个候选族**不因此翻案**，它们的绝对数字同样产自修复前引擎，要复活须重跑）、`streak_exhaustion_fade`（代码已被 `f61ea64` 删除且未记原因；数字同批作废）、`filter_rationale`（描述的两个策略已不在仓库，自称「唯一真相来源」已脱节）。
+- **补齐 5 份研究文档的审计批注**（此前读起来像绿灯）——⚠️ *这些文档已于 2026-07-20 随 `docs/research/` 一并移除，批注仅存于 git 历史；下列否决结论本身依然有效*：`doge_spot_donchian_sma`（已否决却无批注，正文仍写「进入测试网候选阶段」）、`sl_tp_study_atr_breakout_trend`（基线作废）、`new_strategy_scan_2026-07-08`（判据是「打不过现役」，而现役已作废——但六个候选族**不因此翻案**，它们的绝对数字同样产自修复前引擎，要复活须重跑）、`streak_exhaustion_fade`（代码已被 `f61ea64` 删除且未记原因；数字同批作废）、`filter_rationale`（描述的两个策略已不在仓库，自称「唯一真相来源」已脱节）。
 
-- **DogeSpotRegimeSwitch 的 20 小时前视（新发现，原 P1-4 的副产品）**：`_daily_trend()` 用 `resample("1D").last()` 取当日最终收盘、无 shift 地 ffill 回当天全部 4h bar —— 当天 00:00 的 bar 用上了当天 20:00 的收盘。**与 2026-07-14 否决 `DogeSpotDonchianSma` 的是同一个构造**；那次审计的结论只落到了那一个策略上，这个兄弟策略共用同一段代码却没人回头查。同文件里 `_bull_channels` / `_bear_drawdown` / `_vol_filter` 全都 `.shift(1)` 了，只有它漏了；研究笔记还明写「所有通道和均线均 shift(1)」。已加 daily `shift(1)` 修复，并给 `docs/research/doge_regime_switch_2026-07-14.md` 加了审计批注。
+- **DogeSpotRegimeSwitch 的 20 小时前视（新发现，原 P1-4 的副产品）**：`_daily_trend()` 用 `resample("1D").last()` 取当日最终收盘、无 shift 地 ffill 回当天全部 4h bar —— 当天 00:00 的 bar 用上了当天 20:00 的收盘。**与 2026-07-14 否决 `DogeSpotDonchianSma` 的是同一个构造**；那次审计的结论只落到了那一个策略上，这个兄弟策略共用同一段代码却没人回头查。同文件里 `_bull_channels` / `_bear_drawdown` / `_vol_filter` 全都 `.shift(1)` 了，只有它漏了；研究笔记还明写「所有通道和均线均 shift(1)」。已加 daily `shift(1)` 修复，并给当时的研究文档加了审计批注（该文档已于 2026-07-20 随 `docs/research/` 移除）。
   - 测试：`TestDailyGateCausality::test_gate_is_prefix_invariant`（门控在第 i 根的值不得随之后的 bar 变化）。旧代码上抓到 42 处违例。**另有两种写法被试过并否决**，因为它们在坏代码上是绿的：对 `generate_signal()` 做端到端前缀检查（状态机会吸收孤立的门控翻转），以及扰动某天最后一根 bar（是否翻转取决于样本）。
 - **回测脚本参数化（原 P1-4 的直接要求）**：`run_doge_backtest.py` 改为 argparse，支持 `--strategy`（按模块名解析）/`--symbol`/`--exchange`/`--start`/`--end`/`--commission-bps`/`--slippage-bps`/`--resample-from`。新增 `--resample-from 1h` 是因为 4h 表只有近一年，而研究口径是 1h 聚合成 4h。策略解析逻辑从 `live_runner.py` 提取到 `cryptoquant/strategy/resolve.py` 由两边共用——避免"同一个名字实盘和回测解析到不同类"。顺带收紧：旧实现按 `dir()` 字母序取第一个 `Strategy` 子类，模块里 import 进来的策略类可能胜出；现在只认本模块定义的，且多于一个即报错。
 
