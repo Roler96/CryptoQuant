@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
 DEFAULT_DB_PATH = Path("data/cq.db")
 
 SCHEMA = """
@@ -204,6 +206,41 @@ class Store:
 
     def funding_coverage(self, inst_id: str) -> tuple:
         return self.coverage("funding", "inst_id", inst_id, "funding_time")
+
+    def ohlcv_coverage(self, inst_id: str, timeframe: str) -> tuple:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n, MIN(ts) AS lo, MAX(ts) AS hi FROM ohlcv "
+            "WHERE inst_id=? AND timeframe=?",
+            (inst_id, timeframe),
+        ).fetchone()
+        return (row["n"], row["lo"], row["hi"])
+
+    def load_ohlcv(
+        self,
+        inst_id: str,
+        timeframe: str,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> pd.DataFrame:
+        """Stored bars as a DataFrame indexed by UTC open time, ascending.
+
+        `end_ms` is exclusive so that adjacent ranges do not overlap.
+        """
+        query = "SELECT ts, open, high, low, close, volume, quote_volume FROM ohlcv "
+        query += "WHERE inst_id=? AND timeframe=?"
+        params: list = [inst_id, timeframe]
+        if start_ms is not None:
+            query += " AND ts >= ?"
+            params.append(start_ms)
+        if end_ms is not None:
+            query += " AND ts < ?"
+            params.append(end_ms)
+        query += " ORDER BY ts ASC"
+
+        frame = pd.read_sql_query(query, self._conn, params=params)
+        frame.index = pd.to_datetime(frame.pop("ts"), unit="ms", utc=True)
+        frame.index.name = "ts"
+        return frame
 
     def open_interest_coverage(self, ccy: str) -> tuple:
         return self.coverage("open_interest", "ccy", ccy, "ts")

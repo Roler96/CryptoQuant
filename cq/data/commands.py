@@ -5,14 +5,37 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 
+from cq.core.clock import BASE_TIMEFRAME
 from cq.data.derivatives import archive_funding, archive_open_interest
+from cq.data.fetch import incremental_start, sync_ohlcv
 from cq.data.okx import OkxPublicClient
+from cq.data.quality import check_ohlcv
 from cq.data.store import DEFAULT_DB_PATH, Store
 from cq.universe import DEFAULT_UNIVERSE_PATH, load_universe
+
+# DOGE-USDT-SWAP does not exist before 2021, and that is the oldest instrument
+# in the universe, so it bounds a full backfill.
+DEFAULT_HISTORY_START = "2021-01-01"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     """Attach every `cq data ...` subcommand to the parser."""
+    sync = subparsers.add_parser("sync", help="backfill closed OHLCV bars from OKX")
+    _add_common(sync)
+    sync.add_argument(
+        "--start", default=None, help=f"UTC date, default resume or {DEFAULT_HISTORY_START}"
+    )
+    sync.add_argument("--end", default=None, help="UTC date, exclusive")
+    sync.add_argument("--instruments", nargs="*", default=None, help="default: whole universe")
+    sync.add_argument("--full", action="store_true", help="re-walk history, ignoring what is stored")
+    sync.set_defaults(handler=cmd_sync)
+
+    quality = subparsers.add_parser("quality", help="report gaps and anomalies in stored bars")
+    _add_common(quality)
+    quality.add_argument("--timeframe", default=BASE_TIMEFRAME)
+    quality.add_argument("--show-gaps", type=int, default=5, help="gaps to list per instrument")
+    quality.set_defaults(handler=cmd_quality)
+
     archive = subparsers.add_parser(
         "archive-derivs",
         help="archive funding rates and open interest (run nightly; history expires)",
@@ -66,12 +89,68 @@ def cmd_archive_derivs(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    universe = load_universe(args.universe)
+    instruments = args.instruments or list(universe.all_instruments)
+    default_start = _parse_utc_date(args.start or DEFAULT_HISTORY_START)
+    end_ms = _parse_utc_date(args.end) if args.end else None
+
+    client = OkxPublicClient()
+    failed = False
+    with Store(args.db) as store:
+        for inst_id in instruments:
+            if args.start or args.full:
+                start_ms = default_start
+            else:
+                start_ms = incremental_start(store, inst_id, BASE_TIMEFRAME, default_start)
+            try:
+                outcome = sync_ohlcv(
+                    client, store, inst_id, start_ms=start_ms, end_ms=end_ms
+                )
+            except Exception as exc:  # noqa: BLE001 - reported per instrument
+                print(f"{inst_id:<18} FAILED: {type(exc).__name__}: {exc}")
+                failed = True
+                continue
+            span = "-"
+            if outcome.oldest_ts is not None and outcome.newest_ts is not None:
+                span = f"{_fmt(outcome.oldest_ts)} .. {_fmt(outcome.newest_ts)}"
+            print(
+                f"{inst_id:<18}{outcome.result.new:>8} new /{outcome.result.seen:>8} seen  "
+                f"{span}  (dropped {outcome.skipped_unclosed} unclosed)"
+            )
+    return 1 if failed else 0
+
+
+def cmd_quality(args: argparse.Namespace) -> int:
+    universe = load_universe(args.universe)
+    unclean = False
+    with Store(args.db) as store:
+        for inst_id in universe.all_instruments:
+            frame = store.load_ohlcv(inst_id, args.timeframe)
+            report = check_ohlcv(frame, inst_id, args.timeframe)
+            print(report.summary())
+            for gap in report.gaps[: args.show_gaps]:
+                print(f"    gap: {gap}")
+            if len(report.gaps) > args.show_gaps:
+                print(f"    ... {len(report.gaps) - args.show_gaps} more gaps")
+            unclean |= not report.clean
+    return 1 if unclean else 0
+
+
+def _parse_utc_date(text: str) -> int:
+    parsed = dt.datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=dt.UTC)
+    return int(parsed.timestamp() * 1000)
+
+
 def cmd_coverage(args: argparse.Namespace) -> int:
     universe = load_universe(args.universe)
     now_ms = int(dt.datetime.now(dt.UTC).timestamp() * 1000)
     with Store(args.db) as store:
         print(f"{'series':<24}{'rows':>7}  {'oldest':<17}{'newest':<17}{'lag':>10}")
         print("-" * 76)
+        for inst_id in universe.all_instruments:
+            count, lo, hi = store.ohlcv_coverage(inst_id, BASE_TIMEFRAME)
+            print(_coverage_line(f"{BASE_TIMEFRAME} {inst_id}", count, lo, hi, now_ms))
         for inst_id in universe.swap:
             count, lo, hi = store.funding_coverage(inst_id)
             print(_coverage_line(f"funding {inst_id}", count, lo, hi, now_ms))
