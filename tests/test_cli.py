@@ -23,3 +23,22 @@ def test_paper_run_exposes_feed_stall_grace():
     args = build_parser().parse_args(["paper", "run", "--stall-grace", "45"])
 
     assert args.stall_grace == 45.0
+
+
+def test_paper_run_exposes_explicit_swap_account_settings():
+    args = build_parser().parse_args(
+        [
+            "paper",
+            "run",
+            "--inst",
+            "DOGE-USDT-SWAP",
+            "--leverage",
+            "3",
+            "--margin-mode",
+            "isolated",
+        ]
+    )
+
+    assert args.inst == "DOGE-USDT-SWAP"
+    assert args.leverage == 3.0
+    assert args.margin_mode == "isolated"

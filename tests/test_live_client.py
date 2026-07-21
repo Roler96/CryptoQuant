@@ -4,7 +4,7 @@ import ccxt
 import pytest
 
 from cq.core.types import Side
-from cq.live.client import OkxTradeClient, TradeError
+from cq.live.client import OkxTradeClient, TradeError, to_symbol
 
 INST = "DOGE-USDT"
 
@@ -22,13 +22,31 @@ class FakeExchange:
         self.market_create_error: Exception | None = None
         self.algo_by_client_id = {}
         self.order_by_client_id = {}
+        self.account_config = {"acctLv": "2", "posMode": "net_mode"}
+        self.position_mode_requests = []
+        self.leverage_requests = []
+        self.positions = []
+        self.balance_details = []
+        self.bills = []
+        self.filled = 100.0
+
+    def market(self, symbol):
+        if symbol == "DOGE/USDT:USDT":
+            return {
+                "contract": True,
+                "swap": True,
+                "linear": True,
+                "settle": "USDT",
+                "contractSize": 100.0,
+            }
+        raise KeyError(symbol)
 
     def amount_to_precision(self, symbol, quantity):
-        assert symbol == "DOGE/USDT"
+        assert symbol in ("DOGE/USDT", "DOGE/USDT:USDT")
         return f"{quantity:.6f}"
 
     def price_to_precision(self, symbol, price):
-        assert symbol == "DOGE/USDT"
+        assert symbol in ("DOGE/USDT", "DOGE/USDT:USDT")
         return f"{price:.5f}"
 
     def private_post_trade_order_algo(self, request):
@@ -87,11 +105,47 @@ class FakeExchange:
         return {
             "id": order_id,
             "status": "closed",
-            "filled": 100.0,
+            "filled": self.filled,
             "average": 0.073,
             "timestamp": 123,
             "fees": [],
         }
+
+    def private_get_account_config(self):
+        return {"code": "0", "data": [self.account_config], "msg": ""}
+
+    def private_post_account_set_position_mode(self, request):
+        self.position_mode_requests.append(request)
+        self.account_config["posMode"] = request["posMode"]
+        return {"code": "0", "data": [{"posMode": request["posMode"]}], "msg": ""}
+
+    def private_post_account_set_leverage(self, request):
+        self.leverage_requests.append(request)
+        return {
+            "code": "0",
+            "data": [
+                {
+                    "instId": request["instId"],
+                    "lever": request["lever"],
+                    "mgnMode": request["mgnMode"],
+                    "posSide": request.get("posSide", "net"),
+                }
+            ],
+            "msg": "",
+        }
+
+    def private_get_account_positions(self, request):
+        return {"code": "0", "data": self.positions, "msg": ""}
+
+    def private_get_account_balance(self, request):
+        return {
+            "code": "0",
+            "data": [{"details": self.balance_details}],
+            "msg": "",
+        }
+
+    def private_get_account_bills(self, request):
+        return {"code": "0", "data": self.bills, "msg": ""}
 
 
 def make_client(exchange):
@@ -100,6 +154,7 @@ def make_client(exchange):
     client.backoff_base_s = 0.0
     client.fill_poll_attempts = 1
     client.fill_poll_interval_s = 0.0
+    client._swap_settings = {}
     client._ex = exchange
     return client
 
@@ -168,6 +223,203 @@ def test_market_order_attaches_client_id_and_reads_fill():
             {"tgtCcy": "base_ccy", "clOrdId": "123456"},
         )
     ]
+
+
+def test_swap_symbol_uses_ccxt_settlement_suffix():
+    assert to_symbol("DOGE-USDT-SWAP") == "DOGE/USDT:USDT"
+
+
+def test_swap_configuration_enforces_net_mode_and_explicit_leverage():
+    exchange = FakeExchange()
+    exchange.account_config["posMode"] = "long_short_mode"
+    client = make_client(exchange)
+
+    client.configure_swap("DOGE-USDT-SWAP", leverage=3.0, margin_mode="isolated")
+
+    assert exchange.position_mode_requests == [{"posMode": "net_mode"}]
+    assert exchange.leverage_requests == [
+        {
+            "instId": "DOGE-USDT-SWAP",
+            "lever": "3",
+            "mgnMode": "isolated",
+            "posSide": "net",
+        }
+    ]
+
+
+def test_swap_configuration_rejects_spot_only_account_mode():
+    exchange = FakeExchange()
+    exchange.account_config["acctLv"] = "1"
+    client = make_client(exchange)
+
+    with pytest.raises(TradeError, match="account is in Spot mode"):
+        client.configure_swap("DOGE-USDT-SWAP", leverage=1.0)
+
+    assert exchange.leverage_requests == []
+
+
+def test_swap_configuration_rejects_portfolio_margin_without_fixed_leverage():
+    exchange = FakeExchange()
+    exchange.account_config["acctLv"] = "4"
+    client = make_client(exchange)
+
+    with pytest.raises(TradeError, match="Portfolio margin"):
+        client.configure_swap("DOGE-USDT-SWAP", leverage=1.0)
+
+    assert exchange.leverage_requests == []
+
+
+def test_swap_market_order_converts_base_quantity_to_contracts_and_back():
+    exchange = FakeExchange()
+    exchange.filled = 2.0
+    client = make_client(exchange)
+    client.configure_swap("DOGE-USDT-SWAP", leverage=2.0)
+
+    fill = client.market_order(
+        "DOGE-USDT-SWAP",
+        Side.SELL,
+        200.0,
+        client_order_id="123456",
+    )
+
+    assert fill.quantity == 200.0
+    assert exchange.market_placed[-1] == (
+        "DOGE/USDT:USDT",
+        "market",
+        "sell",
+        2.0,
+        None,
+        {"tdMode": "cross", "posSide": "net", "clOrdId": "123456"},
+    )
+
+
+def test_swap_protection_converts_contracts_and_is_explicitly_reduce_only():
+    exchange = FakeExchange()
+    client = make_client(exchange)
+    client.configure_swap("DOGE-USDT-SWAP", leverage=2.0)
+
+    client.place_protective_order(
+        "DOGE-USDT-SWAP",
+        Side.BUY,
+        300.0,
+        stop_loss=0.08,
+    )
+
+    assert exchange.placed[-1] == {
+        "instId": "DOGE-USDT-SWAP",
+        "side": "buy",
+        "ordType": "conditional",
+        "sz": "3.000000",
+        "tdMode": "cross",
+        "posSide": "net",
+        "reduceOnly": True,
+        "slTriggerPx": "0.08000",
+        "slOrdPx": "-1",
+        "slTriggerPxType": "last",
+    }
+
+
+def test_swap_order_refuses_to_inherit_unverified_account_defaults():
+    client = make_client(FakeExchange())
+
+    with pytest.raises(TradeError, match="configure_swap"):
+        client.market_order("DOGE-USDT-SWAP", Side.BUY, 100.0)
+
+
+def test_swap_position_and_collateral_are_normalized_from_okx_fields():
+    exchange = FakeExchange()
+    exchange.positions = [
+        {
+            "instId": "DOGE-USDT-SWAP",
+            "posSide": "net",
+            "pos": "-3",
+            "avgPx": "0.073",
+            "markPx": "0.071",
+            "liqPx": "0.12",
+            "lever": "2",
+            "mgnMode": "cross",
+        }
+    ]
+    exchange.balance_details = [
+        {"ccy": "USDT", "cashBal": "1000", "eq": "1000.6", "availBal": "900"}
+    ]
+    client = make_client(exchange)
+    client.configure_swap("DOGE-USDT-SWAP", leverage=2.0)
+
+    position = client.swap_position("DOGE-USDT-SWAP")
+    balance = client.collateral_balance("USDT")
+
+    assert position.quantity == -300.0
+    assert position.average_entry == 0.073
+    assert position.mark_price == 0.071
+    assert position.liquidation_price == 0.12
+    assert balance.cash == 1000.0
+    assert balance.equity == 1000.6
+    assert balance.available == 900.0
+
+
+def test_swap_position_rejects_leverage_that_drifted_from_configuration():
+    exchange = FakeExchange()
+    exchange.positions = [
+        {
+            "instId": "DOGE-USDT-SWAP",
+            "posSide": "net",
+            "pos": "1",
+            "avgPx": "0.073",
+            "markPx": "0.071",
+            "liqPx": "",
+            "lever": "3",
+            "mgnMode": "cross",
+        }
+    ]
+    client = make_client(exchange)
+    client.configure_swap("DOGE-USDT-SWAP", leverage=2.0)
+
+    with pytest.raises(TradeError, match="position leverage"):
+        client.swap_position("DOGE-USDT-SWAP")
+
+
+def test_missing_swap_collateral_currency_fails_closed():
+    client = make_client(FakeExchange())
+
+    with pytest.raises(TradeError, match="no USDT collateral"):
+        client.collateral_balance("USDT")
+
+
+def test_swap_account_events_preserve_exchange_side_balance_changes():
+    exchange = FakeExchange()
+    exchange.bills = [
+        {
+            "billId": "2",
+            "ts": "2000",
+            "type": "5",
+            "subType": "104",
+            "instId": "DOGE-USDT-SWAP",
+            "balChg": "-1.25",
+            "ccy": "USDT",
+            "px": "0.05",
+            "sz": "2",
+        },
+        {
+            "billId": "1",
+            "ts": "1000",
+            "type": "8",
+            "subType": "173",
+            "instId": "DOGE-USDT-SWAP",
+            "balChg": "-0.2",
+            "ccy": "USDT",
+            "px": "0.07",
+            "sz": "3",
+        },
+    ]
+    client = make_client(exchange)
+
+    events = client.swap_account_events("DOGE-USDT-SWAP", 1, 3000)
+
+    assert [event.kind for event in events] == ["funding", "liquidation"]
+    assert events[0].amount == -0.2
+    assert events[0].quantity == 300.0
+    assert events[1].price == 0.05
 
 
 def test_market_create_timeout_is_looked_up_without_resending():

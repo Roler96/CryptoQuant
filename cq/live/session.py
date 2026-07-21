@@ -34,7 +34,7 @@ from cq.data.feed import series_from_bars
 from cq.engine.loop import Strategy
 from cq.live.broker import LiveBroker, Reconciliation
 from cq.live.ids import client_order_id
-from cq.live.protocols import ProtectiveOrder
+from cq.live.protocols import AccountEvent, ProtectiveOrder
 from cq.live.recovery import RecoveryError, SessionResume
 
 
@@ -60,6 +60,8 @@ class PaperEvent:
     cash_after: float
     average_entry: float | None
     strategy_state: dict[str, object] | None
+    account_events: tuple[AccountEvent, ...]
+    account_event_cursor: int | None
 
 
 def run_paper(
@@ -84,6 +86,9 @@ def run_paper(
         if callable(reset):
             reset()
         average_entry = None
+        account_event_cursor = (
+            broker.client.milliseconds() if broker.spec.market_type == "swap" else None
+        )
     else:
         restore = getattr(strategy, "restore_state", None)
         if not callable(restore):
@@ -92,6 +97,9 @@ def run_paper(
             )
         restore(dict(resume.strategy_state))
         average_entry = resume.average_entry
+        account_event_cursor = resume.account_event_cursor
+        if broker.spec.market_type == "swap" and account_event_cursor is None:
+            account_event_cursor = broker.client.milliseconds()
 
     bars: list[Bar] = list(warmup)
     # Keep the rolling window bounded but always longer than the strategy can
@@ -113,6 +121,19 @@ def run_paper(
         # Validate persistence before an order can leave the process. A state
         # that cannot be logged is not crash recoverable and must fail closed.
         strategy_state = _snapshot_strategy(strategy)
+
+        account_events: tuple[AccountEvent, ...] = ()
+        if account_event_cursor is not None:
+            event_end = broker.client.milliseconds()
+            if event_end < account_event_cursor:
+                raise RecoveryError(
+                    "exchange clock moved backwards while reading swap account events"
+                )
+            if event_end > account_event_cursor:
+                account_events = tuple(
+                    broker.account_events(account_event_cursor + 1, event_end)
+                )
+                account_event_cursor = event_end
 
         state = broker.reconcile()
         if broker.is_effectively_flat(state.held):
@@ -195,7 +216,11 @@ def run_paper(
                         previous.take_profit,
                     ),
                 )
-            elif intent.target == 0 and after.held > 0 and previous is not None:
+            elif (
+                intent.target == 0
+                and not broker.is_effectively_flat(after.held)
+                and previous is not None
+            ):
                 # A partially filled close must protect its residual balance.
                 broker.sync_protection(
                     after.held,
@@ -254,6 +279,8 @@ def run_paper(
                     cash_after=after.cash,
                     average_entry=average_entry,
                     strategy_state=strategy_state,
+                    account_events=account_events,
+                    account_event_cursor=account_event_cursor,
                 )
             )
 
@@ -269,7 +296,7 @@ def _updated_average_entry(
     after: Reconciliation,
     fill: Fill | None,
 ) -> float | None:
-    """Average quote cost of the actual post-trade spot holding.
+    """Average quote cost of spot, or the venue's swap entry price.
 
     Cash movement, rather than the normalized fee field, captures whether OKX
     charged a buy fee in base or quote currency. Sells leave the average of the
@@ -277,6 +304,8 @@ def _updated_average_entry(
     """
     if broker.is_effectively_flat(after.held):
         return None
+    if broker.spec.market_type == "swap":
+        return after.average_entry
     if fill is None or fill.side is Side.SELL:
         return previous
 

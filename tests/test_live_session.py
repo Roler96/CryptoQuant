@@ -11,6 +11,7 @@ from cq.engine.sizing import target_delta
 from cq.live.broker import LiveBroker
 from cq.live.commands import _event_row
 from cq.live.probe import HeartbeatProbe
+from cq.live.protocols import AccountEvent, CollateralBalance, SwapPosition
 from cq.live.recovery import CHECKPOINT_VERSION, SessionResume
 from cq.live.session import PaperEvent, run_paper
 
@@ -18,6 +19,14 @@ INST = "DOGE-USDT"
 TF = "1h"
 HOUR = 3_600_000
 SPEC = MarketSpec(INST, "spot", lot_size=1e-06)
+SWAP_INST = "DOGE-USDT-SWAP"
+SWAP_SPEC = MarketSpec(
+    SWAP_INST,
+    "swap",
+    lot_size=100.0,
+    max_leverage=2.0,
+    contract_size=100.0,
+)
 
 
 class FakeTradeClient:
@@ -33,7 +42,7 @@ class FakeTradeClient:
         self.actions = []
         self.market_client_order_ids = []
 
-    def milliseconds(self):
+    def milliseconds(self) -> int:
         return 0
 
     def free_balance(self, ccy):
@@ -91,9 +100,77 @@ class FakeTradeClient:
     def protective_order_state(self, inst_id, algo_id):
         return "canceled"
 
+    def configure_swap(self, inst_id, leverage, margin_mode="cross"):
+        return None
+
+    def swap_position(self, inst_id) -> SwapPosition:
+        raise AssertionError("spot test unexpectedly requested a swap position")
+
+    def collateral_balance(self, ccy) -> CollateralBalance:
+        raise AssertionError("spot test unexpectedly requested collateral")
+
+    def swap_account_events(self, inst_id, begin_ms, end_ms) -> list[AccountEvent]:
+        raise AssertionError("spot test unexpectedly requested swap bills")
+
+
+class SwapTradeClient(FakeTradeClient):
+    """A net-position derivative venue whose collateral is not spent on entry."""
+
+    def __init__(self):
+        super().__init__(cash=1000.0, held=0.0)
+        self.clock = 0
+        self.average_entry = None
+        self.event_calls = []
+        self.events = [
+            AccountEvent(
+                bill_id="funding-1",
+                ts=1500,
+                kind="funding",
+                amount=-0.25,
+                currency="USDT",
+                price=0.073,
+                quantity=200.0,
+                subtype="173",
+            )
+        ]
+
+    def milliseconds(self):
+        self.clock += 1000
+        return self.clock
+
+    def market_order(self, inst_id, side, quantity, reason="", client_order_id=None):
+        self.market_client_order_ids.append(client_order_id)
+        self.held += side.sign * quantity
+        self.average_entry = 0.073 if self.held else None
+        fill = Fill(0, inst_id, side, quantity, 0.073, 0.0, reason)
+        self.orders.append(fill)
+        self.actions.append(("market", side))
+        return fill
+
+    def swap_position(self, inst_id):
+        return SwapPosition(
+            self.held,
+            self.average_entry,
+            0.073,
+            0.2 if self.held < 0 else None,
+            2.0,
+            "cross",
+        )
+
+    def collateral_balance(self, ccy):
+        return CollateralBalance(self.cash, 1000.0, 900.0)
+
+    def swap_account_events(self, inst_id, begin_ms, end_ms):
+        self.event_calls.append((begin_ms, end_ms))
+        return [event for event in self.events if begin_ms <= event.ts <= end_ms]
+
 
 def broker(client=None):
     return LiveBroker(client=client or FakeTradeClient(), spec=SPEC, min_base_amount=1.0)
+
+
+def swap_broker(client):
+    return LiveBroker(client=client, spec=SWAP_SPEC, min_base_amount=100.0)
 
 
 def bars(n, start_close=0.073):
@@ -223,6 +300,52 @@ def test_equity_is_marked_at_the_close():
     )
     # Before the first order the account is all cash, so equity == cash.
     assert events[0].equity == pytest.approx(1000.0)
+
+
+@dataclass
+class _ProtectedShort:
+    name = "protected-short"
+    warmup_bars = 1
+
+    def on_bar(self, ctx: Context) -> Intent:
+        return Intent(target=-0.2, stop_loss=0.08, take_profit=0.06, reason="short")
+
+
+def test_swap_session_uses_signed_position_equity_and_logs_exchange_events():
+    client = SwapTradeClient()
+
+    event = collect(
+        strategy=_ProtectedShort(),
+        broker=swap_broker(client),
+        feed=bars(1),
+        inst_id=SWAP_INST,
+        timeframe=TF,
+        max_bars=1,
+    )[0]
+    row = _event_row(event)
+
+    assert event.fill is not None
+    assert event.fill.side is Side.SELL
+    assert event.held_after < 0
+    assert event.cash_after == 1000.0
+    assert event.equity == 1000.0
+    assert event.average_entry == 0.073
+    assert event.protection is not None
+    assert event.protection.side is Side.BUY
+    assert client.event_calls == [(1001, 2000)]
+    assert event.account_event_cursor == 2000
+    assert row["account_events"] == [
+        {
+            "bill_id": "funding-1",
+            "ts": 1500,
+            "kind": "funding",
+            "amount": -0.25,
+            "currency": "USDT",
+            "price": 0.073,
+            "quantity": 200.0,
+            "subtype": "173",
+        }
+    ]
 
 
 # ---- protective exits -------------------------------------------------

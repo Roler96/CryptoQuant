@@ -6,9 +6,9 @@ one the backtest assumed. What differs is only what a broker must differ on —
 it sends the order to the exchange and reads the position and cash back as
 truth, instead of applying a fill to a simulated portfolio.
 
-Scope, stated so it cannot be mistaken for more: spot only, with market orders
-for target changes and market-on-trigger OKX algos for protective exits. Swap
-contracts remain separate hardening work.
+Scope, stated so it cannot be mistaken for more: spot and linear quote-settled
+swaps, with market orders for target changes and market-on-trigger OKX algos
+for protective exits.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from cq.core.types import CostModel, Fill, MarketSpec, Side
 from cq.engine.sim import Rejection
 from cq.engine.sizing import target_delta
 from cq.live.client import TradeError, quote_currency
-from cq.live.protocols import ProtectiveOrder, TradeClient
+from cq.live.protocols import AccountEvent, ProtectiveOrder, TradeClient
 
 # The same dust floor SimBroker uses, so both brokers drop the same
 # floating-point crumbs to zero rather than trading them.
@@ -27,31 +27,58 @@ DEFAULT_DUST_FRACTION = 1e-6
 
 
 def lot_size_of(market: dict) -> float:
-    """The base-quantity increment a venue quotes an instrument in."""
+    """The base-quantity increment represented by one venue amount step."""
     precision = (market.get("precision") or {}).get("amount")
-    return float(precision) if precision else 0.0
+    raw_lot = float(precision) if precision else 0.0
+    return raw_lot * contract_size_of(market)
 
 
 def min_base_amount_of(market: dict) -> float:
     """Smallest order the venue accepts, in base currency."""
     minimum = (market.get("limits") or {}).get("amount", {}).get("min")
-    return float(minimum) if minimum else 0.0
+    raw_minimum = float(minimum) if minimum else 0.0
+    return raw_minimum * contract_size_of(market)
 
 
-def spec_from_market(market: dict, inst_id: str) -> MarketSpec:
-    """A spot `MarketSpec` built from a venue's own lot grid.
+def contract_size_of(market: dict) -> float:
+    """Base-currency value of one contract, or one for spot."""
+    is_contract = bool(market.get("contract")) or market.get("type") == "swap"
+    if not is_contract:
+        return 1.0
+    if not market.get("linear"):
+        raise ValueError("only linear quote-settled swap contracts are supported")
+    value = market.get("contractSize")
+    if value is None or float(value) <= 0:
+        raise ValueError("swap market has no positive contractSize")
+    return float(value)
+
+
+def spec_from_market(
+    market: dict,
+    inst_id: str,
+    max_leverage: float | None = None,
+) -> MarketSpec:
+    """A spot or linear-swap `MarketSpec` built from venue metadata.
 
     Notional and amount floors are enforced by `LiveBroker` against the venue's
     base-amount minimum, so `min_notional` is left at zero here rather than
     guessed from a price that moves.
     """
+    is_swap = bool(market.get("swap")) or market.get("type") == "swap"
+    if is_swap != inst_id.endswith("-SWAP"):
+        raise ValueError(f"market type does not match instrument id {inst_id!r}")
+    if is_swap and market.get("settle") != quote_currency(inst_id):
+        raise ValueError("only quote-settled linear swaps are supported")
+    contract_size = contract_size_of(market)
+    leverage = max_leverage if max_leverage is not None else 1.0
     return MarketSpec(
         inst_id=inst_id,
-        market_type="spot",
+        market_type="swap" if is_swap else "spot",
         lot_size=lot_size_of(market),
         min_notional=0.0,
-        max_leverage=1.0,
+        max_leverage=leverage,
         maintenance_margin_rate=0.0,
+        contract_size=contract_size,
     )
 
 
@@ -59,17 +86,23 @@ def spec_from_market(market: dict, inst_id: str) -> MarketSpec:
 class Reconciliation:
     """The account as the exchange reports it, this instant."""
 
-    held: float  # base currency owned outright
-    cash: float  # free quote currency
+    held: float  # signed base-equivalent position
+    cash: float  # spot free quote or swap settlement cash balance
+    account_equity: float | None = None
+    average_entry: float | None = None
+    mark_price: float | None = None
+    liquidation_price: float | None = None
 
     def equity(self, price: float) -> float:
         """Mark-to-market equity in quote terms at `price`."""
+        if self.account_equity is not None:
+            return self.account_equity
         return self.cash + self.held * price
 
 
 @dataclass
 class LiveBroker:
-    """Turns target positions into real market orders on one spot instrument."""
+    """Turns target positions into real spot or linear-swap orders."""
 
     client: TradeClient
     spec: MarketSpec
@@ -80,10 +113,27 @@ class LiveBroker:
     active_protection: ProtectiveOrder | None = field(default=None, init=False)
 
     def reconcile(self) -> Reconciliation:
-        """Read held base coins and free quote cash from the exchange."""
+        """Read normalized position and collateral from the exchange."""
+        if self.spec.market_type == "swap":
+            position = self.client.swap_position(self.spec.inst_id)
+            balance = self.client.collateral_balance(quote_currency(self.spec.inst_id))
+            return Reconciliation(
+                held=position.quantity,
+                cash=balance.cash,
+                account_equity=balance.equity,
+                average_entry=position.average_entry,
+                mark_price=position.mark_price,
+                liquidation_price=position.liquidation_price,
+            )
         held = self.client.base_holding(self.spec.inst_id)
         cash = self.client.free_balance(quote_currency(self.spec.inst_id))
         return Reconciliation(held=held, cash=cash)
+
+    def account_events(self, begin_ms: int, end_ms: int) -> list[AccountEvent]:
+        """Funding/liquidation events already booked by OKX for this swap."""
+        if self.spec.market_type != "swap":
+            return []
+        return self.client.swap_account_events(self.spec.inst_id, begin_ms, end_ms)
 
     def is_effectively_flat(self, held: float) -> bool:
         """Whether a spot balance is too small for any venue order."""
@@ -157,8 +207,9 @@ class LiveBroker:
         unchanged order is retained; a size or level change cancels the old
         algo before placing its replacement.
         """
-        quantity = self.spec.round_quantity(held)
-        if quantity <= 0 or (stop_loss is None and take_profit is None):
+        signed_quantity = self.spec.round_quantity(held)
+        quantity = abs(signed_quantity)
+        if quantity == 0 or (stop_loss is None and take_profit is None):
             self.cancel_protection()
             return None
         if quantity < self.min_base_amount:
@@ -167,19 +218,21 @@ class LiveBroker:
                 f"minimum {self.min_base_amount}; refusing to run unprotected"
             )
 
-        desired = (quantity, stop_loss, take_profit)
+        side = Side.SELL if signed_quantity > 0 else Side.BUY
+        desired = (quantity, stop_loss, take_profit, side)
         current = self.active_protection
         if current is not None and (
             current.quantity,
             current.stop_loss,
             current.take_profit,
+            current.side,
         ) == desired:
             return current
 
         self.cancel_protection()
         algo_id = self.client.place_protective_order(
             self.spec.inst_id,
-            Side.SELL,
+            side,
             quantity,
             stop_loss=stop_loss,
             take_profit=take_profit,
@@ -190,7 +243,7 @@ class LiveBroker:
             quantity=quantity,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            side=Side.SELL,
+            side=side,
             client_order_id=client_order_id,
         )
         return self.active_protection

@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from cq.core.types import Fill, MarketSpec
+from cq.core.types import Fill, MarketSpec, Side
 from cq.live.broker import LiveBroker
-from cq.live.protocols import ProtectiveOrder
+from cq.live.protocols import CollateralBalance, ProtectiveOrder, SwapPosition
 from cq.live.recovery import (
     CHECKPOINT_VERSION,
     PaperCheckpoint,
@@ -18,6 +18,14 @@ from cq.live.recovery import (
 INST = "DOGE-USDT"
 TF = "1h"
 SPEC = MarketSpec(INST, "spot", lot_size=1e-06)
+SWAP_INST = "DOGE-USDT-SWAP"
+SWAP_SPEC = MarketSpec(
+    SWAP_INST,
+    "swap",
+    lot_size=100.0,
+    max_leverage=2.0,
+    contract_size=100.0,
+)
 
 
 class RecoveryClient:
@@ -77,9 +85,29 @@ class RecoveryClient:
     def protective_order_state(self, inst_id, algo_id):
         return self.algo_states[algo_id]
 
+    def configure_swap(self, inst_id, leverage, margin_mode="cross"):
+        return None
 
-def make_broker(client):
-    return LiveBroker(client=client, spec=SPEC, min_base_amount=1.0)
+    def swap_position(self, inst_id):
+        return SwapPosition(
+            self.held,
+            0.073 if self.held else None,
+            0.073,
+            None,
+            2.0,
+            "cross",
+        )
+
+    def collateral_balance(self, ccy):
+        return CollateralBalance(self.cash, self.cash, self.cash)
+
+    def swap_account_events(self, inst_id, begin_ms, end_ms):
+        return []
+
+
+def make_broker(client, spec=SPEC):
+    minimum = 100.0 if spec.market_type == "swap" else 1.0
+    return LiveBroker(client=client, spec=spec, min_base_amount=minimum)
 
 
 def checkpoint(tmp_path, protection=None, held=100.0, average_entry=0.073):
@@ -132,6 +160,24 @@ def test_legacy_log_is_not_misread_as_a_resumable_checkpoint(tmp_path):
     assert load_latest_checkpoint(tmp_path, INST, TF) is None
 
 
+def test_swap_checkpoint_accepts_signed_position_and_restores_bill_cursor(tmp_path):
+    row = {
+        **checkpoint_row(),
+        "inst_id": SWAP_INST,
+        "target": -0.2,
+        "held_after": -300.0,
+        "account_event_cursor": 456,
+    }
+    path = tmp_path / f"{SWAP_INST}_{TF}_20260721T000000Z.jsonl"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    loaded = load_latest_checkpoint(tmp_path, SWAP_INST, TF)
+
+    assert loaded is not None
+    assert loaded.held == -300.0
+    assert loaded.account_event_cursor == 456
+
+
 def test_matching_position_and_pending_algo_are_adopted(tmp_path):
     protection = ProtectiveOrder("algo-1", 100.0, 0.06, 0.08)
     client = RecoveryClient(pending=[protection])
@@ -146,6 +192,41 @@ def test_matching_position_and_pending_algo_are_adopted(tmp_path):
     assert resume.strategy_state == {"count": 7, "weight": 0.05, "period": 1}
     assert broker.active_protection == protection
     assert client.placed == []
+
+
+def test_matching_swap_short_and_buy_protection_are_adopted(tmp_path):
+    protection = ProtectiveOrder("algo-short", 300.0, 0.08, 0.06, Side.BUY)
+    client = RecoveryClient(held=-300.0, pending=[protection])
+    broker = make_broker(client, SWAP_SPEC)
+    saved = PaperCheckpoint(
+        ts=123,
+        inst_id=SWAP_INST,
+        timeframe=TF,
+        strategy="heartbeat-probe",
+        target=-0.2,
+        held=-300.0,
+        cash=900.0,
+        average_entry=0.073,
+        strategy_state={"count": 7, "weight": 0.05, "period": 1},
+        protection=protection,
+        source=tmp_path / "prior.jsonl",
+        account_event_cursor=456,
+    )
+
+    resume = reconcile_restart("heartbeat-probe", broker, saved)
+
+    assert resume is not None
+    assert resume.average_entry == 0.073
+    assert resume.account_event_cursor == 456
+    assert broker.active_protection == protection
+
+
+def test_swap_short_rejects_a_sell_protective_algo(tmp_path):
+    wrong = ProtectiveOrder("wrong-side", 300.0, 0.08, 0.06, Side.SELL)
+    broker = make_broker(RecoveryClient(held=-300.0, pending=[wrong]), SWAP_SPEC)
+
+    with pytest.raises(RecoveryError, match="does not reduce"):
+        reconcile_restart("heartbeat-probe", broker, None)
 
 
 def test_missing_logged_protection_is_rebuilt_for_actual_holding(tmp_path):

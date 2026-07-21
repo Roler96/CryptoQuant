@@ -7,18 +7,18 @@
 
 ## What already works
 
-`cq/live/` drives one live path end to end: `LiveFeed` closed bars →
-strategy → `LiveBroker` market order on OKX demo → reconcile against the
-exchange → JSONL session log. Spot only: targets use market orders and
-protective exits use market-on-trigger OKX conditional/OCO algos. Sizing is
-shared with the backtest (`cq/engine/sizing.py::target_delta`), so a paper
-order is the one the backtest assumed. Versioned, fsynced JSONL checkpoints
-allow a stopped process to resume when its last processed bar still matches the
-exchange. Target, protection, restoration and recovery creates carry stable
-client order ids derived from their closed-bar intent. Transient market-data
-poll failures are retried without losing the feed high-water mark, while a
-successfully connected but stale feed fails explicitly after a configurable
-grace period.
+`cq/live/` drives one live path end to end: `LiveFeed` closed bars → strategy →
+`LiveBroker` market order on OKX demo → reconcile against the exchange → JSONL
+session log. Spot and linear, quote-settled swaps use the same base-equivalent
+sizing as the backtest (`cq/engine/sizing.py::target_delta`); the OKX boundary
+converts swaps to contracts. Targets use market orders and protective exits use
+market-on-trigger OKX conditional/OCO algos. Versioned, fsynced JSONL
+checkpoints allow a stopped process to resume when its last processed bar still
+matches the exchange. Target, protection, restoration and recovery creates
+carry stable client order ids derived from their closed-bar intent. Transient
+market-data poll failures are retried without losing the feed high-water mark,
+while a successfully connected but stale feed fails explicitly after a
+configurable grace period.
 
 Unchecked work below is what the pipe deliberately does **not** yet do.
 
@@ -38,17 +38,38 @@ request and lifecycle behavior are covered by deterministic tests; this change
 did not place credentialed demo orders.
 
 ### 2. Swap support (DOGE-USDT-SWAP)
-- [ ] Position mode (net vs long/short) and leverage set explicitly, not
+- [x] Position mode (net vs long/short) and leverage set explicitly, not
       inherited from account defaults.
-- [ ] Contract-size conversion: OKX swaps trade in contracts, not base coins;
+- [x] Contract-size conversion: OKX swaps trade in contracts, not base coins;
       `target_delta` sizes in base and must be mapped through the multiplier.
-- [ ] Funding and liquidation are exchange-side events — reconcile them into
+- [x] Funding and liquidation are exchange-side events — reconcile them into
       the session's accounting instead of the sim's modelled funding/liq.
-- [ ] `to_symbol` / `spec_from_market` extended past the spot `BASE-QUOTE`
+- [x] `to_symbol` / `spec_from_market` extended past the spot `BASE-QUOTE`
       assumption (swap is `DOGE/USDT:USDT`).
 
-This is the actual research target (perp + funding), and it exercises the
-engine's hardest-won semantics. Larger than everything else combined.
+Implemented 2026-07-21. `cq paper run` accepts `BASE-QUOTE-SWAP` plus explicit
+`--leverage` and `--margin-mode`; startup requires Futures or Multi-currency
+margin, enforces net position mode, and confirms the requested fixed leverage
+before any order can leave the process. Spot-only and Portfolio-margin accounts
+fail closed because they cannot satisfy those semantics. Only linear swaps
+settled in their quote currency are accepted. Engine quantities remain signed
+base-equivalent units; market metadata supplies the contract multiplier used
+for order, fill, pending algo, position, lot and minimum-size conversion.
+
+Swap reconciliation reads the signed net position, exchange average/mark/
+liquidation prices, settlement cash and exchange equity. Long protection sells;
+short protection buys; both are explicitly net, reduce-only algos in the chosen
+margin mode. Funding, liquidation and ADL bills retain OKX's signed balance
+change and are appended to the durable session event. Each checkpoint also
+stores the last queried exchange-time cursor, so restart resumes the bill
+interval without treating the simulator's funding or liquidation model as
+live truth.
+
+Native request construction, contract conversion, long/short recovery and bill
+logging are covered by deterministic tests. This implementation did not place
+credentialed demo orders. The only bundled paper strategy remains the plumbing
+probe, so completing the swap transport does not pass the calibration gate or
+make the system ready for real-money trading.
 
 ### 3. Restart-time reconciliation (crash recovery)
 - [x] On start, rebuild the session's notion of position and cost basis from
@@ -115,6 +136,6 @@ so this change made no external API or credentialed demo calls.
 
 ## Suggested order
 
-With 1, 3, 4 and 5 implemented, swap support in 2 is the next substantive
-milestone. 6 remains deferred until a real strategy needs more than one page of
-warmup.
+Items 1–5 are implemented. Item 6 remains deferred until a real strategy needs
+more than one page of warmup; strategy calibration remains the separate gate
+before this transport is eligible for real-money use.

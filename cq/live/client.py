@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import ccxt
 from loguru import logger
@@ -34,7 +34,14 @@ from loguru import logger
 from cq.core.types import Fill, Side
 from cq.data.okx import BROWSER_UA, RETRYABLE
 from cq.live.config import OkxCredentials
-from cq.live.protocols import ProtectiveOrder
+from cq.live.protocols import (
+    AccountEvent,
+    AccountEventKind,
+    CollateralBalance,
+    MarginMode,
+    ProtectiveOrder,
+    SwapPosition,
+)
 
 
 class TradeError(RuntimeError):
@@ -42,27 +49,37 @@ class TradeError(RuntimeError):
 
 
 def to_symbol(inst_id: str) -> str:
-    """OKX native id (``DOGE-USDT``) to ccxt unified symbol (``DOGE/USDT``)."""
+    """OKX native spot/swap id to its ccxt unified symbol."""
     parts = inst_id.split("-")
-    if len(parts) != 2:
-        raise ValueError(
-            f"{inst_id!r} is not a spot instrument id; only spot (BASE-QUOTE) is supported here"
-        )
-    return f"{parts[0]}/{parts[1]}"
+    if len(parts) == 2 and all(parts):
+        return f"{parts[0]}/{parts[1]}"
+    if len(parts) == 3 and parts[2] == "SWAP" and all(parts[:2]):
+        return f"{parts[0]}/{parts[1]}:{parts[1]}"
+    raise ValueError(
+        f"{inst_id!r} is not a supported BASE-QUOTE spot or BASE-QUOTE-SWAP id"
+    )
+
+
+def is_swap(inst_id: str) -> bool:
+    """Whether an OKX-native id names a perpetual swap."""
+    parts = inst_id.split("-")
+    return len(parts) == 3 and parts[2] == "SWAP"
 
 
 def base_currency(inst_id: str) -> str:
-    """The coin a spot instrument is denominated in (``DOGE`` of ``DOGE-USDT``)."""
+    """The base coin (``DOGE`` of spot or ``DOGE-USDT-SWAP``)."""
+    to_symbol(inst_id)
     return inst_id.split("-")[0]
 
 
 def quote_currency(inst_id: str) -> str:
-    """The settlement currency of a spot instrument (``USDT`` of ``DOGE-USDT``)."""
+    """The quote/settlement currency (``USDT`` in supported markets)."""
+    to_symbol(inst_id)
     return inst_id.split("-")[1]
 
 
 class OkxTradeClient:
-    """ccxt-backed OKX client for authenticated spot trading, with retries.
+    """ccxt-backed OKX client for authenticated spot/swap trading.
 
     Reads market metadata once at construction (``load_markets``) so quantities
     round to the venue's real lot grid rather than a guess.
@@ -83,6 +100,7 @@ class OkxTradeClient:
         self.demo = credentials.demo
         self.fill_poll_attempts = fill_poll_attempts
         self.fill_poll_interval_s = fill_poll_interval_s
+        self._swap_settings: dict[str, tuple[float, MarginMode]] = {}
         self._ex = ccxt.okx(
             {
                 "apiKey": credentials.api_key,
@@ -140,6 +158,54 @@ class OkxTradeClient:
             raise RuntimeError(f"no attempt was made: max_retries={self.max_retries}")
         raise last
 
+    def _contract_size(self, inst_id: str) -> float:
+        """Base units in one venue order unit; one for spot."""
+        if not is_swap(inst_id):
+            return 1.0
+        market = self._ex.market(to_symbol(inst_id))
+        if not market.get("contract") or not market.get("swap") or not market.get("linear"):
+            raise TradeError(f"{inst_id}: only linear perpetual contracts are supported")
+        if market.get("settle") != quote_currency(inst_id):
+            raise TradeError(f"{inst_id}: swap is not settled in its quote currency")
+        try:
+            contract_size = float(market["contractSize"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TradeError(f"{inst_id}: market has no usable contract size") from exc
+        if contract_size <= 0:
+            raise TradeError(f"{inst_id}: market has no usable contract size")
+        return contract_size
+
+    def _order_params(self, inst_id: str, protective: bool = False) -> dict[str, Any]:
+        """Explicit trade mode for spot or a previously configured swap."""
+        if not is_swap(inst_id):
+            return {"tdMode": "cash"} if protective else {"tgtCcy": "base_ccy"}
+        settings = self._swap_settings.get(inst_id)
+        if settings is None:
+            raise TradeError(
+                f"{inst_id}: configure_swap() must verify mode and leverage before ordering"
+            )
+        params: dict[str, Any] = {"tdMode": settings[1], "posSide": "net"}
+        if protective:
+            params["reduceOnly"] = True
+        return params
+
+    @staticmethod
+    def _response_data(response: Any, operation: str) -> list[dict[str, Any]]:
+        if not isinstance(response, dict) or str(response.get("code", "")) != "0":
+            message = response.get("msg") if isinstance(response, dict) else repr(response)
+            raise TradeError(f"could not {operation}: {message or 'unknown OKX error'}")
+        data = response.get("data") or []
+        if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+            raise TradeError(f"could not {operation}: malformed OKX response {response!r}")
+        return data
+
+    @classmethod
+    def _one_data(cls, response: Any, operation: str) -> dict[str, Any]:
+        data = cls._response_data(response, operation)
+        if len(data) != 1:
+            raise TradeError(f"could not {operation}: expected one OKX result, got {len(data)}")
+        return data[0]
+
     # ---- account reads ------------------------------------------------
 
     def free_balance(self, ccy: str) -> float:
@@ -154,7 +220,213 @@ class OkxTradeClient:
         Spot has no signed position: the coins are simply owned, so the holding
         is the free balance of the base currency and never negative.
         """
+        if is_swap(inst_id):
+            raise ValueError("base_holding is only valid for spot instruments")
         return self.free_balance(base_currency(inst_id))
+
+    def configure_swap(
+        self,
+        inst_id: str,
+        leverage: float,
+        margin_mode: MarginMode = "cross",
+    ) -> None:
+        """Enforce net position mode and explicit leverage for one linear swap."""
+        if not is_swap(inst_id):
+            raise ValueError(f"{inst_id!r} is not a swap instrument")
+        if margin_mode not in ("cross", "isolated"):
+            raise ValueError(f"unsupported swap margin mode {margin_mode!r}")
+        if not 1 <= leverage <= 125:
+            raise ValueError(f"swap leverage must be in [1, 125], got {leverage}")
+        self._contract_size(inst_id)
+
+        config = self._one_data(
+            self._call(self._ex.private_get_account_config),
+            "read account configuration",
+        )
+        account_level = str(config.get("acctLv") or "")
+        if account_level == "1":
+            raise TradeError(
+                "OKX account is in Spot mode; select Futures, Multi-currency, "
+                "or another supported derivatives mode before trading swaps"
+            )
+        if account_level == "4":
+            raise TradeError(
+                "OKX Portfolio margin does not expose the fixed leverage "
+                "required by this runner; use Futures or Multi-currency margin"
+            )
+        if account_level not in ("2", "3"):
+            raise TradeError(f"unknown OKX account mode {account_level!r}")
+
+        if config.get("posMode") != "net_mode":
+            changed = self._one_data(
+                self._call(
+                    self._ex.private_post_account_set_position_mode,
+                    {"posMode": "net_mode"},
+                ),
+                "set net position mode",
+            )
+            if changed.get("posMode") != "net_mode":
+                raise TradeError("OKX did not confirm net position mode")
+
+        request: dict[str, Any] = {
+            "instId": inst_id,
+            "lever": format(leverage, "g"),
+            "mgnMode": margin_mode,
+        }
+        if margin_mode == "isolated":
+            request["posSide"] = "net"
+        configured = self._one_data(
+            self._call(self._ex.private_post_account_set_leverage, request),
+            "set swap leverage",
+        )
+        confirmed_raw = configured.get("lever")
+        if confirmed_raw is None:
+            raise TradeError(f"OKX returned malformed leverage result {configured!r}")
+        try:
+            confirmed_leverage = float(confirmed_raw)
+        except (TypeError, ValueError) as exc:
+            raise TradeError(f"OKX returned malformed leverage result {configured!r}") from exc
+        if (
+            configured.get("instId") != inst_id
+            or configured.get("mgnMode") != margin_mode
+            or abs(confirmed_leverage - leverage) > 1e-12
+        ):
+            raise TradeError(f"OKX did not confirm requested swap configuration: {configured!r}")
+        self._swap_settings[inst_id] = (leverage, margin_mode)
+
+    def swap_position(self, inst_id: str) -> SwapPosition:
+        """Read the net swap position and normalize contracts to base units."""
+        contract_size = self._contract_size(inst_id)
+        response = self._call(
+            self._ex.private_get_account_positions,
+            {"instType": "SWAP", "instId": inst_id},
+        )
+        rows = self._response_data(response, "read swap position")
+        matching = [row for row in rows if row.get("instId") == inst_id]
+        if any(row.get("posSide") != "net" for row in matching):
+            raise TradeError(f"{inst_id}: OKX returned a non-net position")
+        try:
+            active = [row for row in matching if float(row.get("pos") or 0.0) != 0.0]
+        except (TypeError, ValueError) as exc:
+            raise TradeError(f"{inst_id}: malformed position response {matching!r}") from exc
+        if len(active) > 1:
+            raise TradeError(f"{inst_id}: multiple net positions returned by OKX")
+        if not active:
+            return SwapPosition(0.0, None, None, None, None, None)
+
+        raw = active[0]
+        try:
+            contracts = float(raw["pos"])
+            raw_margin_mode = str(raw["mgnMode"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TradeError(f"{inst_id}: malformed position response {raw!r}") from exc
+        if raw_margin_mode not in ("cross", "isolated"):
+            raise TradeError(f"{inst_id}: unknown margin mode {raw_margin_mode!r}")
+        margin_mode = cast(MarginMode, raw_margin_mode)
+        settings = self._swap_settings.get(inst_id)
+        if settings is not None and margin_mode != settings[1]:
+            raise TradeError(
+                f"{inst_id}: position margin mode {margin_mode!r} does not match "
+                f"configured {settings[1]!r}"
+            )
+        average_entry = self._optional_positive(raw.get("avgPx"))
+        mark_price = self._optional_positive(raw.get("markPx"))
+        position_leverage = self._optional_positive(raw.get("lever"))
+        if average_entry is None or mark_price is None:
+            raise TradeError(f"{inst_id}: active position has no usable entry/mark price")
+        if settings is not None and (
+            position_leverage is None
+            or abs(position_leverage - settings[0]) > 1e-12
+        ):
+            raise TradeError(
+                f"{inst_id}: position leverage {position_leverage!r} does not match "
+                f"configured {settings[0]!r}"
+            )
+        return SwapPosition(
+            quantity=contracts * contract_size,
+            average_entry=average_entry,
+            mark_price=mark_price,
+            liquidation_price=self._optional_positive(raw.get("liqPx")),
+            leverage=position_leverage,
+            margin_mode=margin_mode,
+        )
+
+    def collateral_balance(self, ccy: str) -> CollateralBalance:
+        """Settlement cash, equity and available balance from OKX account data."""
+        response = self._call(self._ex.private_get_account_balance, {"ccy": ccy})
+        account = self._one_data(response, "read collateral balance")
+        details = account.get("details") or []
+        raw = next(
+            (item for item in details if isinstance(item, dict) and item.get("ccy") == ccy),
+            None,
+        )
+        if raw is None:
+            raise TradeError(f"OKX returned no {ccy} collateral balance")
+        cash_raw = raw.get("cashBal")
+        equity_raw = raw.get("eq")
+        if cash_raw in (None, "") or equity_raw in (None, ""):
+            raise TradeError(f"malformed {ccy} collateral balance {raw!r}")
+        try:
+            return CollateralBalance(
+                cash=float(cash_raw),
+                equity=float(equity_raw),
+                available=float(raw.get("availBal") or 0.0),
+            )
+        except (TypeError, ValueError) as exc:
+            raise TradeError(f"malformed {ccy} collateral balance {raw!r}") from exc
+
+    def swap_account_events(
+        self,
+        inst_id: str,
+        begin_ms: int,
+        end_ms: int,
+    ) -> list[AccountEvent]:
+        """Funding, liquidation and ADL bills in one closed interval."""
+        if begin_ms < 0 or end_ms < begin_ms:
+            raise ValueError(f"invalid account-event interval [{begin_ms}, {end_ms}]")
+        contract_size = self._contract_size(inst_id)
+        response = self._call(
+            self._ex.private_get_account_bills,
+            {
+                "instType": "SWAP",
+                "instId": inst_id,
+                "type": "5,8,9",
+                "begin": str(begin_ms),
+                "end": str(end_ms),
+                "limit": "100",
+            },
+        )
+        rows = self._response_data(response, "read swap account events")
+        if len(rows) >= 100:
+            raise TradeError(
+                f"{inst_id}: account-event page reached 100 rows; refusing to skip pagination"
+            )
+        kinds = {"5": "liquidation", "8": "funding", "9": "adl"}
+        events: list[AccountEvent] = []
+        for raw in rows:
+            event_type = str(raw.get("type") or "")
+            if raw.get("instId") != inst_id or event_type not in kinds:
+                continue
+            try:
+                bill_id = str(raw["billId"])
+                ts = int(raw["ts"])
+                amount = float(raw.get("balChg") or raw.get("posBalChg") or 0.0)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise TradeError(f"{inst_id}: malformed account bill {raw!r}") from exc
+            quantity = self._optional_event_value(raw.get("sz"))
+            events.append(
+                AccountEvent(
+                    bill_id=bill_id,
+                    ts=ts,
+                    kind=cast(AccountEventKind, kinds[event_type]),
+                    amount=amount,
+                    currency=str(raw.get("ccy") or ""),
+                    price=self._optional_event_value(raw.get("px")),
+                    quantity=None if quantity is None else quantity * contract_size,
+                    subtype=str(raw.get("subType") or ""),
+                )
+            )
+        return sorted(events, key=lambda event: (event.ts, event.bill_id))
 
     def last_price(self, inst_id: str) -> float:
         """Most recent traded price, for sizing a notional into a quantity."""
@@ -166,8 +438,11 @@ class OkxTradeClient:
 
     def round_amount(self, inst_id: str, quantity: float) -> float:
         """Snap a quantity to the venue's lot grid, towards zero."""
-        rounded = self._ex.amount_to_precision(to_symbol(inst_id), quantity)
-        return float(rounded) if rounded is not None else 0.0
+        contract_size = self._contract_size(inst_id)
+        rounded = self._ex.amount_to_precision(
+            to_symbol(inst_id), quantity / contract_size
+        )
+        return float(rounded) * contract_size if rounded is not None else 0.0
 
     # ---- ordering -----------------------------------------------------
 
@@ -189,7 +464,9 @@ class OkxTradeClient:
             raise ValueError(f"market order quantity must be positive, got {quantity}")
         self._validate_client_order_id(client_order_id)
         symbol = to_symbol(inst_id)
-        params = {"tgtCcy": "base_ccy"}
+        contract_size = self._contract_size(inst_id)
+        venue_quantity = quantity / contract_size
+        params = self._order_params(inst_id)
         if client_order_id is not None:
             params["clOrdId"] = client_order_id
         try:
@@ -197,7 +474,7 @@ class OkxTradeClient:
                 symbol,
                 "market",
                 side.value,
-                quantity,
+                venue_quantity,
                 None,
                 params,
             )
@@ -214,7 +491,7 @@ class OkxTradeClient:
             if order_id is None:
                 raise
         settled = self._await_fill(order_id, symbol)
-        return self._to_fill(inst_id, side, settled, reason)
+        return self._to_fill(inst_id, side, settled, reason, contract_size)
 
     def place_protective_order(
         self,
@@ -239,18 +516,19 @@ class OkxTradeClient:
         self._validate_client_order_id(client_order_id)
 
         symbol = to_symbol(inst_id)
-        size = self._ex.amount_to_precision(symbol, quantity)
+        contract_size = self._contract_size(inst_id)
+        size = self._ex.amount_to_precision(symbol, quantity / contract_size)
         if size is None or float(size) <= 0:
             raise TradeError(f"{inst_id}: protective quantity {quantity} rounds below one lot")
-        request = {
+        request: dict[str, Any] = {
             "instId": inst_id,
-            "tdMode": "cash",
             "side": side.value,
             "ordType": (
                 "oco" if stop_loss is not None and take_profit is not None else "conditional"
             ),
             "sz": size,
         }
+        request.update(self._order_params(inst_id, protective=True))
         if client_order_id is not None:
             request["algoClOrdId"] = client_order_id
         if stop_loss is not None:
@@ -410,7 +688,7 @@ class OkxTradeClient:
                     continue
                 try:
                     side = Side(str(raw.get("side")))
-                    quantity = float(raw.get("sz") or 0.0)
+                    quantity = float(raw.get("sz") or 0.0) * self._contract_size(inst_id)
                 except (TypeError, ValueError) as exc:
                     raise TradeError(f"{inst_id}: malformed pending algo {raw!r}") from exc
                 algo_id = str(raw.get("algoId") or "")
@@ -446,15 +724,27 @@ class OkxTradeClient:
     @staticmethod
     def _optional_price(value: Any) -> float | None:
         """An optional positive price from an OKX string field."""
+        return OkxTradeClient._optional_positive(value)
+
+    @staticmethod
+    def _optional_event_value(value: Any) -> float | None:
+        """A positive bill field, treating OKX's zero placeholder as absent."""
+        if value in (None, "", "0", "0.0", 0, 0.0):
+            return None
+        return OkxTradeClient._optional_positive(value)
+
+    @staticmethod
+    def _optional_positive(value: Any) -> float | None:
+        """An optional positive number from an OKX string field."""
         if value in (None, ""):
             return None
         try:
-            price = float(value)
+            number = float(value)
         except (TypeError, ValueError) as exc:
-            raise TradeError(f"invalid protective trigger price {value!r}") from exc
-        if price <= 0:
-            raise TradeError(f"invalid protective trigger price {value!r}")
-        return price
+            raise TradeError(f"invalid positive OKX value {value!r}") from exc
+        if number <= 0:
+            raise TradeError(f"invalid positive OKX value {value!r}")
+        return number
 
     @staticmethod
     def _algo_result(response: dict, operation: str) -> dict:
@@ -484,9 +774,16 @@ class OkxTradeClient:
             )
         return settled
 
-    def _to_fill(self, inst_id: str, side: Side, order: dict, reason: str) -> Fill:
+    def _to_fill(
+        self,
+        inst_id: str,
+        side: Side,
+        order: dict,
+        reason: str,
+        contract_size: float = 1.0,
+    ) -> Fill:
         """Turn a settled ccxt order into an engine `Fill`, fees in quote terms."""
-        filled = float(order["filled"])
+        filled = float(order["filled"]) * contract_size
         raw_price = order.get("average") or order.get("price")
         if raw_price is None:
             raise TradeError(f"{inst_id}: settled order carries no fill price")

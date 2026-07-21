@@ -89,6 +89,9 @@ class MarketSpec:
     # pass through. Set it to the venue's real tier rate to model the margin
     # call that actually arrives first.
     maintenance_margin_rate: float = 0.0
+    # Base-currency value of one venue order unit. Spot orders are already in
+    # base currency, while a linear swap order unit is one contract (`ctVal`).
+    contract_size: float = 1.0
 
     def __post_init__(self) -> None:
         if self.market_type not in ("spot", "swap"):
@@ -97,10 +100,16 @@ class MarketSpec:
             raise ValueError("spot markets cannot be leveraged")
         if self.market_type == "spot" and self.maintenance_margin_rate != 0.0:
             raise ValueError("spot positions are owned outright and cannot be liquidated")
+        if not math.isfinite(self.max_leverage) or self.max_leverage <= 0:
+            raise ValueError("max leverage must be finite and positive")
         if not 0.0 <= self.maintenance_margin_rate < 1.0:
             raise ValueError("maintenance margin rate must be in [0, 1)")
         if self.lot_size < 0 or self.min_notional < 0:
             raise ValueError("lot size and min notional must be non-negative")
+        if not math.isfinite(self.contract_size) or self.contract_size <= 0:
+            raise ValueError("contract size must be finite and positive")
+        if self.market_type == "spot" and self.contract_size != 1.0:
+            raise ValueError("spot order quantity is already base currency")
 
     @property
     def allows_short(self) -> bool:
@@ -130,6 +139,14 @@ class MarketSpec:
         # representation error this method exists to absorb (28 * 0.1 is
         # 2.8000000000000003), which then trips equality checks downstream.
         return math.copysign(_snap(lots * self.lot_size, self.lot_size), quantity)
+
+    def to_venue_quantity(self, base_quantity: float) -> float:
+        """Convert engine base units into spot units or derivative contracts."""
+        return base_quantity / self.contract_size
+
+    def from_venue_quantity(self, venue_quantity: float) -> float:
+        """Convert spot units or derivative contracts into engine base units."""
+        return venue_quantity * self.contract_size
 
     def validate_target(self, weight: float) -> None:
         """Reject a target this market cannot hold.

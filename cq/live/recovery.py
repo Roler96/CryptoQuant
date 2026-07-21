@@ -1,9 +1,9 @@
 """Crash-safe reconstruction of a paper session from JSONL and OKX.
 
-The exchange owns the current balance and resting orders. The log owns the
-pieces a spot balance cannot express: strategy state and average entry cost.
-Recovery only proceeds when those two views agree; an unexplained position or
-algo is an error, never something the runner guesses around.
+The exchange owns the current balance, signed swap position and resting orders.
+The log owns strategy state, spot cost basis and the last reconciled derivative
+bill cursor. Recovery only proceeds when those views agree; an unexplained
+position or algo is an error, never something the runner guesses around.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ class PaperCheckpoint:
     strategy_state: dict[str, object]
     protection: ProtectiveOrder | None
     source: Path
+    account_event_cursor: int | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class SessionResume:
     average_entry: float | None
     strategy_state: dict[str, object]
     source: Path
+    account_event_cursor: int | None = None
 
 
 def load_latest_checkpoint(
@@ -83,14 +85,15 @@ def reconcile_restart(
     """Validate durable state against OKX and adopt/rebuild its protection."""
     account = broker.reconcile()
     pending = broker.client.pending_protective_orders(broker.spec.inst_id)
-    for order in pending:
-        if order.side is not Side.SELL:
-            raise RecoveryError(
-                f"{broker.spec.inst_id}: unexpected pending {order.side.value} algo "
-                f"{order.algo_id}"
-            )
-
     actual_flat = broker.is_effectively_flat(account.held)
+    expected_side = Side.SELL if account.held > 0 else Side.BUY
+    if not actual_flat:
+        for order in pending:
+            if order.side is not expected_side:
+                raise RecoveryError(
+                    f"{broker.spec.inst_id}: pending {order.side.value} algo "
+                    f"{order.algo_id} does not reduce the signed position"
+                )
     if checkpoint is None:
         if not actual_flat:
             raise RecoveryError(
@@ -126,6 +129,7 @@ def reconcile_restart(
             average_entry=None,
             strategy_state=dict(checkpoint.strategy_state),
             source=checkpoint.source,
+            account_event_cursor=checkpoint.account_event_cursor,
         )
 
     if broker.is_effectively_flat(checkpoint.held) or not _quantity_matches(
@@ -139,8 +143,25 @@ def reconcile_restart(
         raise RecoveryError(
             f"{broker.spec.inst_id}: non-flat checkpoint has no recoverable average entry"
         )
+    average_entry = checkpoint.average_entry
+    if broker.spec.market_type == "swap":
+        if account.average_entry is None:
+            raise RecoveryError(
+                f"{broker.spec.inst_id}: exchange position has no average entry"
+            )
+        if not _level_matches(account.average_entry, checkpoint.average_entry):
+            raise RecoveryError(
+                f"{broker.spec.inst_id}: exchange average entry {account.average_entry} "
+                f"does not match checkpoint {checkpoint.average_entry}"
+            )
+        average_entry = account.average_entry
 
     logged = checkpoint.protection
+    if logged is not None and logged.side is not expected_side:
+        raise RecoveryError(
+            f"{broker.spec.inst_id}: checkpoint {logged.side.value} protection does not "
+            "reduce the signed position"
+        )
     recovery_client_id = None
     if logged is not None:
         recovery_client_id = client_order_id(
@@ -151,7 +172,9 @@ def reconcile_restart(
             logged.stop_loss,
             logged.take_profit,
         )
-    if logged is not None and not _quantity_matches(broker, logged.quantity, account.held):
+    if logged is not None and not _quantity_matches(
+        broker, logged.quantity, abs(account.held)
+    ):
         raise RecoveryError(
             f"{broker.spec.inst_id}: checkpoint protection quantity {logged.quantity} "
             f"does not cover exchange holding {account.held}"
@@ -194,9 +217,10 @@ def reconcile_restart(
 
     return SessionResume(
         checkpoint_ts=checkpoint.ts,
-        average_entry=checkpoint.average_entry,
+        average_entry=average_entry,
         strategy_state=dict(checkpoint.strategy_state),
         source=checkpoint.source,
+        account_event_cursor=checkpoint.account_event_cursor,
     )
 
 
@@ -249,8 +273,19 @@ def _checkpoint_from_row(
         raise RecoveryError(f"{source}: checkpoint has no restorable strategy_state")
     average_entry = _optional_positive(row.get("average_entry"), "average_entry")
     protection = _protection_from_row(row.get("protection"), source)
-    if held < 0 or cash < 0:
+    is_swap = inst_id.endswith("-SWAP")
+    if not is_swap and (held < 0 or cash < 0):
         raise RecoveryError(f"{source}: spot checkpoint balances must be non-negative")
+    raw_cursor = row.get("account_event_cursor")
+    try:
+        if raw_cursor is not None:
+            account_event_cursor = int(raw_cursor)
+        else:
+            account_event_cursor = ts if is_swap else None
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RecoveryError(f"{source}: malformed account_event_cursor") from exc
+    if account_event_cursor is not None and account_event_cursor < 0:
+        raise RecoveryError(f"{source}: account_event_cursor must be non-negative")
     return PaperCheckpoint(
         ts=ts,
         inst_id=inst_id,
@@ -263,6 +298,7 @@ def _checkpoint_from_row(
         strategy_state=dict(raw_state),
         protection=protection,
         source=source,
+        account_event_cursor=account_event_cursor,
     )
 
 

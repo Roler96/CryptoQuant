@@ -7,15 +7,24 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+from typing import cast
 
 from cq.core.clock import BASE_TIMEFRAME
 from cq.core.types import Side
 from cq.data.feed import FeedStalledError, LiveFeed
 from cq.data.okx import OkxPublicClient
 from cq.live.broker import LiveBroker, min_base_amount_of, spec_from_market
-from cq.live.client import OkxTradeClient, base_currency, quote_currency, to_symbol
+from cq.live.client import (
+    OkxTradeClient,
+    TradeError,
+    base_currency,
+    is_swap,
+    quote_currency,
+    to_symbol,
+)
 from cq.live.config import OkxCredentials
 from cq.live.probe import HeartbeatProbe
+from cq.live.protocols import MarginMode
 from cq.live.recovery import (
     CHECKPOINT_VERSION,
     RecoveryError,
@@ -49,13 +58,29 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         "run",
         help="drive a strategy against live closed bars, trading on OKX demo",
     )
-    run.add_argument("--inst", default=DEFAULT_INSTRUMENT, help="spot instrument, BASE-QUOTE")
+    run.add_argument(
+        "--inst",
+        default=DEFAULT_INSTRUMENT,
+        help="spot BASE-QUOTE or linear swap BASE-QUOTE-SWAP",
+    )
     run.add_argument("--tf", default=BASE_TIMEFRAME, help="bar timeframe, e.g. 1m or 1h")
     run.add_argument(
         "--strategy", default="probe", choices=("probe",), help="only the plumbing probe for now"
     )
     run.add_argument("--weight", type=float, default=0.02, help="probe target weight")
     run.add_argument("--period", type=int, default=1, help="probe flip cadence in bars")
+    run.add_argument(
+        "--leverage",
+        type=float,
+        default=1.0,
+        help="explicit swap leverage (1-125)",
+    )
+    run.add_argument(
+        "--margin-mode",
+        choices=("cross", "isolated"),
+        default="cross",
+        help="explicit swap margin mode",
+    )
     run.add_argument("--warmup", type=int, default=8, help="recent closed bars to seed as warmup")
     run.add_argument("--poll", type=float, default=5.0, help="feed poll interval, seconds")
     run.add_argument(
@@ -79,6 +104,9 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     A deliberately loud, self-contained check of credentials, sandbox routing
     and the create/fill/read-back loop, run before any strategy is wired in.
     """
+    if is_swap(args.inst):
+        print("paper smoke is a spot round trip; use `paper run` for linear swaps")
+        return 1
     demo = not args.live
     creds = OkxCredentials.from_env(demo=demo)
     client = OkxTradeClient(creds)
@@ -122,15 +150,34 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Run a strategy against live closed bars, trading on OKX demo by default."""
+    inst, tf = args.inst, args.tf
+    swap = is_swap(inst)
+    if not swap and (args.leverage != 1.0 or args.margin_mode != "cross"):
+        print("--leverage and --margin-mode only apply to swap instruments")
+        return 1
     demo = not args.live
     trade = OkxTradeClient(OkxCredentials.from_env(demo=demo))
     public = OkxPublicClient()
-    inst, tf = args.inst, args.tf
 
-    market = trade.exchange.market(to_symbol(inst))
+    try:
+        market = trade.exchange.market(to_symbol(inst))
+        spec = spec_from_market(
+            market,
+            inst,
+            max_leverage=args.leverage if swap else None,
+        )
+        if swap:
+            trade.configure_swap(
+                inst,
+                args.leverage,
+                cast(MarginMode, args.margin_mode),
+            )
+    except (TradeError, ValueError) as exc:
+        print(f"refusing unsupported paper market/account configuration: {exc}")
+        return 1
     broker = LiveBroker(
         client=trade,
-        spec=spec_from_market(market, inst),
+        spec=spec,
         min_base_amount=min_base_amount_of(market),
     )
     strategy = HeartbeatProbe(weight=args.weight, period=args.period)
@@ -219,6 +266,20 @@ def _event_row(event: PaperEvent) -> dict:
         "cash_after": event.cash_after,
         "average_entry": event.average_entry,
         "strategy_state": event.strategy_state,
+        "account_event_cursor": event.account_event_cursor,
+        "account_events": [
+            {
+                "bill_id": item.bill_id,
+                "ts": item.ts,
+                "kind": item.kind,
+                "amount": item.amount,
+                "currency": item.currency,
+                "price": item.price,
+                "quantity": item.quantity,
+                "subtype": item.subtype,
+            }
+            for item in event.account_events
+        ],
         "rejected": event.rejected,
         "client_order_id": event.client_order_id,
         "protection": None
@@ -253,4 +314,10 @@ def _print_event(event: PaperEvent) -> None:
         line += f"  {f.side.value.upper()} {f.quantity:g} @ {f.price:g}"
     elif event.rejected:
         line += "  (rejected)"
+    if event.account_events:
+        changes = ", ".join(
+            f"{item.kind} {item.amount:+g} {item.currency}"
+            for item in event.account_events
+        )
+        line += f"  [{changes}]"
     print(line)

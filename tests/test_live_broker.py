@@ -11,12 +11,24 @@ from cq.live.broker import (
     spec_from_market,
 )
 from cq.live.client import TradeError
+from cq.live.protocols import AccountEvent, CollateralBalance, SwapPosition
 
 INST = "DOGE-USDT"
+SWAP_INST = "DOGE-USDT-SWAP"
 
 # A DOGE-USDT spot market as ccxt reports it on OKX.
 MARKET = {
     "precision": {"amount": 1e-06, "price": 5e-05},
+    "limits": {"amount": {"min": 1.0, "max": None}, "cost": {"min": None}},
+}
+SWAP_MARKET = {
+    "type": "swap",
+    "swap": True,
+    "contract": True,
+    "linear": True,
+    "settle": "USDT",
+    "contractSize": 100.0,
+    "precision": {"amount": 1.0, "price": 5e-05},
     "limits": {"amount": {"min": 1.0, "max": None}, "cost": {"min": None}},
 }
 
@@ -33,6 +45,11 @@ class FakeTradeClient:
         self.algo_orders = []
         self.canceled_algos = []
         self.actions = []
+        self.swap_position_value = SwapPosition(
+            held, 0.073 if held else None, 0.074, None, 2.0, "cross"
+        )
+        self.collateral = CollateralBalance(cash, cash + 5.0, cash - 10.0)
+        self.events: list[AccountEvent] = []
 
     def milliseconds(self):
         return 0
@@ -98,6 +115,18 @@ class FakeTradeClient:
     def protective_order_state(self, inst_id, algo_id):
         return "canceled"
 
+    def configure_swap(self, inst_id, leverage, margin_mode="cross"):
+        return None
+
+    def swap_position(self, inst_id):
+        return self.swap_position_value
+
+    def collateral_balance(self, ccy):
+        return self.collateral
+
+    def swap_account_events(self, inst_id, begin_ms, end_ms):
+        return list(self.events)
+
 
 def make_broker(client=None, min_amount=1.0):
     return LiveBroker(
@@ -123,6 +152,28 @@ def test_min_base_amount_reads_the_venue_floor():
     assert min_base_amount_of({"limits": {"amount": {"min": None}}}) == 0.0
 
 
+def test_swap_spec_converts_contract_grid_to_base_and_caps_leverage():
+    spec = spec_from_market(SWAP_MARKET, SWAP_INST, max_leverage=3.0)
+
+    assert spec.market_type == "swap"
+    assert spec.contract_size == 100.0
+    assert spec.lot_size == 100.0
+    assert min_base_amount_of(SWAP_MARKET) == 100.0
+    assert spec.max_leverage == 3.0
+    assert spec.to_venue_quantity(250.0) == 2.5
+    assert spec.from_venue_quantity(2.5) == 250.0
+
+
+def test_swap_spec_rejects_inverse_or_wrong_settlement_contracts():
+    inverse = {**SWAP_MARKET, "linear": False}
+    wrong_settle = {**SWAP_MARKET, "settle": "DOGE"}
+
+    with pytest.raises(ValueError, match="linear"):
+        spec_from_market(inverse, SWAP_INST)
+    with pytest.raises(ValueError, match="quote-settled"):
+        spec_from_market(wrong_settle, SWAP_INST)
+
+
 # ---- reconciliation ----------------------------------------------------
 
 
@@ -135,6 +186,23 @@ def test_reconcile_reads_held_and_cash_from_the_client():
 def test_equity_marks_holdings_to_price():
     state = Reconciliation(held=100.0, cash=200.0)
     assert state.equity(2.0) == 400.0
+
+
+def test_swap_reconcile_uses_signed_position_and_exchange_equity():
+    client = FakeTradeClient(cash=500.0, held=-300.0)
+    broker = LiveBroker(
+        client=client,
+        spec=spec_from_market(SWAP_MARKET, SWAP_INST, max_leverage=2.0),
+        min_base_amount=min_base_amount_of(SWAP_MARKET),
+    )
+
+    state = broker.reconcile()
+
+    assert state.held == -300.0
+    assert state.cash == 500.0
+    assert state.average_entry == 0.073
+    assert state.mark_price == 0.074
+    assert state.equity(999.0) == 505.0
 
 
 # ---- sizing parity with the backtest -----------------------------------
@@ -227,6 +295,22 @@ def test_sync_protection_places_an_exit_for_the_reconciled_holding():
             "client_order_id": None,
         }
     ]
+
+
+def test_swap_short_protection_is_a_reduce_only_buy_quantity():
+    client = FakeTradeClient(cash=500.0, held=-300.0)
+    broker = LiveBroker(
+        client=client,
+        spec=spec_from_market(SWAP_MARKET, SWAP_INST, max_leverage=2.0),
+        min_base_amount=100.0,
+    )
+
+    protection = broker.sync_protection(-300.0, stop_loss=0.08, take_profit=0.06)
+
+    assert protection is not None
+    assert protection.side is Side.BUY
+    assert protection.quantity == 300.0
+    assert client.algo_orders[0]["side"] is Side.BUY
 
 
 def test_execute_and_protection_forward_client_order_ids():
