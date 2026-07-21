@@ -13,6 +13,8 @@ looks like a flat equity curve rather than an error.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from cq.context import Context
@@ -63,6 +65,37 @@ class DonchianTrend:
 
     def reset(self) -> None:
         self._target = 0.0
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Persist the carried target that drives exit-channel semantics."""
+        return {
+            "target": self._target,
+            "entry_lookback": self.entry_lookback,
+            "exit_lookback": self.exit_lookback,
+            "size": self.size,
+            "long_only": self.long_only,
+        }
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Restore a target only when this configured strategy can hold it."""
+        expected = {
+            "entry_lookback": self.entry_lookback,
+            "exit_lookback": self.exit_lookback,
+            "size": self.size,
+            "long_only": self.long_only,
+        }
+        if any(state.get(key) != value for key, value in expected.items()):
+            raise ValueError("Donchian checkpoint configuration does not match this strategy")
+        raw = state.get("target")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"invalid Donchian checkpoint target {raw!r}")
+        target = float(raw)
+        allowed = {0.0, self.size}
+        if not self.long_only:
+            allowed.add(-self.size)
+        if not math.isfinite(target) or target not in allowed:
+            raise ValueError(f"invalid Donchian checkpoint target {target!r}")
+        self._target = target
 
     def on_bar(self, ctx: Context) -> Intent:
         close = float(ctx.close(1)[-1])

@@ -1,4 +1,6 @@
-"""LiveBroker: sizes exactly as the backtest, and reconciles from the venue."""
+"""LiveBroker: sizing parity, reconciliation, and resting protective exits."""
+
+import pytest
 
 from cq.core.types import CostModel, MarketSpec, Side
 from cq.engine.sim import SimBroker
@@ -8,6 +10,7 @@ from cq.live.broker import (
     min_base_amount_of,
     spec_from_market,
 )
+from cq.live.client import TradeError
 
 INST = "DOGE-USDT"
 
@@ -27,6 +30,9 @@ class FakeTradeClient:
         self.price = price
         self.fee_bps = fee_bps
         self.orders = []
+        self.algo_orders = []
+        self.canceled_algos = []
+        self.actions = []
 
     def milliseconds(self):
         return 0
@@ -56,7 +62,34 @@ class FakeTradeClient:
 
         fill = Fill(0, inst_id, side, quantity, self.price, fee, reason)
         self.orders.append(fill)
+        self.actions.append(("market", side, quantity))
         return fill
+
+    def place_protective_order(
+        self, inst_id, side, quantity, stop_loss=None, take_profit=None
+    ):
+        algo_id = f"algo-{len(self.algo_orders) + 1}"
+        order = {
+            "algo_id": algo_id,
+            "inst_id": inst_id,
+            "side": side,
+            "quantity": quantity,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+        }
+        self.algo_orders.append(order)
+        self.actions.append(("protect", algo_id))
+        return algo_id
+
+    def cancel_algo_order(self, inst_id, algo_id):
+        self.canceled_algos.append((inst_id, algo_id))
+        self.actions.append(("cancel", algo_id))
+
+    def pending_protective_orders(self, inst_id):
+        return []
+
+    def protective_order_state(self, inst_id, algo_id):
+        return "canceled"
 
 
 def make_broker(client=None, min_amount=1.0):
@@ -162,3 +195,63 @@ def test_a_full_close_never_oversells():
     delta = broker.quantity_for_target(0.0, 0.073, client.held * 0.073, client.held, 0.0)
     assert delta <= 0
     assert abs(delta) <= client.held
+
+
+# ---- protective exits -------------------------------------------------
+
+
+def test_sync_protection_places_an_exit_for_the_reconciled_holding():
+    client = FakeTradeClient(held=123.456789)
+    broker = make_broker(client)
+
+    protection = broker.sync_protection(client.held, stop_loss=0.06, take_profit=0.08)
+
+    assert protection is not None
+    assert protection.algo_id == "algo-1"
+    assert protection.quantity == 123.456789
+    assert client.algo_orders == [
+        {
+            "algo_id": "algo-1",
+            "inst_id": INST,
+            "side": Side.SELL,
+            "quantity": 123.456789,
+            "stop_loss": 0.06,
+            "take_profit": 0.08,
+        }
+    ]
+
+
+def test_unchanged_protection_is_retained_but_a_new_level_replaces_it():
+    client = FakeTradeClient(held=100.0)
+    broker = make_broker(client)
+    first = broker.sync_protection(100.0, stop_loss=0.06, take_profit=0.08)
+
+    same = broker.sync_protection(100.0, stop_loss=0.06, take_profit=0.08)
+    replacement = broker.sync_protection(100.0, stop_loss=0.065, take_profit=0.08)
+
+    assert same is first
+    assert replacement is not None
+    assert replacement.algo_id == "algo-2"
+    assert client.canceled_algos == [(INST, "algo-1")]
+    assert client.actions == [
+        ("protect", "algo-1"),
+        ("cancel", "algo-1"),
+        ("protect", "algo-2"),
+    ]
+
+
+def test_flat_or_unprotected_intent_cancels_the_active_exit():
+    client = FakeTradeClient(held=100.0)
+    broker = make_broker(client)
+    broker.sync_protection(100.0, stop_loss=0.06, take_profit=None)
+
+    assert broker.sync_protection(0.0, stop_loss=0.06, take_profit=None) is None
+    assert broker.active_protection is None
+    assert client.canceled_algos == [(INST, "algo-1")]
+
+
+def test_a_too_small_holding_is_not_silently_left_unprotected():
+    broker = make_broker(FakeTradeClient(held=0.5), min_amount=1.0)
+
+    with pytest.raises(TradeError, match="refusing to run unprotected"):
+        broker.sync_protection(0.5, stop_loss=0.06, take_profit=None)

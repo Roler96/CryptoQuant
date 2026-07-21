@@ -14,6 +14,9 @@ Order semantics that bit us and are pinned here:
 * ``create_order`` returns before the fill is populated, so every order is read
   back with ``fetch_order`` until it closes — the returned `Fill` carries the
   price and fee that actually happened, not the ones requested.
+* OKX's ``conditional`` order silently ignores take-profit when stop-loss is
+  supplied too. A two-sided protective exit must therefore be an ``oco`` algo;
+  a single stop or target remains ``conditional``.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from loguru import logger
 from cq.core.types import Fill, Side
 from cq.data.okx import BROWSER_UA, RETRYABLE
 from cq.live.config import OkxCredentials
+from cq.live.protocols import ProtectiveOrder
 
 
 class TradeError(RuntimeError):
@@ -185,6 +189,157 @@ class OkxTradeClient:
         )
         settled = self._await_fill(order["id"], symbol)
         return self._to_fill(inst_id, side, settled, reason)
+
+    def place_protective_order(
+        self,
+        inst_id: str,
+        side: Side,
+        quantity: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> str:
+        """Place a market-on-trigger protective algo and return its OKX id.
+
+        One level uses OKX's ``conditional`` order. Supplying both uses ``oco``
+        so whichever level triggers first cancels the other. Trigger prices and
+        size are formatted through the loaded market metadata before the native
+        endpoint is called.
+        """
+        if quantity <= 0:
+            raise ValueError(f"protective order quantity must be positive, got {quantity}")
+        if stop_loss is None and take_profit is None:
+            raise ValueError("protective order requires a stop loss or take profit")
+
+        symbol = to_symbol(inst_id)
+        size = self._ex.amount_to_precision(symbol, quantity)
+        if size is None or float(size) <= 0:
+            raise TradeError(f"{inst_id}: protective quantity {quantity} rounds below one lot")
+        request = {
+            "instId": inst_id,
+            "tdMode": "cash",
+            "side": side.value,
+            "ordType": (
+                "oco" if stop_loss is not None and take_profit is not None else "conditional"
+            ),
+            "sz": size,
+        }
+        if stop_loss is not None:
+            request.update(
+                {
+                    "slTriggerPx": self._ex.price_to_precision(symbol, stop_loss),
+                    "slOrdPx": "-1",
+                    "slTriggerPxType": "last",
+                }
+            )
+        if take_profit is not None:
+            request.update(
+                {
+                    "tpTriggerPx": self._ex.price_to_precision(symbol, take_profit),
+                    "tpOrdPx": "-1",
+                    "tpTriggerPxType": "last",
+                }
+            )
+
+        response = self._call(self._ex.private_post_trade_order_algo, request)
+        item = self._algo_result(response, "place protective order")
+        algo_id = str(item.get("algoId") or "")
+        if not algo_id:
+            raise TradeError(f"{inst_id}: OKX accepted protective order without an algoId")
+        return algo_id
+
+    def cancel_algo_order(self, inst_id: str, algo_id: str) -> None:
+        """Cancel one protective algo; an already-final order is success.
+
+        A trigger can fill between reconciliation and cancellation. OKX maps
+        "does not exist", "already canceled", and "already completed" to
+        ``OrderNotFound`` through ccxt; all three mean there is no resting order
+        left to race the replacement.
+        """
+        if not algo_id:
+            raise ValueError("algo_id must not be blank")
+        try:
+            response = self._call(
+                self._ex.private_post_trade_cancel_algos,
+                [{"algoId": algo_id, "instId": inst_id}],
+            )
+        except ccxt.OrderNotFound:
+            return
+        self._algo_result(response, "cancel protective order")
+
+    def pending_protective_orders(self, inst_id: str) -> list[ProtectiveOrder]:
+        """Return every untriggered conditional/OCO algo for one instrument."""
+        orders: list[ProtectiveOrder] = []
+        for order_type in ("conditional", "oco"):
+            response = self._call(
+                self._ex.private_get_trade_orders_algo_pending,
+                {"ordType": order_type, "instId": inst_id},
+            )
+            if str(response.get("code", "")) != "0":
+                message = response.get("msg") or "unknown OKX error"
+                raise TradeError(f"could not list protective orders: {message}")
+            for raw in response.get("data") or []:
+                if not isinstance(raw, dict):
+                    raise TradeError(f"{inst_id}: malformed pending algo {raw!r}")
+                if raw.get("instId") != inst_id:
+                    continue
+                try:
+                    side = Side(str(raw.get("side")))
+                    quantity = float(raw.get("sz") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise TradeError(f"{inst_id}: malformed pending algo {raw!r}") from exc
+                algo_id = str(raw.get("algoId") or "")
+                if not algo_id or quantity <= 0:
+                    raise TradeError(f"{inst_id}: malformed pending algo {raw!r}")
+                orders.append(
+                    ProtectiveOrder(
+                        algo_id=algo_id,
+                        quantity=quantity,
+                        stop_loss=self._optional_price(raw.get("slTriggerPx")),
+                        take_profit=self._optional_price(raw.get("tpTriggerPx")),
+                        side=side,
+                    )
+                )
+        return sorted(orders, key=lambda order: order.algo_id)
+
+    def protective_order_state(self, inst_id: str, algo_id: str) -> str:
+        """Return OKX's current/terminal state for one known protective algo."""
+        response = self._call(
+            self._ex.private_get_trade_order_algo,
+            {"algoId": algo_id},
+        )
+        if str(response.get("code", "")) != "0":
+            message = response.get("msg") or "unknown OKX error"
+            raise TradeError(f"could not read protective order {algo_id}: {message}")
+        data = response.get("data") or []
+        raw = data[0] if data and isinstance(data[0], dict) else {}
+        if raw.get("instId") != inst_id or not raw.get("state"):
+            raise TradeError(f"{inst_id}: malformed algo detail for {algo_id}: {raw!r}")
+        return str(raw["state"])
+
+    @staticmethod
+    def _optional_price(value: Any) -> float | None:
+        """An optional positive price from an OKX string field."""
+        if value in (None, ""):
+            return None
+        try:
+            price = float(value)
+        except (TypeError, ValueError) as exc:
+            raise TradeError(f"invalid protective trigger price {value!r}") from exc
+        if price <= 0:
+            raise TradeError(f"invalid protective trigger price {value!r}")
+        return price
+
+    @staticmethod
+    def _algo_result(response: dict, operation: str) -> dict:
+        """Return the one per-order result, rejecting partial API failures."""
+        code = str(response.get("code", ""))
+        data = response.get("data") or []
+        item = data[0] if data and isinstance(data[0], dict) else {}
+        subcode = str(item.get("sCode", ""))
+        if code != "0" or subcode != "0":
+            message = item.get("sMsg") or response.get("msg") or "unknown OKX error"
+            raise TradeError(f"could not {operation}: {message} (code {subcode or code})")
+        return item
 
     def _await_fill(self, order_id: str, symbol: str) -> dict:
         """Poll one order until it is closed, or give up with what it shows."""

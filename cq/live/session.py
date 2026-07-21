@@ -24,14 +24,17 @@ CLI passes a callback that prints and appends to a session log.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from cq.context import Bar, Context
-from cq.core.types import Fill
+from cq.core.types import Fill, Side
 from cq.data.feed import series_from_bars
 from cq.engine.loop import Strategy
-from cq.live.broker import LiveBroker
+from cq.live.broker import LiveBroker, Reconciliation
+from cq.live.protocols import ProtectiveOrder
+from cq.live.recovery import RecoveryError, SessionResume
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,9 @@ class PaperEvent:
     """What happened on one closed bar of a paper session."""
 
     ts: int
+    inst_id: str
+    timeframe: str
+    strategy: str
     close: float
     target: float
     reason: str
@@ -47,6 +53,11 @@ class PaperEvent:
     equity: float
     fill: Fill | None
     rejected: int
+    protection: ProtectiveOrder | None
+    held_after: float
+    cash_after: float
+    average_entry: float | None
+    strategy_state: dict[str, object] | None
 
 
 def run_paper(
@@ -58,6 +69,7 @@ def run_paper(
     warmup: Iterable[Bar] = (),
     on_event: Callable[[PaperEvent], None] | None = None,
     max_bars: int | None = None,
+    resume: SessionResume | None = None,
 ) -> None:
     """Drive `strategy` against a live `feed`, routing targets to `broker`.
 
@@ -65,9 +77,19 @@ def run_paper(
     on the first live bar. `max_bars` bounds the run for tests and finite
     sessions; omit it for a session that runs until interrupted.
     """
-    reset = getattr(strategy, "reset", None)
-    if callable(reset):
-        reset()
+    if resume is None:
+        reset = getattr(strategy, "reset", None)
+        if callable(reset):
+            reset()
+        average_entry = None
+    else:
+        restore = getattr(strategy, "restore_state", None)
+        if not callable(restore):
+            raise RecoveryError(
+                f"strategy {strategy.name!r} has no restore_state() for checkpoint recovery"
+            )
+        restore(dict(resume.strategy_state))
+        average_entry = resume.average_entry
 
     bars: list[Bar] = list(warmup)
     # Keep the rolling window bounded but always longer than the strategy can
@@ -86,20 +108,88 @@ def run_paper(
         ctx = Context(series)
         ctx.seek(len(bars) - 1)
         intent = strategy.on_bar(ctx)
+        # Validate persistence before an order can leave the process. A state
+        # that cannot be logged is not crash recoverable and must fail closed.
+        strategy_state = _snapshot_strategy(strategy)
 
         state = broker.reconcile()
+        if broker.is_effectively_flat(state.held):
+            average_entry = None
         equity = state.equity(bar.close)
         delta = broker.quantity_for_target(
             intent.target, bar.close, equity, state.held, state.cash
         )
         before = len(broker.rejections)
-        fill = broker.execute(delta, bar.ts, reason=intent.reason) if delta != 0 else None
+        fill = None
+        after = state
+        if delta != 0:
+            # The old exit may cover a different size or race a target close,
+            # so remove it before the market order. Reconcile every outcome and
+            # restore protection around whatever the exchange actually holds,
+            # even when an order was rejected or its result was uncertain.
+            previous = broker.active_protection
+            broker.cancel_protection()
+            try:
+                fill = broker.execute(delta, bar.ts, reason=intent.reason)
+            except BaseException:
+                after = broker.reconcile()
+                if previous is not None:
+                    broker.sync_protection(
+                        after.held,
+                        previous.stop_loss,
+                        previous.take_profit,
+                    )
+                else:
+                    broker.sync_protection(
+                        after.held,
+                        intent.stop_loss,
+                        intent.take_profit,
+                    )
+                raise
+            after = broker.reconcile()
+            if fill is None and previous is not None:
+                # `execute` rejected before sending anything. Keep the old
+                # safety net because the intended target was not reached.
+                broker.sync_protection(
+                    after.held,
+                    previous.stop_loss,
+                    previous.take_profit,
+                )
+            elif intent.target == 0 and after.held > 0 and previous is not None:
+                # A partially filled close must protect its residual balance.
+                broker.sync_protection(
+                    after.held,
+                    previous.stop_loss,
+                    previous.take_profit,
+                )
+            else:
+                broker.sync_protection(
+                    after.held,
+                    intent.stop_loss,
+                    intent.take_profit,
+                )
+        else:
+            broker.sync_protection(
+                state.held,
+                intent.stop_loss,
+                intent.take_profit,
+            )
+        average_entry = _updated_average_entry(
+            broker,
+            average_entry,
+            state,
+            after,
+            fill,
+        )
         rejected = len(broker.rejections) - before
 
         if on_event is not None:
             on_event(
                 PaperEvent(
                     ts=bar.ts,
+                    inst_id=inst_id,
+                    timeframe=timeframe,
+                    strategy=strategy.name,
                     close=bar.close,
                     target=intent.target,
                     reason=intent.reason,
@@ -108,9 +198,60 @@ def run_paper(
                     equity=equity,
                     fill=fill,
                     rejected=rejected,
+                    protection=broker.active_protection,
+                    held_after=after.held,
+                    cash_after=after.cash,
+                    average_entry=average_entry,
+                    strategy_state=strategy_state,
                 )
             )
 
         seen += 1
         if max_bars is not None and seen >= max_bars:
             return
+
+
+def _updated_average_entry(
+    broker: LiveBroker,
+    previous: float | None,
+    before: Reconciliation,
+    after: Reconciliation,
+    fill: Fill | None,
+) -> float | None:
+    """Average quote cost of the actual post-trade spot holding.
+
+    Cash movement, rather than the normalized fee field, captures whether OKX
+    charged a buy fee in base or quote currency. Sells leave the average of the
+    remaining units unchanged.
+    """
+    if broker.is_effectively_flat(after.held):
+        return None
+    if fill is None or fill.side is Side.SELL:
+        return previous
+
+    if broker.is_effectively_flat(before.held):
+        old_cost = 0.0
+    elif previous is not None:
+        old_cost = before.held * previous
+    else:
+        return None
+    cash_spent = before.cash - after.cash
+    if cash_spent <= 0:
+        return None
+    return (old_cost + cash_spent) / after.held
+
+
+def _snapshot_strategy(strategy: Strategy) -> dict[str, object] | None:
+    """Copy a JSON-serialisable strategy checkpoint, if it exposes one."""
+    snapshot = getattr(strategy, "snapshot_state", None)
+    if not callable(snapshot):
+        return None
+    state = snapshot()
+    if not isinstance(state, dict):
+        raise TypeError(f"strategy {strategy.name!r} snapshot_state() must return a dict")
+    copied = dict(state)
+    try:
+        json.dumps(copied, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"strategy {strategy.name!r} returned non-JSON checkpoint state") from exc
+    return copied

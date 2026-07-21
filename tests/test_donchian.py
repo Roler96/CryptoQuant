@@ -133,6 +133,27 @@ def test_invalid_parameters_are_rejected():
         DonchianTrend(size=0)
 
 
+def test_strategy_state_checkpoint_restores_the_carried_target():
+    strategy = DonchianTrend(entry_lookback=5, exit_lookback=3)
+    path = [10, 11, 10, 11, 10, 11, 50]
+    ctx = Context(series_from(path))
+    ctx.seek(len(path) - 1)
+    assert strategy.on_bar(ctx).target == 1.0
+
+    restored = DonchianTrend(entry_lookback=5, exit_lookback=3)
+    restored.restore_state(strategy.snapshot_state())
+
+    assert restored.snapshot_state() == strategy.snapshot_state()
+
+
+def test_invalid_strategy_checkpoint_is_rejected():
+    strategy = DonchianTrend(long_only=True)
+    state = strategy.snapshot_state()
+    state["target"] = -1.0
+    with pytest.raises(ValueError, match="checkpoint target"):
+        strategy.restore_state(state)
+
+
 def test_the_strategy_asks_for_no_more_history_than_its_warmup_allows():
     # If it asked for more, Context would raise rather than quietly pad —
     # this pins the two numbers together.

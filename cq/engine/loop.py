@@ -67,6 +67,14 @@ class Resettable(Protocol):
     def reset(self) -> None: ...
 
 
+class Checkpointable(Protocol):
+    """A live strategy whose mutable state can survive a process restart."""
+
+    def snapshot_state(self) -> dict[str, object]: ...
+
+    def restore_state(self, state: dict[str, object]) -> None: ...
+
+
 @dataclass(frozen=True)
 class RunManifest:
     """The fingerprinted inputs a run consumed, captured as it ran.

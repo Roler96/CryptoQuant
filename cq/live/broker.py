@@ -6,11 +6,10 @@ one the backtest assumed. What differs is only what a broker must differ on —
 it sends the order to the exchange and reads the position and cash back as
 truth, instead of applying a fill to a simulated portfolio.
 
-Scope, stated so it cannot be mistaken for more: spot only, market orders only,
-and target-only — protective stops and take-profits from an `Intent` are not
-yet translated into resting exchange orders. A strategy that relies on them
-would be executed more loosely here than the backtest modelled it, so this
-broker is for plumbing and probes until that gap is closed.
+Scope, stated so it cannot be mistaken for more: spot only, with market orders
+for target changes and market-on-trigger OKX algos for protective exits. Swap
+contracts, restart recovery and idempotent client order ids remain separate
+hardening work.
 """
 
 from __future__ import annotations
@@ -20,8 +19,8 @@ from dataclasses import dataclass, field
 from cq.core.types import CostModel, Fill, MarketSpec, Side
 from cq.engine.sim import Rejection
 from cq.engine.sizing import target_delta
-from cq.live.client import quote_currency
-from cq.live.protocols import TradeClient
+from cq.live.client import TradeError, quote_currency
+from cq.live.protocols import ProtectiveOrder, TradeClient
 
 # The same dust floor SimBroker uses, so both brokers drop the same
 # floating-point crumbs to zero rather than trading them.
@@ -79,12 +78,18 @@ class LiveBroker:
     costs: CostModel = field(default_factory=CostModel)
     dust_fraction: float = DEFAULT_DUST_FRACTION
     rejections: list[Rejection] = field(default_factory=list)
+    active_protection: ProtectiveOrder | None = field(default=None, init=False)
 
     def reconcile(self) -> Reconciliation:
         """Read held base coins and free quote cash from the exchange."""
         held = self.client.base_holding(self.spec.inst_id)
         cash = self.client.free_balance(quote_currency(self.spec.inst_id))
         return Reconciliation(held=held, cash=cash)
+
+    def is_effectively_flat(self, held: float) -> bool:
+        """Whether a spot balance is too small for any venue order."""
+        quantity = abs(self.spec.round_quantity(held))
+        return quantity == 0 or quantity < self.min_base_amount
 
     def quantity_for_target(
         self, target: float, price: float, equity: float, held: float, cash: float
@@ -111,3 +116,67 @@ class LiveBroker:
             return None
         side = Side.BUY if rounded > 0 else Side.SELL
         return self.client.market_order(self.spec.inst_id, side, abs(rounded), reason=reason)
+
+    # ---- protective exits --------------------------------------------
+
+    def cancel_protection(self) -> None:
+        """Cancel this session's resting exit, if any."""
+        current = self.active_protection
+        if current is None:
+            return
+        self.client.cancel_algo_order(self.spec.inst_id, current.algo_id)
+        self.active_protection = None
+
+    def adopt_protection(self, protection: ProtectiveOrder) -> None:
+        """Adopt an exchange-verified order after restart reconciliation."""
+        if self.active_protection is not None:
+            raise TradeError(f"{self.spec.inst_id}: protection is already active")
+        self.active_protection = protection
+
+    def sync_protection(
+        self,
+        held: float,
+        stop_loss: float | None,
+        take_profit: float | None,
+    ) -> ProtectiveOrder | None:
+        """Make the resting exit exactly match the exchange-reconciled holding.
+
+        Flat positions and intents without protective levels own no algo. An
+        unchanged order is retained; a size or level change cancels the old
+        algo before placing its replacement.
+        """
+        quantity = self.spec.round_quantity(held)
+        if quantity <= 0 or (stop_loss is None and take_profit is None):
+            self.cancel_protection()
+            return None
+        if quantity < self.min_base_amount:
+            raise TradeError(
+                f"{self.spec.inst_id}: held quantity {quantity} is below protective-order "
+                f"minimum {self.min_base_amount}; refusing to run unprotected"
+            )
+
+        desired = (quantity, stop_loss, take_profit)
+        current = self.active_protection
+        if current is not None and (
+            current.quantity,
+            current.stop_loss,
+            current.take_profit,
+        ) == desired:
+            return current
+
+        self.cancel_protection()
+        algo_id = self.client.place_protective_order(
+            self.spec.inst_id,
+            Side.SELL,
+            quantity,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        self.active_protection = ProtectiveOrder(
+            algo_id=algo_id,
+            quantity=quantity,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            side=Side.SELL,
+        )
+        return self.active_protection

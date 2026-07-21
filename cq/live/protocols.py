@@ -8,9 +8,21 @@ market-data side.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from cq.core.types import Fill, Side
+
+
+@dataclass(frozen=True)
+class ProtectiveOrder:
+    """One resting market-on-trigger exit reported by the venue."""
+
+    algo_id: str
+    quantity: float
+    stop_loss: float | None
+    take_profit: float | None
+    side: Side = Side.SELL
 
 
 class TradeClient(Protocol):
@@ -29,3 +41,18 @@ class TradeClient(Protocol):
     def market_order(
         self, inst_id: str, side: Side, quantity: float, reason: str = ...
     ) -> Fill: ...
+
+    def place_protective_order(
+        self,
+        inst_id: str,
+        side: Side,
+        quantity: float,
+        stop_loss: float | None = ...,
+        take_profit: float | None = ...,
+    ) -> str: ...
+
+    def cancel_algo_order(self, inst_id: str, algo_id: str) -> None: ...
+
+    def pending_protective_orders(self, inst_id: str) -> list[ProtectiveOrder]: ...
+
+    def protective_order_state(self, inst_id: str, algo_id: str) -> str: ...

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 from cq.core.clock import BASE_TIMEFRAME
@@ -15,6 +16,12 @@ from cq.live.broker import LiveBroker, min_base_amount_of, spec_from_market
 from cq.live.client import OkxTradeClient, base_currency, quote_currency, to_symbol
 from cq.live.config import OkxCredentials
 from cq.live.probe import HeartbeatProbe
+from cq.live.recovery import (
+    CHECKPOINT_VERSION,
+    RecoveryError,
+    load_latest_checkpoint,
+    reconcile_restart,
+)
 from cq.live.session import PaperEvent, run_paper
 
 DEFAULT_INSTRUMENT = "DOGE-USDT"
@@ -121,11 +128,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         min_base_amount=min_base_amount_of(market),
     )
     strategy = HeartbeatProbe(weight=args.weight, period=args.period)
+    checkpoint = load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
     feed = LiveFeed(public, inst, tf, poll_seconds=args.poll)
     # One priming poll returns the recent closed backlog and, crucially, arms the
     # feed's high-water mark: the session then only ever acts on bars that close
     # from here forward, never replaying old history as if it were a live signal.
     backlog = feed.poll()
+    if checkpoint is not None:
+        missed = [bar for bar in backlog if bar.ts > checkpoint.ts]
+        if missed:
+            print(
+                "refusing to resume across unprocessed closed bars: "
+                f"checkpoint {checkpoint.ts}, newest primed bar {missed[-1].ts}"
+            )
+            return 1
+    try:
+        resume = reconcile_restart(strategy.name, broker, checkpoint)
+    except RecoveryError as exc:
+        print(f"refusing to start unreconciled paper session: {exc}")
+        return 1
     warmup = backlog[-args.warmup :] if args.warmup > 0 else []
 
     mode = "DEMO" if demo else "LIVE — REAL MONEY"
@@ -133,6 +154,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"paper run [{mode}]  {strategy.name} on {inst} {tf}  "
         f"(warmup {len(warmup)} bars, min order {broker.min_base_amount} {base_currency(inst)})"
     )
+    if resume is not None:
+        resumed_at = dt.datetime.fromtimestamp(resume.checkpoint_ts / 1000, dt.UTC).isoformat()
+        print(f"  resumed checkpoint {resumed_at} from {resume.source}")
     PAPER_LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
     log_path = PAPER_LOG_DIR / f"{inst}_{tf}_{stamp}.jsonl"
@@ -141,13 +165,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     with log_path.open("a", encoding="utf-8") as log:
         def on_event(event: PaperEvent) -> None:
             _print_event(event)
-            log.write(json.dumps(_event_row(event)) + "\n")
+            log.write(json.dumps(_event_row(event), allow_nan=False) + "\n")
             log.flush()
+            os.fsync(log.fileno())
 
         try:
             run_paper(
                 strategy, broker, feed, inst, tf,
-                warmup=warmup, on_event=on_event, max_bars=args.max_bars,
+                warmup=warmup, on_event=on_event, max_bars=args.max_bars, resume=resume,
             )
         except KeyboardInterrupt:
             print("\n  stopped")
@@ -158,15 +183,32 @@ def _event_row(event: PaperEvent) -> dict:
     """A PaperEvent as a JSON-serialisable dict for the session log."""
     fill = event.fill
     return {
+        "checkpoint_version": CHECKPOINT_VERSION,
         "ts": event.ts,
         "time": dt.datetime.fromtimestamp(event.ts / 1000, dt.UTC).isoformat(),
+        "inst_id": event.inst_id,
+        "timeframe": event.timeframe,
+        "strategy": event.strategy,
         "close": event.close,
         "target": event.target,
         "reason": event.reason,
         "held": event.held,
         "cash": event.cash,
         "equity": event.equity,
+        "held_after": event.held_after,
+        "cash_after": event.cash_after,
+        "average_entry": event.average_entry,
+        "strategy_state": event.strategy_state,
         "rejected": event.rejected,
+        "protection": None
+        if event.protection is None
+        else {
+            "algo_id": event.protection.algo_id,
+            "quantity": event.protection.quantity,
+            "stop_loss": event.protection.stop_loss,
+            "take_profit": event.protection.take_profit,
+            "side": event.protection.side.value,
+        },
         "fill": None
         if fill is None
         else {

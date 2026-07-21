@@ -47,3 +47,16 @@ class HeartbeatProbe:
 
     def reset(self) -> None:
         self._count = 0
+
+    def snapshot_state(self) -> dict[str, object]:
+        """The phase counter needed to continue the square wave after restart."""
+        return {"count": self._count, "weight": self.weight, "period": self.period}
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Restore a checkpoint only when it is valid for this probe."""
+        count = state.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"invalid heartbeat checkpoint count {count!r}")
+        if state.get("weight") != self.weight or state.get("period") != self.period:
+            raise ValueError("heartbeat checkpoint configuration does not match this probe")
+        self._count = count
