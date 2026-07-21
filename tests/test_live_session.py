@@ -31,6 +31,7 @@ class FakeTradeClient:
         self.algo_orders = []
         self.canceled_algos = []
         self.actions = []
+        self.market_client_order_ids = []
 
     def milliseconds(self):
         return 0
@@ -47,7 +48,8 @@ class FakeTradeClient:
     def round_amount(self, inst_id, quantity):
         return quantity
 
-    def market_order(self, inst_id, side, quantity, reason=""):
+    def market_order(self, inst_id, side, quantity, reason="", client_order_id=None):
+        self.market_client_order_ids.append(client_order_id)
         price = 0.073
         if self.fail_sells and side is Side.SELL:
             self.actions.append(("market-error", side))
@@ -64,11 +66,17 @@ class FakeTradeClient:
         return fill
 
     def place_protective_order(
-        self, inst_id, side, quantity, stop_loss=None, take_profit=None
+        self,
+        inst_id,
+        side,
+        quantity,
+        stop_loss=None,
+        take_profit=None,
+        client_order_id=None,
     ):
         algo_id = f"algo-{len(self.algo_orders) + 1}"
         self.algo_orders.append(
-            (algo_id, inst_id, side, quantity, stop_loss, take_profit)
+            (algo_id, inst_id, side, quantity, stop_loss, take_profit, client_order_id)
         )
         self.actions.append(("protect", algo_id))
         return algo_id
@@ -287,7 +295,38 @@ def test_session_log_records_the_resting_algo_id_and_levels():
         "stop_loss": 0.06,
         "take_profit": 0.08,
         "side": "sell",
+        "client_order_id": protection.client_order_id,
     }
+
+
+def test_same_bar_intent_uses_stable_distinct_market_and_protection_ids():
+    first_client = FakeTradeClient()
+    second_client = FakeTradeClient()
+
+    first = collect(
+        strategy=_ProtectedRoundTrip(),
+        broker=broker(first_client),
+        feed=bars(1),
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=1,
+    )[0]
+    second = collect(
+        strategy=_ProtectedRoundTrip(),
+        broker=broker(second_client),
+        feed=bars(1),
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=1,
+    )[0]
+
+    assert first.client_order_id == second.client_order_id
+    assert first.protection is not None
+    assert second.protection is not None
+    assert first.protection.client_order_id == second.protection.client_order_id
+    assert first.client_order_id != first.protection.client_order_id
+    assert first_client.market_client_order_ids == [first.client_order_id]
+    assert _event_row(first)["client_order_id"] == first.client_order_id
 
 
 def test_failed_target_exit_restores_protection_for_the_remaining_holding():

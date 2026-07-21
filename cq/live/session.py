@@ -33,6 +33,7 @@ from cq.core.types import Fill, Side
 from cq.data.feed import series_from_bars
 from cq.engine.loop import Strategy
 from cq.live.broker import LiveBroker, Reconciliation
+from cq.live.ids import client_order_id
 from cq.live.protocols import ProtectiveOrder
 from cq.live.recovery import RecoveryError, SessionResume
 
@@ -52,6 +53,7 @@ class PaperEvent:
     cash: float
     equity: float
     fill: Fill | None
+    client_order_id: str | None
     rejected: int
     protection: ProtectiveOrder | None
     held_after: float
@@ -119,6 +121,22 @@ def run_paper(
         delta = broker.quantity_for_target(
             intent.target, bar.close, equity, state.held, state.cash
         )
+        target_client_id = client_order_id(
+            "target",
+            inst_id,
+            bar.ts,
+            intent.target,
+            intent.stop_loss,
+            intent.take_profit,
+        )
+        protection_client_id = client_order_id(
+            "protection",
+            inst_id,
+            bar.ts,
+            intent.target,
+            intent.stop_loss,
+            intent.take_profit,
+        )
         before = len(broker.rejections)
         fill = None
         after = state
@@ -130,7 +148,12 @@ def run_paper(
             previous = broker.active_protection
             broker.cancel_protection()
             try:
-                fill = broker.execute(delta, bar.ts, reason=intent.reason)
+                fill = broker.execute(
+                    delta,
+                    bar.ts,
+                    reason=intent.reason,
+                    client_order_id=target_client_id,
+                )
             except BaseException:
                 after = broker.reconcile()
                 if previous is not None:
@@ -138,12 +161,21 @@ def run_paper(
                         after.held,
                         previous.stop_loss,
                         previous.take_profit,
+                        client_order_id=client_order_id(
+                            "restore",
+                            inst_id,
+                            bar.ts,
+                            intent.target,
+                            previous.stop_loss,
+                            previous.take_profit,
+                        ),
                     )
                 else:
                     broker.sync_protection(
                         after.held,
                         intent.stop_loss,
                         intent.take_profit,
+                        client_order_id=protection_client_id,
                     )
                 raise
             after = broker.reconcile()
@@ -154,6 +186,14 @@ def run_paper(
                     after.held,
                     previous.stop_loss,
                     previous.take_profit,
+                    client_order_id=client_order_id(
+                        "restore",
+                        inst_id,
+                        bar.ts,
+                        intent.target,
+                        previous.stop_loss,
+                        previous.take_profit,
+                    ),
                 )
             elif intent.target == 0 and after.held > 0 and previous is not None:
                 # A partially filled close must protect its residual balance.
@@ -161,18 +201,28 @@ def run_paper(
                     after.held,
                     previous.stop_loss,
                     previous.take_profit,
+                    client_order_id=client_order_id(
+                        "restore",
+                        inst_id,
+                        bar.ts,
+                        intent.target,
+                        previous.stop_loss,
+                        previous.take_profit,
+                    ),
                 )
             else:
                 broker.sync_protection(
                     after.held,
                     intent.stop_loss,
                     intent.take_profit,
+                    client_order_id=protection_client_id,
                 )
         else:
             broker.sync_protection(
                 state.held,
                 intent.stop_loss,
                 intent.take_profit,
+                client_order_id=protection_client_id,
             )
         average_entry = _updated_average_entry(
             broker,
@@ -197,6 +247,7 @@ def run_paper(
                     cash=state.cash,
                     equity=equity,
                     fill=fill,
+                    client_order_id=target_client_id if delta != 0 else None,
                     rejected=rejected,
                     protection=broker.active_protection,
                     held_after=after.held,

@@ -16,6 +16,7 @@ from typing import Any
 
 from cq.core.types import Side
 from cq.live.broker import LiveBroker
+from cq.live.ids import client_order_id
 from cq.live.protocols import ProtectiveOrder
 
 CHECKPOINT_VERSION = 1
@@ -140,6 +141,16 @@ def reconcile_restart(
         )
 
     logged = checkpoint.protection
+    recovery_client_id = None
+    if logged is not None:
+        recovery_client_id = client_order_id(
+            "recovery",
+            checkpoint.inst_id,
+            checkpoint.ts,
+            checkpoint.target,
+            logged.stop_loss,
+            logged.take_profit,
+        )
     if logged is not None and not _quantity_matches(broker, logged.quantity, account.held):
         raise RecoveryError(
             f"{broker.spec.inst_id}: checkpoint protection quantity {logged.quantity} "
@@ -154,7 +165,10 @@ def reconcile_restart(
         )
     if logged is not None and pending:
         venue = pending[0]
-        if not _protection_matches(broker, venue, logged):
+        if not _protection_matches(broker, venue, logged) and not (
+            venue.client_order_id == recovery_client_id
+            and _protection_terms_match(broker, venue, logged)
+        ):
             raise RecoveryError(
                 f"{broker.spec.inst_id}: pending algo {venue.algo_id} does not match checkpoint "
                 f"algo {logged.algo_id}"
@@ -166,7 +180,12 @@ def reconcile_restart(
             # The process may have died after canceling the old order but
             # before logging its replacement. Rebuild from durable levels
             # around the exchange's actual holding.
-            broker.sync_protection(account.held, logged.stop_loss, logged.take_profit)
+            broker.sync_protection(
+                account.held,
+                logged.stop_loss,
+                logged.take_profit,
+                client_order_id=recovery_client_id,
+            )
         else:
             raise RecoveryError(
                 f"{broker.spec.inst_id}: checkpoint algo {logged.algo_id} is {state!r} "
@@ -260,9 +279,24 @@ def _protection_from_row(value: Any, source: Path) -> ProtectiveOrder | None:
         raise RecoveryError(f"{source}: malformed protection checkpoint: {exc}") from exc
     stop_loss = _optional_positive(value.get("stop_loss"), "protection.stop_loss")
     take_profit = _optional_positive(value.get("take_profit"), "protection.take_profit")
+    raw_client_order_id = value.get("client_order_id")
+    client_order_id = None if raw_client_order_id is None else str(raw_client_order_id)
     if not algo_id or quantity <= 0 or (stop_loss is None and take_profit is None):
         raise RecoveryError(f"{source}: malformed protection checkpoint")
-    return ProtectiveOrder(algo_id, quantity, stop_loss, take_profit, side)
+    if client_order_id is not None and (
+        not 1 <= len(client_order_id) <= 32
+        or not client_order_id.isascii()
+        or not client_order_id.isalnum()
+    ):
+        raise RecoveryError(f"{source}: malformed protection checkpoint")
+    return ProtectiveOrder(
+        algo_id,
+        quantity,
+        stop_loss,
+        take_profit,
+        side,
+        client_order_id,
+    )
 
 
 def _finite_float(value: Any, name: str) -> float:
@@ -304,7 +338,21 @@ def _protection_matches(
 ) -> bool:
     return (
         venue.algo_id == logged.algo_id
-        and venue.side is logged.side
+        and (
+            logged.client_order_id is None
+            or venue.client_order_id == logged.client_order_id
+        )
+        and _protection_terms_match(broker, venue, logged)
+    )
+
+
+def _protection_terms_match(
+    broker: LiveBroker,
+    venue: ProtectiveOrder,
+    logged: ProtectiveOrder,
+) -> bool:
+    return (
+        venue.side is logged.side
         and _quantity_matches(broker, venue.quantity, logged.quantity)
         and _level_matches(venue.stop_loss, logged.stop_loss)
         and _level_matches(venue.take_profit, logged.take_profit)

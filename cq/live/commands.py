@@ -200,6 +200,7 @@ def _event_row(event: PaperEvent) -> dict:
         "average_entry": event.average_entry,
         "strategy_state": event.strategy_state,
         "rejected": event.rejected,
+        "client_order_id": event.client_order_id,
         "protection": None
         if event.protection is None
         else {
@@ -208,6 +209,7 @@ def _event_row(event: PaperEvent) -> dict:
             "stop_loss": event.protection.stop_loss,
             "take_profit": event.protection.take_profit,
             "side": event.protection.side.value,
+            "client_order_id": event.protection.client_order_id,
         },
         "fill": None
         if fill is None

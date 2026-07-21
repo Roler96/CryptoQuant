@@ -17,6 +17,9 @@ Order semantics that bit us and are pinned here:
 * OKX's ``conditional`` order silently ignores take-profit when stop-loss is
   supplied too. A two-sided protective exit must therefore be an ``oco`` algo;
   a single stop or target remains ``conditional``.
+* create requests are never blindly retried. With a deterministic client id,
+  a transient failure is resolved by polling the corresponding read endpoint;
+  if no order becomes visible, the result stays explicitly unknown.
 """
 
 from __future__ import annotations
@@ -168,7 +171,14 @@ class OkxTradeClient:
 
     # ---- ordering -----------------------------------------------------
 
-    def market_order(self, inst_id: str, side: Side, quantity: float, reason: str = "") -> Fill:
+    def market_order(
+        self,
+        inst_id: str,
+        side: Side,
+        quantity: float,
+        reason: str = "",
+        client_order_id: str | None = None,
+    ) -> Fill:
         """Place a market order for `quantity` base coins and return its fill.
 
         `quantity` is always base currency (see the module docstring). The order
@@ -177,17 +187,33 @@ class OkxTradeClient:
         """
         if quantity <= 0:
             raise ValueError(f"market order quantity must be positive, got {quantity}")
+        self._validate_client_order_id(client_order_id)
         symbol = to_symbol(inst_id)
-        order = self._call(
-            self._ex.create_order,
-            symbol,
-            "market",
-            side.value,
-            quantity,
-            None,
-            {"tgtCcy": "base_ccy"},
-        )
-        settled = self._await_fill(order["id"], symbol)
+        params = {"tgtCcy": "base_ccy"}
+        if client_order_id is not None:
+            params["clOrdId"] = client_order_id
+        try:
+            order = self._ex.create_order(
+                symbol,
+                "market",
+                side.value,
+                quantity,
+                None,
+                params,
+            )
+            order_id = str(order["id"])
+        except RETRYABLE as exc:
+            order_id = self._recover_order_id(inst_id, client_order_id)
+            if order_id is None:
+                raise TradeError(
+                    f"{inst_id}: market order result is unknown after {type(exc).__name__}; "
+                    "the create request was not resent"
+                ) from exc
+        except ccxt.InvalidOrder:
+            order_id = self._recover_order_id(inst_id, client_order_id)
+            if order_id is None:
+                raise
+        settled = self._await_fill(order_id, symbol)
         return self._to_fill(inst_id, side, settled, reason)
 
     def place_protective_order(
@@ -197,6 +223,7 @@ class OkxTradeClient:
         quantity: float,
         stop_loss: float | None = None,
         take_profit: float | None = None,
+        client_order_id: str | None = None,
     ) -> str:
         """Place a market-on-trigger protective algo and return its OKX id.
 
@@ -209,6 +236,7 @@ class OkxTradeClient:
             raise ValueError(f"protective order quantity must be positive, got {quantity}")
         if stop_loss is None and take_profit is None:
             raise ValueError("protective order requires a stop loss or take profit")
+        self._validate_client_order_id(client_order_id)
 
         symbol = to_symbol(inst_id)
         size = self._ex.amount_to_precision(symbol, quantity)
@@ -223,6 +251,8 @@ class OkxTradeClient:
             ),
             "sz": size,
         }
+        if client_order_id is not None:
+            request["algoClOrdId"] = client_order_id
         if stop_loss is not None:
             request.update(
                 {
@@ -240,12 +270,108 @@ class OkxTradeClient:
                 }
             )
 
-        response = self._call(self._ex.private_post_trade_order_algo, request)
-        item = self._algo_result(response, "place protective order")
-        algo_id = str(item.get("algoId") or "")
+        try:
+            response = self._ex.private_post_trade_order_algo(request)
+            item = self._algo_result(response, "place protective order")
+            algo_id = str(item.get("algoId") or "")
+        except RETRYABLE as exc:
+            algo_id = self._recover_algo_id(inst_id, client_order_id)
+            if algo_id is None:
+                raise TradeError(
+                    f"{inst_id}: protective order result is unknown after "
+                    f"{type(exc).__name__}; the create request was not resent"
+                ) from exc
+        except ccxt.InvalidOrder:
+            algo_id = self._recover_algo_id(inst_id, client_order_id)
+            if algo_id is None:
+                raise
         if not algo_id:
             raise TradeError(f"{inst_id}: OKX accepted protective order without an algoId")
         return algo_id
+
+    def _recover_order_id(self, inst_id: str, client_order_id: str | None) -> str | None:
+        """Poll by clOrdId after an ambiguous create, without resending it."""
+        if client_order_id is None:
+            return None
+        request = {"instId": inst_id, "clOrdId": client_order_id}
+        return self._poll_created_id(
+            self._ex.private_get_trade_order,
+            request,
+            "ordId",
+            "clOrdId",
+            client_order_id,
+            inst_id=inst_id,
+        )
+
+    def _recover_algo_id(self, inst_id: str, client_order_id: str | None) -> str | None:
+        """Poll by algoClOrdId after an ambiguous create, without resending it."""
+        if client_order_id is None:
+            return None
+        request = {"algoClOrdId": client_order_id}
+        return self._poll_created_id(
+            self._ex.private_get_trade_order_algo,
+            request,
+            "algoId",
+            "algoClOrdId",
+            client_order_id,
+            inst_id=inst_id,
+            required_state="live",
+        )
+
+    def _poll_created_id(
+        self,
+        endpoint: Callable[..., Any],
+        request: dict,
+        id_field: str,
+        client_id_field: str,
+        client_order_id: str,
+        inst_id: str | None = None,
+        required_state: str | None = None,
+    ) -> str | None:
+        """Resolve one uncertain create through its read endpoint only."""
+        for attempt in range(self.max_retries):
+            try:
+                response = endpoint(request)
+            except (ccxt.OrderNotFound, *RETRYABLE):
+                response = None
+            if response is not None and str(response.get("code", "")) == "0":
+                data = response.get("data") or []
+                item = data[0] if data and isinstance(data[0], dict) else {}
+                same_instrument = inst_id is None or item.get("instId") == inst_id
+                usable_state = required_state is None or item.get("state") == required_state
+                if (
+                    item.get(client_id_field) == client_order_id
+                    and same_instrument
+                    and usable_state
+                ):
+                    recovered = str(item.get(id_field) or "")
+                    if recovered:
+                        return recovered
+            if attempt + 1 < self.max_retries:
+                delay = self.backoff_base_s * (2**attempt)
+                logger.warning(
+                    "OKX create result unresolved for client id {}, poll {}/{} in {:.1f}s",
+                    client_order_id,
+                    attempt + 1,
+                    self.max_retries,
+                    delay,
+                )
+                time.sleep(delay)
+        return None
+
+    @staticmethod
+    def _validate_client_order_id(client_order_id: str | None) -> None:
+        if client_order_id is None:
+            return
+        if (
+            not 1 <= len(client_order_id) <= 32
+            or not client_order_id.isascii()
+            or not client_order_id.isalnum()
+        ):
+            raise ValueError(
+                "client_order_id must contain 1-32 alphanumeric characters, "
+                f"got {client_order_id!r}"
+            )
 
     def cancel_algo_order(self, inst_id: str, algo_id: str) -> None:
         """Cancel one protective algo; an already-final order is success.
@@ -297,6 +423,7 @@ class OkxTradeClient:
                         stop_loss=self._optional_price(raw.get("slTriggerPx")),
                         take_profit=self._optional_price(raw.get("tpTriggerPx")),
                         side=side,
+                        client_order_id=str(raw.get("algoClOrdId") or "") or None,
                     )
                 )
         return sorted(orders, key=lambda order: order.algo_id)

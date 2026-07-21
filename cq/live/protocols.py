@@ -23,6 +23,7 @@ class ProtectiveOrder:
     stop_loss: float | None
     take_profit: float | None
     side: Side = Side.SELL
+    client_order_id: str | None = None
 
 
 class TradeClient(Protocol):
@@ -39,7 +40,12 @@ class TradeClient(Protocol):
     def round_amount(self, inst_id: str, quantity: float) -> float: ...
 
     def market_order(
-        self, inst_id: str, side: Side, quantity: float, reason: str = ...
+        self,
+        inst_id: str,
+        side: Side,
+        quantity: float,
+        reason: str = ...,
+        client_order_id: str | None = ...,
     ) -> Fill: ...
 
     def place_protective_order(
@@ -49,6 +55,7 @@ class TradeClient(Protocol):
         quantity: float,
         stop_loss: float | None = ...,
         take_profit: float | None = ...,
+        client_order_id: str | None = ...,
     ) -> str: ...
 
     def cancel_algo_order(self, inst_id: str, algo_id: str) -> None: ...

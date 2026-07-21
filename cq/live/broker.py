@@ -8,8 +8,7 @@ truth, instead of applying a fill to a simulated portfolio.
 
 Scope, stated so it cannot be mistaken for more: spot only, with market orders
 for target changes and market-on-trigger OKX algos for protective exits. Swap
-contracts, restart recovery and idempotent client order ids remain separate
-hardening work.
+contracts remain separate hardening work.
 """
 
 from __future__ import annotations
@@ -99,7 +98,13 @@ class LiveBroker:
             self.spec, self.costs, target, price, equity, held, cash, self.dust_fraction
         )
 
-    def execute(self, delta: float, ts: int, reason: str = "") -> Fill | None:
+    def execute(
+        self,
+        delta: float,
+        ts: int,
+        reason: str = "",
+        client_order_id: str | None = None,
+    ) -> Fill | None:
         """Send a market order for `delta`, or record why none was sent.
 
         `ts` stamps a rejection so it lines up with the bar that produced it,
@@ -115,7 +120,13 @@ class LiveBroker:
             )
             return None
         side = Side.BUY if rounded > 0 else Side.SELL
-        return self.client.market_order(self.spec.inst_id, side, abs(rounded), reason=reason)
+        return self.client.market_order(
+            self.spec.inst_id,
+            side,
+            abs(rounded),
+            reason=reason,
+            client_order_id=client_order_id,
+        )
 
     # ---- protective exits --------------------------------------------
 
@@ -138,6 +149,7 @@ class LiveBroker:
         held: float,
         stop_loss: float | None,
         take_profit: float | None,
+        client_order_id: str | None = None,
     ) -> ProtectiveOrder | None:
         """Make the resting exit exactly match the exchange-reconciled holding.
 
@@ -171,6 +183,7 @@ class LiveBroker:
             quantity,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            client_order_id=client_order_id,
         )
         self.active_protection = ProtectiveOrder(
             algo_id=algo_id,
@@ -178,5 +191,6 @@ class LiveBroker:
             stop_loss=stop_loss,
             take_profit=take_profit,
             side=Side.SELL,
+            client_order_id=client_order_id,
         )
         return self.active_protection

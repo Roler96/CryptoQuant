@@ -43,14 +43,27 @@ class RecoveryClient:
     def round_amount(self, inst_id, quantity):
         return quantity
 
-    def market_order(self, inst_id, side, quantity, reason=""):
+    def market_order(self, inst_id, side, quantity, reason="", client_order_id=None):
         return Fill(0, inst_id, side, quantity, 1.0, 0.0, reason)
 
     def place_protective_order(
-        self, inst_id, side, quantity, stop_loss=None, take_profit=None
+        self,
+        inst_id,
+        side,
+        quantity,
+        stop_loss=None,
+        take_profit=None,
+        client_order_id=None,
     ):
         algo_id = f"replacement-{len(self.placed) + 1}"
-        order = ProtectiveOrder(algo_id, quantity, stop_loss, take_profit, side)
+        order = ProtectiveOrder(
+            algo_id,
+            quantity,
+            stop_loss,
+            take_profit,
+            side,
+            client_order_id,
+        )
         self.placed.append(order)
         self.pending = [order]
         return algo_id
@@ -145,10 +158,30 @@ def test_missing_logged_protection_is_rebuilt_for_actual_holding(tmp_path):
 
     assert broker.active_protection is not None
     assert broker.active_protection.algo_id == "replacement-1"
+    assert broker.active_protection.client_order_id is not None
     assert (broker.active_protection.stop_loss, broker.active_protection.take_profit) == (
         0.06,
         0.08,
     )
+
+
+def test_recovery_adopts_its_already_placed_replacement_after_a_second_crash(tmp_path):
+    logged = ProtectiveOrder("old-algo", 100.0, 0.06, 0.08)
+    first_client = RecoveryClient(pending=[])
+    first_client.algo_states["old-algo"] = "canceled"
+    first_broker = make_broker(first_client)
+    saved = checkpoint(tmp_path, protection=logged)
+
+    reconcile_restart("heartbeat-probe", first_broker, saved)
+    replacement = first_broker.active_protection
+    assert replacement is not None
+
+    second_client = RecoveryClient(pending=[replacement])
+    second_broker = make_broker(second_client)
+    reconcile_restart("heartbeat-probe", second_broker, saved)
+
+    assert second_broker.active_protection == replacement
+    assert second_client.placed == []
 
 
 def test_triggered_but_not_reconciled_algo_is_not_duplicated(tmp_path):

@@ -49,7 +49,7 @@ class FakeTradeClient:
     def round_amount(self, inst_id, quantity):
         return quantity
 
-    def market_order(self, inst_id, side, quantity, reason=""):
+    def market_order(self, inst_id, side, quantity, reason="", client_order_id=None):
         notional = quantity * self.price
         fee = notional * self.fee_bps / 10_000
         if side is Side.BUY:
@@ -66,7 +66,13 @@ class FakeTradeClient:
         return fill
 
     def place_protective_order(
-        self, inst_id, side, quantity, stop_loss=None, take_profit=None
+        self,
+        inst_id,
+        side,
+        quantity,
+        stop_loss=None,
+        take_profit=None,
+        client_order_id=None,
     ):
         algo_id = f"algo-{len(self.algo_orders) + 1}"
         order = {
@@ -76,6 +82,7 @@ class FakeTradeClient:
             "quantity": quantity,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
+            "client_order_id": client_order_id,
         }
         self.algo_orders.append(order)
         self.actions.append(("protect", algo_id))
@@ -217,8 +224,26 @@ def test_sync_protection_places_an_exit_for_the_reconciled_holding():
             "quantity": 123.456789,
             "stop_loss": 0.06,
             "take_profit": 0.08,
+            "client_order_id": None,
         }
     ]
+
+
+def test_execute_and_protection_forward_client_order_ids():
+    client = FakeTradeClient()
+    broker = make_broker(client)
+
+    broker.execute(100.0, ts=123, client_order_id="101")
+    protection = broker.sync_protection(
+        client.held,
+        stop_loss=0.06,
+        take_profit=0.08,
+        client_order_id="202",
+    )
+
+    assert protection is not None
+    assert protection.client_order_id == "202"
+    assert client.algo_orders[0]["client_order_id"] == "202"
 
 
 def test_unchanged_protection_is_retained_but_a_new_level_replaces_it():

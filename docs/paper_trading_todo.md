@@ -14,7 +14,8 @@ protective exits use market-on-trigger OKX conditional/OCO algos. Sizing is
 shared with the backtest (`cq/engine/sizing.py::target_delta`), so a paper
 order is the one the backtest assumed. Versioned, fsynced JSONL checkpoints
 allow a stopped process to resume when its last processed bar still matches the
-exchange.
+exchange. Target, protection, restoration and recovery creates carry stable
+client order ids derived from their closed-bar intent.
 
 Unchecked work below is what the pipe deliberately does **not** yet do.
 
@@ -67,11 +68,24 @@ silently running stale strategy state. Historical decision replay remains a
 separate extension if longer outages must resume automatically.
 
 ### 4. Idempotent client order ids
-- [ ] Attach a deterministic `clOrdId` per (bar, intent) so a retry after a
+- [x] Attach a deterministic `clOrdId` per (bar, intent) so a retry after a
       network timeout cannot place the same order twice.
 
-The retry wrapper in `OkxTradeClient._call` can resend a create that already
-reached the venue. Harmless for reads, a duplicate fill for orders.
+Implemented 2026-07-21. Each target, protection, restoration and restart
+recovery create receives a stable, role-separated positive-int64 id derived
+from the instrument, closed-bar timestamp and intent. Market orders use
+`clOrdId`; conditional/OCO orders use `algoClOrdId`; both ids are preserved in
+the durable event log.
+
+Create endpoints are now single-shot. After an ambiguous transient failure the
+client polls OKX's order-detail endpoint by client id and continues only when
+the matching instrument/order is visible. It never resends the create; an
+unresolved result raises explicitly as unknown. Protective lookup also requires
+the recovered algo to remain `live`, so an older canceled order with the same
+id cannot be adopted. Restart-time protection rebuilding uses its own stable id
+and can adopt a replacement that survived a second process crash. Deterministic
+tests cover successful lookup, unresolved timeout, historical-order rejection
+and the no-resend invariant; no credentialed demo order was placed.
 
 ### 5. Feed and connection resilience
 - [ ] Survive a poll that raises (network blip) without ending the session.
@@ -85,6 +99,6 @@ reached the venue. Harmless for reads, a duplicate fill for orders.
 
 ## Suggested order
 
-With 1 and 3 implemented, do 4–5 before 2, since swap is where a real strategy
-would eventually run and it should land on a pipe that already recovers and
-de-duplicates. 6 only on demand.
+With 1, 3 and 4 implemented, do 5 before 2, since swap is where a real strategy
+would eventually run and it should land on a pipe that already recovers,
+de-duplicates and surfaces feed failures. 6 only on demand.
