@@ -69,10 +69,12 @@ reports/
 *.sqlite
 *.sqlite3
 
-# Logs
+# Logs (including per-session paper/live logs under logs/paper/)
 logs/*.log
 logs/*.log.*
 logs/*.jsonl
+logs/**/*.jsonl
+logs/**/*.log
 
 # API keys and secrets
 .env

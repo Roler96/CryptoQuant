@@ -22,11 +22,21 @@ def build_parser() -> argparse.ArgumentParser:
     data_sub = data.add_subparsers(dest="data_command", required=True)
     _register_data_commands(data_sub)
 
+    paper = subparsers.add_parser("paper", help="paper (demo) trading against OKX")
+    paper_sub = paper.add_subparsers(dest="paper_command", required=True)
+    _register_paper_commands(paper_sub)
+
     return parser
 
 
 def _register_data_commands(subparsers: argparse._SubParsersAction) -> None:
     from cq.data import commands
+
+    commands.register(subparsers)
+
+
+def _register_paper_commands(subparsers: argparse._SubParsersAction) -> None:
+    from cq.live import commands
 
     commands.register(subparsers)
 

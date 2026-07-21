@@ -25,8 +25,9 @@ import math
 from dataclasses import dataclass
 
 from cq.context import Bar
-from cq.core.types import CostModel, Fill, MarketSpec, Side, TradingError
+from cq.core.types import CostModel, Fill, MarketSpec, Side
 from cq.engine.portfolio import Portfolio
+from cq.engine.sizing import target_delta
 
 
 @dataclass(frozen=True)
@@ -66,33 +67,13 @@ class SimBroker:
     ) -> float:
         """Signed quantity to trade to reach `target` weight of equity.
 
-        Returns the difference from what is already held: there is no notion
-        of "only act when the signal flips", so a target returning to zero
-        closes the position by construction.
-
-        A spot buy is additionally capped at what `cash` can actually pay for,
-        fees and slippage included. Without that cap a full-weight target buys
-        `equity / price` units and then pays the costs out of a balance that
-        has nothing left in it, so the account finishes with negative cash —
-        a margin loan on a market that does not lend.
+        Delegates to `cq.engine.sizing.target_delta` — the single sizing
+        implementation the live broker shares — so a backtest can never size a
+        position the live account could not.
         """
-        self.spec.validate_target(target)
-        if price <= 0:
-            raise TradingError(f"{self.spec.inst_id}: cannot size against price {price}")
-        desired = self.spec.round_quantity(target * equity / price)
-        delta = desired - held
-        if self.spec.market_type == "spot" and delta > 0:
-            delta = min(delta, self._affordable(price, cash))
-        if abs(delta) * price < self.dust_fraction * abs(equity):
-            return 0.0
-        return delta
-
-    def _affordable(self, price: float, cash: float) -> float:
-        """Units `cash` covers at `price`, after slippage and fee."""
-        if cash <= 0:
-            return 0.0
-        unit_cost = self.costs.fill_price(price, Side.BUY) * (1 + self.costs.fee_bps / 10_000)
-        return self.spec.round_quantity(cash / unit_cost)
+        return target_delta(
+            self.spec, self.costs, target, price, equity, held, cash, self.dust_fraction
+        )
 
     # ---- execution ----------------------------------------------------
 
