@@ -12,6 +12,7 @@ is decided once, in `_asof_index`, and there is no way around it.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -50,6 +51,17 @@ class Series:
     volume: np.ndarray
 
     def __post_init__(self) -> None:
+        # frozen=True stops the attributes being rebound but not the arrays'
+        # contents being written in place: `series.close[0] = 999` would still
+        # mutate a run's data underneath the fingerprint that is supposed to
+        # pin it. Each column is replaced with a private, read-only copy, so the
+        # data a Series carries is immutable in fact and not merely by
+        # convention — which is what lets a fingerprint taken of it stay true.
+        for name in ("ts", "open", "high", "low", "close", "volume"):
+            column = np.array(getattr(self, name), copy=True)
+            column.setflags(write=False)
+            object.__setattr__(self, name, column)
+
         lengths = {
             len(self.ts),
             len(self.open),
@@ -74,6 +86,24 @@ class Series:
 
     def __len__(self) -> int:
         return len(self.ts)
+
+
+def series_fingerprint(series: Series) -> str:
+    """SHA-256 (truncated) of the exact bars a series holds.
+
+    Identifies the data content, not merely its shape: a re-sync that fills a
+    gap, a corrected candle, or a single edited price all change it. Computed
+    at run time and pinned into the run's manifest, it is what lets a report
+    prove it describes the data the result actually came from — a check that
+    instrument, timeframe, length and first timestamp together cannot make,
+    because a doctored copy can match all four.
+    """
+    digest = hashlib.sha256()
+    digest.update(series.inst_id.encode())
+    digest.update(series.timeframe.encode())
+    for column in (series.ts, series.open, series.high, series.low, series.close, series.volume):
+        digest.update(np.ascontiguousarray(column).tobytes())
+    return digest.hexdigest()[:16]
 
 
 class MarketView:

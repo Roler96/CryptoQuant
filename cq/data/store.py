@@ -233,10 +233,18 @@ class Store:
             f"ON CONFLICT ({','.join(key_columns)}) DO UPDATE SET {assignments}"
         )
 
+        # `new` counts distinct keys that were not already stored. Counting
+        # `len(rows)` instead over-reports whenever a batch carries the same
+        # key twice — two copies of one new candle write a single row but would
+        # be recorded as two additions, and a paging bug that duplicates a whole
+        # page would then look like healthy growth.
+        positions = [columns.index(name) for name in key_columns]
+        unique_keys = {tuple(row[position] for position in positions) for row in rows}
+
         with self.transaction() as conn:
-            existing = _count_existing(conn, table, key_columns, columns, rows)
+            existing = _count_existing(conn, table, key_columns, unique_keys)
             conn.executemany(statement, rows)
-        return WriteResult(seen=len(rows), new=len(rows) - existing)
+        return WriteResult(seen=len(rows), new=len(unique_keys) - existing)
 
     # ---- archive run audit --------------------------------------------
 
@@ -387,16 +395,14 @@ def _count_existing(
     conn: sqlite3.Connection,
     table: str,
     key_columns: tuple[str, ...],
-    columns: tuple[str, ...],
-    rows: list[tuple],
+    keys: set[tuple],
 ) -> int:
-    """How many of `rows`' keys the table already holds.
+    """How many of `keys` the table already holds.
 
     Counted before writing, because an upsert that both inserts and updates
-    cannot be told apart afterwards by `total_changes`.
+    cannot be told apart afterwards by `total_changes`. `keys` is already the
+    distinct set, so the returned count is directly comparable to it.
     """
-    positions = [columns.index(name) for name in key_columns]
-    keys = {tuple(row[position] for position in positions) for row in rows}
     key_list = sorted(keys)
 
     found = 0

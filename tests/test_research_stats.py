@@ -170,6 +170,24 @@ def test_an_open_position_is_not_counted_as_a_trade():
     assert trades_from_fills([fill(Side.BUY, 100, 10.0, DAY0)]) == []
 
 
+def test_a_float_residual_close_does_not_invent_a_phantom_trade():
+    # 0.3 - 0.1 - 0.2 leaves -2.8e-17, not 0.0. Comparing the accumulated
+    # position to exactly 0.0 read that crumb as a live reverse position, so
+    # the next entry closed it into a near-zero phantom trade. Every flat/flip
+    # test now goes through is_flat, so the position closes cleanly and only
+    # the two real round trips are counted.
+    fills = [
+        fill(Side.BUY, 0.3, 10.0, DAY0),
+        fill(Side.SELL, 0.1, 11.0, DAY0 + HOUR_MS),
+        fill(Side.SELL, 0.2, 12.0, DAY0 + 2 * HOUR_MS),  # position now "flat"
+        fill(Side.BUY, 0.5, 13.0, DAY0 + 3 * HOUR_MS),  # a fresh long, not a flip
+    ]
+    trades = trades_from_fills(fills)
+
+    assert len(trades) == 2
+    assert min(t.quantity for t in trades) > 0.05  # no near-zero crumb trade
+
+
 def test_a_partial_exit_closes_only_what_was_sold():
     # Distinguishes "close what the order covers" from "close everything":
     # a flip alone cannot, because there |delta| exceeds the position anyway.
@@ -199,10 +217,11 @@ def test_the_remainder_of_a_partial_exit_stays_open():
 # ---- the best-trade dependency ----------------------------------------
 
 
-def test_return_excluding_the_best_trade_is_reported():
+def test_return_less_the_best_trade_pnl_is_reported():
     # The surviving candidate fell from +1,756% to +330% this way. A headline
     # resting on one trade is a different claim and should not need a
-    # follow-up question.
+    # follow-up question. It is a static deduction of that trade's realised
+    # P&L, not a re-run of the strategy with the trade forbidden.
     stamps = [DAY0 + i * DAY_MS for i in range(4)]
     equity = [1000.0, 1000.0, 1000.0, 2000.0]
     fills = [
@@ -215,7 +234,7 @@ def test_return_excluding_the_best_trade_is_reported():
 
     assert m.total_return == pytest.approx(1.0)
     assert m.best_trade_pnl == pytest.approx(990.0)
-    assert m.return_excluding_best_trade == pytest.approx(0.01)
+    assert m.return_less_best_trade_pnl == pytest.approx(0.01)
 
 
 # ---- bootstrap ---------------------------------------------------------

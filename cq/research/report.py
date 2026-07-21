@@ -13,19 +13,21 @@ reproduced, the report says enough to find out why.
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
-
-from cq.context import Series
+from cq.context import Series, series_fingerprint
 from cq.engine.loop import RunResult
 from cq.research.metrics import Metrics, compute_metrics, episode_returns
 from cq.research.split import SplitPlan, from_ms
 from cq.research.stats import BootstrapResult, bootstrap_trades
+
+# series_fingerprint moved to cq.context so the engine can pin it into the run
+# manifest as it runs. Re-exported here because callers and tests reach for it
+# under this module, where the reporting story still lives.
+__all__ = ["ProvenanceError", "Report", "build_report", "git_commit", "series_fingerprint"]
 
 DEFAULT_REPORT_DIR = Path("reports")
 
@@ -57,20 +59,6 @@ def git_commit() -> str:
     ).stdout.strip()
     # An uncommitted tree cannot be checked out again, so say so.
     return f"{commit}-dirty" if dirty else commit
-
-
-def series_fingerprint(series: Series) -> str:
-    """Hash of the actual bars a run consumed.
-
-    Catches the case where a result cannot be reproduced because the data
-    underneath it changed — a re-sync filled a gap, or the range moved.
-    """
-    digest = hashlib.sha256()
-    digest.update(series.inst_id.encode())
-    digest.update(series.timeframe.encode())
-    for column in (series.ts, series.open, series.high, series.low, series.close, series.volume):
-        digest.update(np.ascontiguousarray(column).tobytes())
-    return digest.hexdigest()[:16]
 
 
 @dataclass
@@ -140,7 +128,7 @@ class Report:
 
 def build_report(
     result: RunResult,
-    series: Series,
+    series: Series | None = None,
     split: SplitPlan | None = None,
     bootstrap_samples: int = 10_000,
     seed: int = 0,
@@ -149,15 +137,26 @@ def build_report(
 ) -> Report:
     """Assemble metrics, robustness and provenance for one run.
 
-    The series and the split are checked against the run rather than taken on
-    trust. A provenance block that can be attached to any run is decoration:
-    it was possible here to label a 2021 backtest with a 2026 forward-holdout
-    plan and have the report state, in its own words, that the result was
-    out-of-sample.
+    The run's own manifest is the authority on what data and configuration it
+    consumed; the report reads its fingerprints from there rather than deciding
+    for itself. A `series` (and `aux`) may still be passed, and then it is
+    *verified* against the manifest — instrument, timeframe, shape and, crucially,
+    full content — and rejected on any disagreement. Recomputing the fingerprint
+    from a passed-in series and trusting it, the earlier design, meant a run on
+    data A could be handed a doctored data B agreeing on instrument, timeframe,
+    length and first timestamp, and the report would state in its own words that
+    the figures came from B. Passing nothing reports straight from the manifest.
+
+    The split is checked against the run the same way: a provenance block that
+    can be attached to any run is decoration, and it was possible here to label
+    a 2021 backtest with a 2026 forward-holdout plan and have the report claim
+    the result was out-of-sample.
     """
-    _require_matching_series(result, series)
     aux = list(aux)
-    _require_declared_aux(result, aux)
+    if series is not None:
+        _require_matching_series(result, series)
+        _require_declared_aux(result, aux)
+        _require_matching_aux_content(result, aux)
 
     metrics = compute_metrics(
         result.timestamps, result.equity, result.fills, result.initial_cash
@@ -169,8 +168,11 @@ def build_report(
         result=result,
         metrics=metrics,
         bootstrap=bootstrap_trades(portfolio_returns, samples=bootstrap_samples, seed=seed),
-        data_fingerprint=series_fingerprint(series),
-        aux_fingerprints={s.key: series_fingerprint(s) for s in aux},
+        data_fingerprint=result.manifest.primary_fingerprint,
+        aux_fingerprints={
+            (inst_id, timeframe): fingerprint
+            for inst_id, timeframe, fingerprint in result.manifest.aux_fingerprints
+        },
         commit=git_commit(),
         generated_at=dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         split=split,
@@ -179,7 +181,7 @@ def build_report(
 
 
 def _require_matching_series(result: RunResult, series: Series) -> None:
-    """Fail unless `series` is the data the run actually consumed."""
+    """Fail unless `series` is, to the byte, the data the run consumed."""
     if (series.inst_id, series.timeframe) != (result.inst_id, result.timeframe):
         raise ProvenanceError(
             f"report was given {series.inst_id} {series.timeframe} but the run is "
@@ -195,6 +197,16 @@ def _require_matching_series(result: RunResult, series: Series) -> None:
             f"{result.bars} bars starting at "
             f"{result.timestamps[0] if result.timestamps else '-'}"
         )
+    # The check the structural one above cannot make: same instrument, timeframe,
+    # length and first timestamp, but an edited price somewhere inside. Only the
+    # content fingerprint, pinned when the run happened, catches that.
+    if series_fingerprint(series) != result.manifest.primary_fingerprint:
+        raise ProvenanceError(
+            f"report was given {series.inst_id} {series.timeframe} matching the run's "
+            f"shape, but its content fingerprint {series_fingerprint(series)} is not the "
+            f"{result.manifest.primary_fingerprint} the run consumed; the bars were "
+            f"changed after the run, and the result did not come from them"
+        )
 
 
 def _require_declared_aux(result: RunResult, aux: list[Series]) -> None:
@@ -207,6 +219,23 @@ def _require_declared_aux(result: RunResult, aux: list[Series]) -> None:
             f"given {list(given)}; a run that read a second series cannot be "
             f"reproduced from the primary alone"
         )
+
+
+def _require_matching_aux_content(result: RunResult, aux: list[Series]) -> None:
+    """Fail unless each auxiliary series is, to the byte, what the run read."""
+    pinned = {
+        (inst_id, timeframe): fp
+        for inst_id, timeframe, fp in result.manifest.aux_fingerprints
+    }
+    for s in aux:
+        expected = pinned.get(s.key)
+        actual = series_fingerprint(s)
+        if expected is not None and actual != expected:
+            raise ProvenanceError(
+                f"auxiliary market {s.inst_id} {s.timeframe} fingerprints {actual} but the "
+                f"run read {expected}; the report would describe data the result did not "
+                f"come from"
+            )
 
 
 def _split_mismatches(result: RunResult, split: SplitPlan | None) -> list[str]:

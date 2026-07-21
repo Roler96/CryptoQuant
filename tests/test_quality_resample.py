@@ -138,6 +138,58 @@ def test_zero_volume_is_reported_but_not_unclean():
     quiet = frame_from([0, 1], volume=[10.0, 0.0])
     report = check_ohlcv(quiet, "DOGE-USDT", "1h")
     assert len(report.zero_volume_bars) == 1
+    assert not report.negative_volume_bars
+    assert report.clean
+
+
+def test_negative_volume_is_a_hard_error_not_a_zero_volume_warning():
+    # A single `volume <= 0` bucket let a negative volume — which cannot occur,
+    # so it is corruption — hide among the benign zero-volume warnings and pass
+    # the clean check. They are now separated: zero warns, negative fails.
+    corrupt = frame_from([0, 1], volume=[10.0, -5.0])
+    report = check_ohlcv(corrupt, "DOGE-USDT", "1h")
+    assert len(report.negative_volume_bars) == 1
+    assert not report.zero_volume_bars
+    assert not report.clean
+
+
+def test_non_finite_value_is_flagged():
+    # NaN and ±inf slip through every ordering comparison as a silent False, so
+    # they are caught on their own before any of them run.
+    for bad_value in (float("nan"), float("inf")):
+        bad = frame_from([0, 1], close=[1.5, bad_value])
+        report = check_ohlcv(bad, "DOGE-USDT", "1h")
+        assert len(report.non_finite_values) == 1
+        assert not report.clean
+
+
+def test_a_timestamp_off_the_timeframe_grid_is_flagged():
+    # A bar at 01:30 on an hourly series is not on the grid every downstream
+    # spacing check assumes. Build the index directly so the offending row is
+    # exactly half a bar late.
+    index = pd.to_datetime([0, 3_600_000, 5_400_000], unit="ms", utc=True)
+    frame = pd.DataFrame(
+        {
+            "open": [1.0, 1.0, 1.0],
+            "high": [2.0, 2.0, 2.0],
+            "low": [0.5, 0.5, 0.5],
+            "close": [1.5, 1.5, 1.5],
+            "volume": [10.0, 10.0, 10.0],
+            "quote_volume": [15.0, 15.0, 15.0],
+        },
+        index=index,
+    )
+    report = check_ohlcv(frame, "DOGE-USDT", "1h")
+    assert report.misaligned_timestamps == [pd.Timestamp("1970-01-01 01:30", tz="UTC")]
+    assert not report.clean
+
+
+def test_a_nullable_quote_volume_does_not_trip_the_non_finite_check():
+    # quote_volume is nullable by design; a null there is not corruption and
+    # must not fail an otherwise clean series.
+    frame = frame_from([0, 1], quote_volume=[15.0, float("nan")])
+    report = check_ohlcv(frame, "DOGE-USDT", "1h")
+    assert not report.non_finite_values
     assert report.clean
 
 

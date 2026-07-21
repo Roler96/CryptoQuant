@@ -23,6 +23,19 @@ DEFAULT_SLIPPAGE_BPS = 5.0
 # it. Sized for accumulated binary-float error, far below any real lot.
 LOT_TOLERANCE = 1e-9
 
+# A position this close to zero is flat, not merely small. Fills never cancel
+# to exactly zero once lot rounding and flips are involved — `0.3 - 0.1 - 0.2`
+# leaves -2.8e-17, not 0.0 — so every flat/flip test in the engine and the
+# research layer routes through `is_flat` rather than comparing to 0.0. A bare
+# `== 0.0` there would read a floating-point crumb as a live reverse position
+# and invent a trade that never happened.
+POSITION_EPSILON = 1e-12
+
+
+def is_flat(quantity: float) -> bool:
+    """Whether `quantity` is a closed position rather than a live one."""
+    return abs(quantity) < POSITION_EPSILON
+
 
 class Side(Enum):
     BUY = "buy"

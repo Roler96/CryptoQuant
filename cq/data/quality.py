@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import cast
 
+import numpy as np
 import pandas as pd
 
 from cq.core.clock import duration_ms
@@ -40,7 +41,14 @@ class QualityReport:
     gaps: list[Gap] = field(default_factory=list)
     duplicate_timestamps: list[pd.Timestamp] = field(default_factory=list)
     out_of_order: int = 0
+    # A warning, not a fault: an illiquid bar can legitimately trade nothing.
     zero_volume_bars: list[pd.Timestamp] = field(default_factory=list)
+    # Hard faults. A negative volume, a non-finite price, or a timestamp off the
+    # timeframe grid is not a quiet oddity — it is a value the exchange cannot
+    # have printed, and trading on it means trading on corruption.
+    negative_volume_bars: list[pd.Timestamp] = field(default_factory=list)
+    non_finite_values: list[pd.Timestamp] = field(default_factory=list)
+    misaligned_timestamps: list[pd.Timestamp] = field(default_factory=list)
     non_positive_prices: list[pd.Timestamp] = field(default_factory=list)
     inconsistent_ohlc: list[pd.Timestamp] = field(default_factory=list)
 
@@ -56,11 +64,20 @@ class QualityReport:
         a series can have, and reporting it as clean means an unsynced
         database, a typo in an instrument id, and a healthy archive all exit
         zero — the check passes precisely when it has checked nothing.
+
+        Zero volume is the one anomaly that does not fail this: it is common on
+        thin instruments and the engine already refuses to fill against it. A
+        *negative* volume is a different animal — it cannot occur, so it marks
+        corruption — and it must fail here rather than hide among the zero-volume
+        warnings, which is exactly what a single `volume <= 0` bucket let it do.
         """
         return bool(self.bars) and not (
             self.gaps
             or self.duplicate_timestamps
             or self.out_of_order
+            or self.negative_volume_bars
+            or self.non_finite_values
+            or self.misaligned_timestamps
             or self.non_positive_prices
             or self.inconsistent_ohlc
         )
@@ -75,10 +92,16 @@ class QualityReport:
             parts.append(f"{len(self.duplicate_timestamps)} duplicate ts")
         if self.out_of_order:
             parts.append(f"{self.out_of_order} out of order")
+        if self.misaligned_timestamps:
+            parts.append(f"{len(self.misaligned_timestamps)} off-grid ts")
+        if self.non_finite_values:
+            parts.append(f"{len(self.non_finite_values)} non-finite")
         if self.non_positive_prices:
             parts.append(f"{len(self.non_positive_prices)} non-positive prices")
         if self.inconsistent_ohlc:
             parts.append(f"{len(self.inconsistent_ohlc)} inconsistent OHLC")
+        if self.negative_volume_bars:
+            parts.append(f"{len(self.negative_volume_bars)} negative volume")
         if self.zero_volume_bars:
             parts.append(f"{len(self.zero_volume_bars)} zero volume")
         return f"{self.inst_id} {self.timeframe}: " + ", ".join(parts)
@@ -102,12 +125,27 @@ def check_ohlcv(frame: pd.DataFrame, inst_id: str, timeframe: str) -> QualityRep
     deltas = index.to_series().diff()
     report.out_of_order = int((deltas < pd.Timedelta(0)).sum())
 
+    # A bar's open time must land on the timeframe grid anchored to the epoch —
+    # OKX's 4h bars sit at 00:00/04:00/... UTC, dailies at 00:00. An off-grid
+    # timestamp means a mislabelled timeframe or a corrupted row, and every
+    # spacing check downstream silently assumes the grid it violates.
+    step_ms = duration_ms(timeframe)
+    epoch_ms = index.asi8 // 1_000_000
+    report.misaligned_timestamps = list(index[epoch_ms % step_ms != 0])
+
     report.gaps = find_gaps(index, timeframe)
 
     closes = frame["close"]
     opens = frame["open"]
     highs = frame["high"]
     lows = frame["low"]
+
+    # NaN and ±inf survive every ordering comparison below as a silent False, so
+    # they are caught first and on their own. quote_volume is nullable by design
+    # and is not part of this check.
+    price_volume = frame[["open", "high", "low", "close", "volume"]]
+    non_finite = frame[~np.isfinite(price_volume).all(axis=1)]
+    report.non_finite_values = list(non_finite.index)
 
     non_positive = frame[(opens <= 0) | (highs <= 0) | (lows <= 0) | (closes <= 0)]
     report.non_positive_prices = list(non_positive.index)
@@ -128,9 +166,14 @@ def check_ohlcv(frame: pd.DataFrame, inst_id: str, timeframe: str) -> QualityRep
     ]
     report.inconsistent_ohlc = list(bad.index)
 
+    volume = frame["volume"]
+    # A negative volume cannot happen; it is corruption and fails the series.
     # Zero volume is legal on illiquid instruments, so it is reported but does
-    # not by itself make a series unclean.
-    report.zero_volume_bars = list(frame[frame["volume"] <= 0].index)
+    # not by itself make a series unclean. Splitting them keeps a genuine data
+    # error from hiding inside a benign warning. NaN volume is neither of these
+    # — it is caught above as non-finite — and the comparisons here skip it.
+    report.negative_volume_bars = list(frame[volume < 0].index)
+    report.zero_volume_bars = list(frame[volume == 0].index)
 
     return report
 

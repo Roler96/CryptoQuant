@@ -30,6 +30,16 @@ def test_upsert_funding_counts_only_new_rows(store):
     assert (count, lo, hi) == (4, 1000, 4000)
 
 
+def test_duplicate_keys_in_one_batch_count_as_one_new_row(store):
+    # A single settlement arriving twice in the same batch — the signature of a
+    # paging bug that hands back an overlapping page — writes exactly one row.
+    # `new` must reflect the row actually added, not the two keys seen, or a
+    # duplicated page would masquerade as genuine growth in the audit trail.
+    result = store.upsert_funding(_funding_rows([5000, 5000]))
+    assert result == WriteResult(seen=2, new=1)
+    assert store.funding_coverage("DOGE-USDT-SWAP") == (1, 5000, 5000)
+
+
 def test_re_archiving_corrects_a_stored_rate(store):
     # A settlement swept moments after it fires carries the predicted rate and
     # often no realized one at all. The next sweep brings the measurement, and

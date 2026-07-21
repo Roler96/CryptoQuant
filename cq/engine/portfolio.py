@@ -15,9 +15,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from cq.core.types import Fill, MarketSpec, Side, TradingError
+from cq.core.types import POSITION_EPSILON, Fill, MarketSpec, Side, TradingError, is_flat
 
-QUANTITY_EPSILON = 1e-12
+# The flat threshold is defined once in cq.core.types and shared with the
+# research layer's fill pairing, so the engine and the metrics computed from it
+# agree on when a position is closed.
+QUANTITY_EPSILON = POSITION_EPSILON
 # Cash comparisons carry the rounding of a price times a quantity, so they are
 # made with a relative tolerance rather than exactly.
 CASH_EPSILON = 1e-9
@@ -55,7 +58,7 @@ class Portfolio:
 
     @property
     def is_flat(self) -> bool:
-        return abs(self.quantity) < QUANTITY_EPSILON
+        return is_flat(self.quantity)
 
     @property
     def is_long(self) -> bool:

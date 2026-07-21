@@ -25,6 +25,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import itertools
+from collections import Counter
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -98,6 +99,18 @@ class ActualFunding:
     four-hour and one-hour schedules on individual instruments, and a model
     that walks a hard-coded eight-hour grid over a four-hour instrument silently
     charges a third of the funding that was actually paid.
+
+    Coverage is checked against the archived settlements themselves, not against
+    a rigid grid of instants the schedule is assumed to have hit. Each archived
+    settlement is a real event: a missing one shows up as a gap between two
+    consecutive settlements wider than the cadence, and only a hole whose
+    interior falls inside the requested window is an error. An *extra* or
+    off-schedule settlement — a correction, a one-off cadence change — is a real
+    event too and is charged, not treated as a discrepancy. The earlier
+    grid-count check failed both ways: a single off-grid settlement made the
+    real count disagree with the expected one, and a single short gap (via
+    `min`) redefined the whole history as hourly and reported thousands of
+    phantom missing settlements.
     """
 
     def __init__(self, rates: dict[int, float], inst_id: str = "", interval_ms: int = 0):
@@ -135,12 +148,15 @@ class ActualFunding:
             return []
         lo = bisect.bisect_left(self._times, start_ms)
         hi = bisect.bisect_left(self._times, end_ms)
-        found = self._times[lo:hi]
-        self._require_full_coverage(start_ms, end_ms, len(found))
-        return [(ts, self._rates[ts]) for ts in found]
+        self._require_full_coverage(start_ms, end_ms, lo, hi)
+        return [(ts, self._rates[ts]) for ts in self._times[lo:hi]]
 
-    def _require_full_coverage(self, start_ms: int, end_ms: int, found: int) -> None:
-        """Fail unless every settlement in the window is archived."""
+    def _require_full_coverage(self, start_ms: int, end_ms: int, lo: int, hi: int) -> None:
+        """Fail unless every settlement due in the window is archived.
+
+        `lo`/`hi` bracket the archived settlements inside the window; the walk
+        starts one earlier because a hole can straddle `start_ms`.
+        """
         if not self._times:
             raise MissingFundingError(self._explain(start_ms, end_ms, "the archive is empty"))
 
@@ -154,16 +170,32 @@ class ActualFunding:
                 self._explain(start_ms, end_ms, f"the archive only covers {covered}")
             )
 
-        expected = _grid_count(first, self._interval, start_ms, end_ms)
-        if found != expected:
-            raise MissingFundingError(
-                self._explain(
-                    start_ms,
-                    end_ms,
-                    f"expected {expected} settlements at a {self._interval / HOUR_MS:g}h "
-                    f"cadence but the archive holds {found}",
+        span = self._times[max(lo - 1, 0) : hi + 1]
+        for earlier, later in itertools.pairwise(span):
+            if later - earlier <= self._interval:
+                continue
+            # A gap wider than the cadence means at least one settlement is
+            # missing between these two. Its interior instants sit at
+            # earlier + k*interval; the run is only short if one of them falls
+            # inside the requested window. A hole entirely before `start` or
+            # after `end` belongs to a different bar and is not this run's
+            # concern.
+            lower = max(start_ms, earlier + self._interval)
+            upper = min(end_ms, later)
+            if lower >= upper:
+                continue
+            steps = -(-(lower - earlier) // self._interval)  # ceil, ≥ 1
+            missing_at = earlier + steps * self._interval
+            if missing_at < upper:
+                raise MissingFundingError(
+                    self._explain(
+                        start_ms,
+                        end_ms,
+                        f"the settlement due at {missing_at} is absent — a "
+                        f"{(later - earlier) / HOUR_MS:g}h gap at a "
+                        f"{self._interval / HOUR_MS:g}h cadence",
+                    )
                 )
-            )
 
     def _explain(self, start_ms: int, end_ms: int, because: str) -> str:
         return (
@@ -177,21 +209,23 @@ class ActualFunding:
 def _infer_interval(times: list[int]) -> int:
     """Settlement cadence implied by the archived timestamps.
 
-    The shortest observed gap, so an instrument that settles more often than
-    every eight hours is charged for every settlement it actually had.
+    The *most common* gap, not the shortest. A four-hour instrument settles
+    every four hours, so four hours is both the shortest and the commonest gap
+    and the cadence comes out right either way. The difference shows on a
+    one-off short gap — a correction, a duplicated settlement, a venue settling
+    once off its own schedule: `min` let that single blip redefine an eight-hour
+    history as hourly and then report a missing settlement for every hour that
+    never had one. The mode ignores the outlier. On a tie the shorter spacing
+    wins, which errs towards expecting a settlement rather than skipping one.
     """
     if len(times) < 2:
         return SETTLEMENT_INTERVAL_MS
     gaps = [later - earlier for earlier, later in itertools.pairwise(times) if later > earlier]
-    return min(gaps) if gaps else SETTLEMENT_INTERVAL_MS
-
-
-def _grid_count(anchor: int, interval: int, start_ms: int, end_ms: int) -> int:
-    """How many `interval`-spaced instants from `anchor` fall in [start, end)."""
-    first = anchor + -(-(start_ms - anchor) // interval) * interval
-    if first >= end_ms:
-        return 0
-    return (end_ms - first - 1) // interval + 1
+    if not gaps:
+        return SETTLEMENT_INTERVAL_MS
+    counts = Counter(gaps)
+    most_common = max(counts.values())
+    return min(gap for gap, count in counts.items() if count == most_common)
 
 
 def settlement_times(start_ms: int, end_ms: int) -> list[int]:

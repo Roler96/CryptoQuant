@@ -75,6 +75,38 @@ def test_series_rejects_duplicate_timestamps():
         )
 
 
+def test_series_columns_cannot_be_mutated_in_place():
+    # frozen=True blocks rebinding the attribute but not writing into the array
+    # it points at. A run's fingerprint is taken of these columns, so a bar
+    # edited in place afterwards would leave the fingerprint describing data the
+    # Series no longer holds. The columns are read-only, so the write raises.
+    s = hourly(5)
+    # numpy raises "assignment destination is read-only" on a locked array.
+    with pytest.raises(ValueError, match="read-only"):
+        s.close[0] = 999.0
+    with pytest.raises(ValueError, match="read-only"):
+        s.ts[0] = 0
+
+
+def test_series_does_not_alias_the_arrays_it_was_given():
+    # Copying the inputs means a later edit to the caller's own array cannot
+    # reach into the Series and change it after the fingerprint was taken.
+    closes = np.array([100.0, 101.0, 102.0], dtype=float)
+    ts = np.array([DAY0, DAY0 + HOUR_MS, DAY0 + 2 * HOUR_MS], dtype=np.int64)
+    s = Series(
+        inst_id="X",
+        timeframe="1h",
+        ts=ts,
+        open=closes,
+        high=closes + 1,
+        low=closes - 1,
+        close=closes,
+        volume=np.full(3, 10.0),
+    )
+    closes[0] = -1.0
+    assert s.close[0] == 100.0
+
+
 def test_series_rejects_columns_of_different_lengths():
     good = hourly(5)
     with pytest.raises(ValueError, match="lengths disagree"):

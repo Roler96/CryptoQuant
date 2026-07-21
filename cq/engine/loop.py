@@ -30,16 +30,23 @@ of vanishing with the missing bars.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from cq.context import Context, Series
+from cq.context import Context, Series, series_fingerprint
 from cq.core.clock import duration_ms
 from cq.core.types import CostModel, Fill, Intent, MarketSpec, Sizing
 from cq.engine.funding import FundingModel, NoFunding
 from cq.engine.portfolio import FundingPayment, Portfolio
 from cq.engine.sim import Rejection, SimBroker
+
+# Bumped whenever a change alters the numbers a run produces from identical
+# inputs. Pinned into every RunManifest so a result carries the engine that
+# made it, and two runs computed by different engines are never mistaken for
+# reproductions of each other.
+ENGINE_VERSION = "cq-engine/1"
 
 
 class Strategy(Protocol):
@@ -60,10 +67,74 @@ class Resettable(Protocol):
     def reset(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class RunManifest:
+    """The fingerprinted inputs a run consumed, captured as it ran.
+
+    The point of provenance is to bind a result to the data and configuration
+    that produced it. The earlier design left the data unbound: the report
+    fingerprinted whatever series the caller later handed it, and its match
+    check only compared instrument, timeframe, bar count and first timestamp.
+    Any doctored copy agreeing on those four could be reported, in the report's
+    own words, as the data behind a result it never touched — run on data A,
+    edit a price, hand the reporter data B, and the report would swear the
+    figures came from B.
+
+    Frozen, and computed here rather than in the reporter, so it is the one
+    authority on what the run saw. `primary_fingerprint` covers the full
+    content of every bar; the reporter verifies any series it is shown against
+    this rather than deciding for itself what the run consumed.
+    """
+
+    primary_fingerprint: str
+    # (inst_id, timeframe, fingerprint) per auxiliary market, in the order the
+    # run received them. A run that read a second series cannot be reproduced
+    # from the primary alone, so the aux data is pinned too.
+    aux_fingerprints: tuple[tuple[str, str, str], ...]
+    market_spec_fingerprint: str
+    funding_fingerprint: str
+    cost_fingerprint: str
+    sizing: str
+    initial_cash: float
+    engine_version: str = ENGINE_VERSION
+
+
+def _spec_fingerprint(spec: MarketSpec) -> str:
+    """Hash of the exchange rules a run was sized and liquidated under.
+
+    Bound because the same strategy on the same bars is a different backtest
+    under a different lot size, minimum notional, leverage cap or maintenance
+    margin — and reporting one under the other's spec would misdescribe how the
+    result could ever be reproduced.
+    """
+    payload = "|".join(
+        repr(value)
+        for value in (
+            spec.inst_id,
+            spec.market_type,
+            spec.lot_size,
+            spec.min_notional,
+            spec.max_leverage,
+            spec.maintenance_margin_rate,
+        )
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _cost_fingerprint(costs: CostModel) -> str:
+    """Hash of the fee and slippage a run was charged."""
+    payload = f"{costs.fee_bps!r}|{costs.slippage_bps!r}"
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 @dataclass
 class RunResult:
     """Everything a run produced, with the assumptions that produced it."""
 
+    # The authoritative, frozen record of what this run consumed. A report reads
+    # its provenance from here rather than re-deriving it from a series a caller
+    # passes after the fact.
+    manifest: RunManifest
     strategy: str
     inst_id: str
     timeframe: str
@@ -135,7 +206,22 @@ def run_backtest(
     if callable(reset):
         reset()
 
+    # Fingerprint the inputs before the loop touches them. The Series columns
+    # are read-only, so what is hashed here is exactly what the run replays.
+    manifest = RunManifest(
+        primary_fingerprint=series_fingerprint(primary),
+        aux_fingerprints=tuple(
+            (s.inst_id, s.timeframe, series_fingerprint(s)) for s in aux
+        ),
+        market_spec_fingerprint=_spec_fingerprint(spec),
+        funding_fingerprint=getattr(funding, "fingerprint", "unidentified"),
+        cost_fingerprint=_cost_fingerprint(costs),
+        sizing=sizing.value,
+        initial_cash=initial_cash,
+    )
+
     result = RunResult(
+        manifest=manifest,
         strategy=strategy.name,
         inst_id=spec.inst_id,
         timeframe=primary.timeframe,

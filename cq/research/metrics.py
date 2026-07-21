@@ -7,10 +7,16 @@ Two decisions here exist because of specific past failures:
   came out exactly twice too large. The factor is derived from the median
   spacing of the equity curve's own timestamps, so a mislabelled timeframe
   cannot inflate it.
-* **The best trade is reported separately.** The one surviving candidate went
-  from +1,756% to +330% when its single best trade was removed. A headline
-  return that rests on one trade is a different claim from one that does not,
-  and it should not take a follow-up question to find out which it is.
+* **The best trade's P&L is reported separately.** The one surviving candidate
+  went from +1,756% to +330% when its single best trade's profit was subtracted.
+  A headline return that rests on one trade is a different claim from one that
+  does not, and it should not take a follow-up question to find out which it is.
+  This is a *static deduction* — the best trade's realised P&L taken off the
+  final equity — and nothing more. It is deliberately not called a
+  counterfactual: it does not re-run the strategy with that trade forbidden, so
+  it ignores that later sizing, funding and drawdown all depend on the path the
+  removed trade was part of. The honest name is "return less that P&L", and the
+  field says exactly that.
 """
 
 from __future__ import annotations
@@ -21,13 +27,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cq.core.types import Fill
+# The flat threshold has a single home in cq.core.types; the fill-pairing here
+# routes every "position closed?" test through `is_flat` so a float crumb left
+# by rounding or a flip is never read as a live reverse position.
+from cq.core.types import Fill, is_flat
 
 YEAR_MS = 365.25 * 24 * 60 * 60 * 1000
-
-# Below this a position is closed, not merely small: fills never cancel to
-# exactly zero once lot rounding and flips are involved.
-POSITION_EPSILON = 1e-12
 
 
 @dataclass(frozen=True)
@@ -75,7 +80,11 @@ class Metrics:
     trades: int
     win_rate: float
     profit_factor: float
-    return_excluding_best_trade: float
+    # The final return with the single best trade's realised P&L subtracted from
+    # equity. A static deduction, not a counterfactual re-run — see the module
+    # docstring — so it is named for what it computes rather than what it might
+    # be mistaken for.
+    return_less_best_trade_pnl: float
     best_trade_pnl: float
 
     def summary(self) -> str:
@@ -86,7 +95,8 @@ class Metrics:
             f"{self.longest_drawdown_days:.0f}d\n"
             f"  trades {self.trades}  win rate {self.win_rate * 100:.1f}%  "
             f"profit factor {self.profit_factor:.2f}\n"
-            f"  without the best trade: {self.return_excluding_best_trade * 100:+.2f}%"
+            f"  less the best trade's P&L (static deduction, not a re-run): "
+            f"{self.return_less_best_trade_pnl * 100:+.2f}%"
         )
 
 
@@ -187,7 +197,7 @@ def trades_from_fills(fills: Sequence[Fill]) -> list[Trade]:
 
     for fill in fills:
         delta = fill.signed_quantity
-        if quantity == 0.0:
+        if is_flat(quantity):
             quantity, entry_price, entry_ts, entry_fees = delta, fill.price, fill.ts, fill.fee
             continue
 
@@ -216,13 +226,17 @@ def trades_from_fills(fills: Sequence[Fill]) -> list[Trade]:
         )
         entry_fees *= 1 - share
         quantity += delta
-        if quantity != 0.0 and (quantity > 0) != (direction > 0):
+        if is_flat(quantity):
+            # Fully closed. Snap to exactly zero so the residual crumb left by
+            # `quantity += delta` cannot survive to the next fill and be read as
+            # a live position that opens a phantom trade.
+            quantity = 0.0
+            entry_price, entry_ts, entry_fees = 0.0, 0, 0.0
+        elif (quantity > 0) != (direction > 0):
             # Flipped through zero: the remainder opens a fresh trade.
             entry_price = fill.price
             entry_ts = fill.ts
             entry_fees = fill.fee * (abs(quantity) / abs(delta))
-        elif quantity == 0.0:
-            entry_price, entry_ts, entry_fees = 0.0, 0, 0.0
 
     return trades
 
@@ -256,8 +270,8 @@ def position_spans(fills: Sequence[Fill]) -> list[tuple[int, int | None]]:
     for fill in fills:
         previous = quantity
         quantity += fill.signed_quantity
-        was_flat = abs(previous) < POSITION_EPSILON
-        now_flat = abs(quantity) < POSITION_EPSILON
+        was_flat = is_flat(previous)
+        now_flat = is_flat(quantity)
         if was_flat and not now_flat:
             entry_ts = fill.ts
         elif not was_flat and now_flat:
@@ -337,7 +351,10 @@ def compute_metrics(
     gross_loss = -sum(t.net_pnl for t in trades if not t.is_win)
 
     best = max((t.net_pnl for t in trades), default=0.0)
-    without_best = (final - best) / initial_cash - 1.0 if trades else total_return
+    # Static: the best trade's realised P&L taken straight off final equity. Not
+    # a re-run of the strategy without that trade, so it does not account for the
+    # path dependence — sizing, funding, drawdown — the removed trade sat inside.
+    less_best = (final - best) / initial_cash - 1.0 if trades else total_return
 
     return Metrics(
         bars=len(equity),
@@ -350,6 +367,6 @@ def compute_metrics(
         trades=len(trades),
         win_rate=len(wins) / len(trades) if trades else 0.0,
         profit_factor=(gross_win / gross_loss) if gross_loss > 0 else math.inf,
-        return_excluding_best_trade=without_best,
+        return_less_best_trade_pnl=less_best,
         best_trade_pnl=best,
     )

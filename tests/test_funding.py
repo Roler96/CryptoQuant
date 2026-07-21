@@ -203,6 +203,49 @@ def test_the_eight_hour_cadence_is_still_inferred_for_ordinary_instruments():
     assert ActualFunding(rates, "X").interval_ms == 8 * HOUR_MS
 
 
+def test_a_single_off_schedule_settlement_does_not_redefine_the_cadence():
+    # An eight-hour history with one extra settlement an hour off the grid. The
+    # shortest gap is now one hour, and `min` let that lone blip redefine the
+    # whole instrument as hourly — after which every hour that never settled
+    # looked like a missing settlement. The cadence is the *mode*, so the
+    # outlier is ignored and eight hours is still inferred.
+    times = [DAY0 + h * HOUR_MS for h in (0, 8, 16, 17, 24, 32)]
+    model = ActualFunding(dict.fromkeys(times, 0.0001), "X")
+    assert model.interval_ms == 8 * HOUR_MS
+
+
+def test_an_extra_off_schedule_settlement_is_charged_not_treated_as_a_gap():
+    # The off-schedule 17:00 settlement is a real event: it must be returned,
+    # and its presence must not trip the coverage check. The grid-count check
+    # raised here because the real count no longer matched the assumed grid.
+    times = [DAY0 + h * HOUR_MS for h in (0, 8, 16, 17, 24, 32)]
+    model = ActualFunding(dict.fromkeys(times, 0.0001), "X")
+
+    settlements = model.settlements(DAY0, DAY0 + 40 * HOUR_MS)
+    assert [ts for ts, _ in settlements] == times
+
+
+def test_a_genuine_hole_in_the_window_still_raises():
+    # Robustness to blips must not blunt the one guarantee that matters: a
+    # settlement that is actually missing inside the window is still an error,
+    # not a silent zero. Here 24:00 is absent from an eight-hour schedule.
+    times = [DAY0 + h * HOUR_MS for h in (0, 8, 16, 32, 40)]
+    model = ActualFunding(dict.fromkeys(times, 0.0001), "X")
+
+    with pytest.raises(MissingFundingError, match="absent"):
+        model.settlements(DAY0, DAY0 + 48 * HOUR_MS)
+
+
+def test_a_hole_entirely_before_the_window_is_not_this_runs_concern():
+    # 8:00 is missing, but a query that starts at 16:00 needs only settlements
+    # from 16:00 on. A hole outside the requested window must not raise.
+    times = [DAY0, DAY0 + 16 * HOUR_MS, DAY0 + 24 * HOUR_MS]
+    model = ActualFunding(dict.fromkeys(times, 0.0001), "X")
+
+    settlements = model.settlements(DAY0 + 16 * HOUR_MS, DAY0 + 32 * HOUR_MS)
+    assert [ts for ts, _ in settlements] == [DAY0 + 16 * HOUR_MS, DAY0 + 24 * HOUR_MS]
+
+
 def test_a_window_past_the_end_of_the_archive_raises():
     # The last archived settlement pays for the period after it and no
     # further. Anything beyond that is unarchived, not free.

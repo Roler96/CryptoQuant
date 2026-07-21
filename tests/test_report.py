@@ -182,7 +182,7 @@ def test_metrics_and_bootstrap_appear_in_the_rendered_report():
 
     assert "Sharpe" in text
     assert "probability of losing money" in text
-    assert "without the best trade" in text
+    assert "less the best trade's P&L" in text
 
 
 def test_the_report_is_deterministic_for_a_given_seed():
@@ -209,6 +209,45 @@ def test_a_report_cannot_be_given_a_different_range():
 
     with pytest.raises(ProvenanceError, match="bars"):
         build_report(result, shorter, bootstrap_samples=100)
+
+
+def test_a_report_rejects_data_doctored_after_the_run():
+    # The core P0 hole: run on data A, edit one later price, hand the reporter
+    # a copy that still agrees on instrument, timeframe, length and first
+    # timestamp. The old shape-only check accepted it and recorded the doctored
+    # copy's fingerprint. The manifest pins the content the run consumed, so the
+    # tampered copy is rejected instead of quietly relabelling the result.
+    original = make_series([10, 11, 12, 11, 13, 12, 14, 15])
+    result, _ = a_run(series=original)
+
+    tampered = make_series([10, 11, 12, 11, 13, 12, 14, 99])  # same shape, first ts
+    assert len(tampered) == len(original)
+    assert int(tampered.ts[0]) == int(original.ts[0])
+
+    with pytest.raises(ProvenanceError, match="changed after the run"):
+        build_report(result, tampered, bootstrap_samples=100)
+
+
+def test_a_report_can_be_built_straight_from_the_manifest():
+    # No series passed: the run's manifest is the authority on what it consumed,
+    # so the report needs nothing handed to it after the fact.
+    result, series = a_run()
+    report = build_report(result, bootstrap_samples=100)
+
+    assert report.data_fingerprint == series_fingerprint(series)
+    assert report.data_fingerprint in report.render()
+
+
+def test_a_doctored_auxiliary_market_is_also_rejected():
+    aux = make_series([1, 2, 3, 4, 5, 6, 7, 8], inst_id="BTC-USDT")
+    series = make_series([10, 11, 12, 11, 13, 12, 14, 15])
+    result = run_backtest(
+        Alternating(), series, SPOT, 1000.0, costs=CostModel(10, 5), aux=[aux]
+    )
+
+    tampered_aux = make_series([1, 2, 3, 4, 5, 6, 7, 99], inst_id="BTC-USDT")
+    with pytest.raises(ProvenanceError, match="did not come from"):
+        build_report(result, series, aux=[tampered_aux], bootstrap_samples=100)
 
 
 def test_a_split_that_does_not_contain_the_run_is_called_out():

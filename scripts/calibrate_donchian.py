@@ -73,7 +73,7 @@ def main() -> int:
             print(
                 f"{mode.value:<12}{m.total_return * 100:>11,.1f}%{m.sharpe:>9.2f}"
                 f"{m.max_drawdown * 100:>8.1f}%{m.trades:>9d}"
-                f"{m.return_excluding_best_trade * 100:>11,.1f}%"
+                f"{m.return_less_best_trade_pnl * 100:>11,.1f}%"
             )
 
         print(
