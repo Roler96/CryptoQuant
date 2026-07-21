@@ -10,7 +10,7 @@ from pathlib import Path
 
 from cq.core.clock import BASE_TIMEFRAME
 from cq.core.types import Side
-from cq.data.feed import LiveFeed
+from cq.data.feed import FeedStalledError, LiveFeed
 from cq.data.okx import OkxPublicClient
 from cq.live.broker import LiveBroker, min_base_amount_of, spec_from_market
 from cq.live.client import OkxTradeClient, base_currency, quote_currency, to_symbol
@@ -58,6 +58,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     run.add_argument("--period", type=int, default=1, help="probe flip cadence in bars")
     run.add_argument("--warmup", type=int, default=8, help="recent closed bars to seed as warmup")
     run.add_argument("--poll", type=float, default=5.0, help="feed poll interval, seconds")
+    run.add_argument(
+        "--stall-grace",
+        type=float,
+        default=120.0,
+        help="seconds past an expected bar close before the feed fails as stalled",
+    )
     run.add_argument("--max-bars", type=int, default=None, help="stop after this many live bars")
     run.add_argument(
         "--live",
@@ -129,11 +135,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     strategy = HeartbeatProbe(weight=args.weight, period=args.period)
     checkpoint = load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
-    feed = LiveFeed(public, inst, tf, poll_seconds=args.poll)
-    # One priming poll returns the recent closed backlog and, crucially, arms the
-    # feed's high-water mark: the session then only ever acts on bars that close
-    # from here forward, never replaying old history as if it were a live signal.
-    backlog = feed.poll()
+    feed = LiveFeed(
+        public,
+        inst,
+        tf,
+        poll_seconds=args.poll,
+        stall_grace_seconds=args.stall_grace,
+    )
+    # One successful priming poll returns the recent closed backlog and,
+    # crucially, arms the feed's high-water mark: the session then only ever
+    # acts on bars that close from here forward, never replaying old history as
+    # if it were a live signal. Transient failures retry inside prime().
+    try:
+        backlog = feed.prime()
+    except FeedStalledError as exc:
+        print(f"refusing to start with a stalled paper feed: {exc}")
+        return 1
     if checkpoint is not None:
         missed = [bar for bar in backlog if bar.ts > checkpoint.ts]
         if missed:
@@ -176,6 +193,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
         except KeyboardInterrupt:
             print("\n  stopped")
+        except FeedStalledError as exc:
+            print(f"\n  stopped stalled paper feed: {exc}")
+            return 1
     return 0
 
 

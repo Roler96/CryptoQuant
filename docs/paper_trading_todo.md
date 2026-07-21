@@ -15,7 +15,10 @@ shared with the backtest (`cq/engine/sizing.py::target_delta`), so a paper
 order is the one the backtest assumed. Versioned, fsynced JSONL checkpoints
 allow a stopped process to resume when its last processed bar still matches the
 exchange. Target, protection, restoration and recovery creates carry stable
-client order ids derived from their closed-bar intent.
+client order ids derived from their closed-bar intent. Transient market-data
+poll failures are retried without losing the feed high-water mark, while a
+successfully connected but stale feed fails explicitly after a configurable
+grace period.
 
 Unchecked work below is what the pipe deliberately does **not** yet do.
 
@@ -88,9 +91,22 @@ tests cover successful lookup, unresolved timeout, historical-order rejection
 and the no-resend invariant; no credentialed demo order was placed.
 
 ### 5. Feed and connection resilience
-- [ ] Survive a poll that raises (network blip) without ending the session.
-- [ ] Detect and surface a stalled feed (no new closed bar well past when one
+- [x] Survive a poll that raises (network blip) without ending the session.
+- [x] Detect and surface a stalled feed (no new closed bar well past when one
       was due) rather than sleeping silently forever.
+
+Implemented 2026-07-21. Startup priming and the running iterator now retry
+ccxt's transient transport failures at the configured poll interval, preserving
+the last-emitted timestamp and logging both failures and recovery. A failed
+request is never interpreted as an empty successful page, so startup cannot
+accidentally arm itself without a real high-water mark.
+
+Every successful poll also checks the next expected close derived from the last
+emitted bar and the canonical timeframe duration. If no newer closed bar is
+visible after the default 120-second grace (`cq paper run --stall-grace`), the
+feed raises a dedicated error; the paper CLI reports it and exits nonzero rather
+than sleeping forever. Tests use injected clocks, sleeps and scripted failures,
+so this change made no external API or credentialed demo calls.
 
 ### 6. Warmup beyond one page (only if a strategy needs it)
 - [ ] Page history back for strategies whose `warmup_bars` exceeds the ~100
@@ -99,6 +115,6 @@ and the no-resend invariant; no credentialed demo order was placed.
 
 ## Suggested order
 
-With 1, 3 and 4 implemented, do 5 before 2, since swap is where a real strategy
-would eventually run and it should land on a pipe that already recovers,
-de-duplicates and surfaces feed failures. 6 only on demand.
+With 1, 3, 4 and 5 implemented, swap support in 2 is the next substantive
+milestone. 6 remains deferred until a real strategy needs more than one page of
+warmup.
