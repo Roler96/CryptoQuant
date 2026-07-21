@@ -25,9 +25,9 @@ def series_from(closes):
     )
 
 
-def targets_over(closes, entry=5, exit_=3):
+def targets_over(closes, entry=5, exit_=3, long_only=False):
     """Run the strategy across a price path, returning the target each bar."""
-    strategy = DonchianTrend(entry_lookback=entry, exit_lookback=exit_)
+    strategy = DonchianTrend(entry_lookback=entry, exit_lookback=exit_, long_only=long_only)
     ctx = Context(series_from(closes))
     out = []
     for i in range(len(closes)):
@@ -97,6 +97,33 @@ def test_warmup_covers_the_lookback_plus_one():
 
 def test_the_name_records_the_parameters():
     assert DonchianTrend(120, 60).name == "donchian-120-60"
+
+
+def test_long_only_stays_flat_on_a_downside_break():
+    # The same breakdown that shorts the long/short strategy leaves the
+    # long-only one flat — the short is declined here, not clamped in the spec.
+    path = [10, 11, 10, 11, 10, 11, 1]
+    assert targets_over(path)[-1] == -1.0
+    assert targets_over(path, long_only=True)[-1] == 0.0
+
+
+def test_long_only_still_takes_and_exits_longs():
+    # Long-only removes shorts, nothing else: the long side is untouched.
+    path = [10, 11, 10, 11, 10, 11, 50, 51, 52, 1]
+    result = targets_over(path, long_only=True)
+    assert result[6] == 1.0
+    assert result[-1] == 0.0
+
+
+def test_long_only_never_asks_for_a_short():
+    # A path that would spend several bars short must never go negative.
+    path = [10, 11, 10, 11, 10, 11, 1, 1, 1, 1, 1]
+    assert min(t for t in targets_over(path, long_only=True) if t is not None) == 0.0
+
+
+def test_the_name_records_the_long_only_mode():
+    # A long-only run is a different strategy; its name must not collide.
+    assert DonchianTrend(120, 60, long_only=True).name == "donchian-120-60-long"
 
 
 def test_invalid_parameters_are_rejected():

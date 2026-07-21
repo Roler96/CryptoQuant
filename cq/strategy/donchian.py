@@ -24,9 +24,23 @@ class DonchianTrend:
 
     Parameters follow the candidate this project has carried since 2026-07:
     a 120-bar entry channel and a 60-bar exit channel on 4h bars.
+
+    `long_only` makes the strategy skip the short entry, so it never asks to
+    hold a negative target. That is what lets it run on spot, where the engine
+    refuses a short outright rather than clamp it to flat behind the caller's
+    back. The clamp still happens — it just happens here, as a declared mode
+    that the strategy name records, instead of silently inside the market spec.
+    A long-only run and a long/short run are different strategies and must not
+    be mistaken for one another, so the name carries the distinction.
     """
 
-    def __init__(self, entry_lookback: int = 120, exit_lookback: int = 60, size: float = 1.0):
+    def __init__(
+        self,
+        entry_lookback: int = 120,
+        exit_lookback: int = 60,
+        size: float = 1.0,
+        long_only: bool = False,
+    ):
         if entry_lookback < 2 or exit_lookback < 2:
             raise ValueError("lookbacks must be at least 2 bars")
         if size <= 0:
@@ -34,11 +48,13 @@ class DonchianTrend:
         self.entry_lookback = entry_lookback
         self.exit_lookback = exit_lookback
         self.size = size
+        self.long_only = long_only
         self._target = 0.0
 
     @property
     def name(self) -> str:
-        return f"donchian-{self.entry_lookback}-{self.exit_lookback}"
+        suffix = "-long" if self.long_only else ""
+        return f"donchian-{self.entry_lookback}-{self.exit_lookback}{suffix}"
 
     @property
     def warmup_bars(self) -> int:
@@ -57,7 +73,7 @@ class DonchianTrend:
         if self._target == 0.0:
             if close > entry_high:
                 self._target = self.size
-            elif close < entry_low:
+            elif close < entry_low and not self.long_only:
                 self._target = -self.size
         elif self._target > 0.0:
             if close < exit_low:
