@@ -196,11 +196,28 @@ def run_backtest(
     funding: FundingModel | None = None,
     aux: Iterable[Series] = (),
     sizing: Sizing = Sizing.ON_ENTRY,
+    dust_fraction: float | None = None,
 ) -> RunResult:
-    """Replay `primary` through `strategy`, one bar at a time."""
+    """Replay `primary` through `strategy`, one bar at a time.
+
+    `dust_fraction` is the smallest position adjustment the broker will act on,
+    as a fraction of equity; a delta whose notional is below it is dropped. Its
+    default is a float-noise floor that keeps a held position from re-trading on
+    rounding crumbs. Under `Sizing.REBALANCE`, where the quantity is re-derived
+    every bar, raising it turns that floor into an explicit no-trade band: a
+    constant-weight target then only rebalances once its weight has drifted by
+    more than `dust_fraction`, because the delta's notional is
+    `|target - current| * equity` to first order. That is the one knob that
+    separates a band rebalancer from a continuous one, so it is a caller choice
+    rather than a fixed constant.
+    """
     costs = costs or CostModel()
     funding = funding or NoFunding()
-    broker = SimBroker(spec, costs)
+    broker = (
+        SimBroker(spec, costs)
+        if dust_fraction is None
+        else SimBroker(spec, costs, dust_fraction)
+    )
     portfolio = Portfolio(spec, initial_cash)
     aux = list(aux)
     ctx = Context(primary, aux=aux)
