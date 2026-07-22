@@ -91,6 +91,43 @@ def test_open_interest_is_keyed_by_currency_and_timestamp(store):
     assert store.open_interest_coverage("DOGE") == (2, 1000, 2000)
 
 
+def test_derivative_frames_preserve_values_and_availability_times(store):
+    store.upsert_open_interest([("DOGE", 1000, 95.0, 13.0, 1200)])
+    store.upsert_funding([("DOGE-USDT-SWAP", 2000, 0.0001, 0.00013, 2200)])
+
+    oi = store.load_open_interest("DOGE")
+    funding = store.load_funding_frame("DOGE-USDT-SWAP")
+
+    assert oi.iloc[0].to_dict() == {
+        "oi_usd": 95.0,
+        "volume_usd": 13.0,
+        "fetched_at": 1200.0,
+    }
+    assert funding.iloc[0].to_dict() == {
+        "funding_rate": 0.0001,
+        "realized_rate": 0.00013,
+        "fetched_at": 2200.0,
+    }
+
+
+def test_forward_record_is_append_only_and_idempotent(store):
+    payload = '{"accepted":false,"status":"valid"}'
+    assert store.append_forward_record("study", "capture", 1000, 1100, payload)
+    # A retry at a later wall-clock time leaves the original availability time
+    # untouched when its immutable payload is identical.
+    assert not store.append_forward_record("study", "capture", 1000, 1200, payload)
+
+    records = store.load_forward_records("study", "capture")
+    assert len(records) == 1
+    assert records[0].recorded_at == 1100
+    assert records[0].payload_json == payload
+
+    with pytest.raises(ValueError, match="immutable forward record conflict"):
+        store.append_forward_record(
+            "study", "capture", 1000, 1300, '{"accepted":true,"status":"valid"}'
+        )
+
+
 def test_ohlcv_is_keyed_per_timeframe(store):
     base = ("DOGE-USDT", "1h", 1000, 1.0, 2.0, 0.5, 1.5, 100.0, 150.0)
     other_tf = ("DOGE-USDT", "4h", 1000, 1.0, 2.0, 0.5, 1.5, 100.0, 150.0)

@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 import pandas as pd
@@ -94,6 +95,24 @@ CREATE TABLE IF NOT EXISTS archive_runs (
 
 CREATE INDEX IF NOT EXISTS idx_archive_runs_kind_time
     ON archive_runs (kind, started_at);
+
+-- Immutable records for genuinely forward research. Historical market rows
+-- are intentionally refreshable because exchanges revise recently closed
+-- bars; a decision made from the first snapshot seen must not be. Keeping the
+-- two concerns in different tables prevents a later archive sweep from
+-- silently rewriting what a forward observer knew at the time.
+CREATE TABLE IF NOT EXISTS forward_records (
+    study          TEXT    NOT NULL,
+    record_type    TEXT    NOT NULL,
+    decision_time  INTEGER NOT NULL,
+    recorded_at    INTEGER NOT NULL,
+    payload_json   TEXT    NOT NULL,
+    payload_sha256 TEXT    NOT NULL,
+    PRIMARY KEY (study, record_type, decision_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_forward_records_study_time
+    ON forward_records (study, decision_time);
 """
 
 
@@ -112,6 +131,18 @@ class SyncState:
     covered_from: int
     covered_to: int
     complete: bool
+
+
+@dataclass(frozen=True)
+class ForwardRecord:
+    """One immutable as-of decision or outcome in a forward study."""
+
+    study: str
+    record_type: str
+    decision_time: int
+    recorded_at: int
+    payload_json: str
+    payload_sha256: str
 
 
 class Store:
@@ -200,6 +231,50 @@ class Store:
             key_columns=("ccy", "ts"),
             rows=rows,
         )
+
+    def append_forward_record(
+        self,
+        study: str,
+        record_type: str,
+        decision_time: int,
+        recorded_at: int,
+        payload_json: str,
+    ) -> bool:
+        """Append one immutable forward record.
+
+        Returns ``True`` for a new row and ``False`` for an idempotent replay
+        of the same payload. A different payload for an existing key is an
+        error rather than an update: accepting it would turn an as-of ledger
+        into an ordinary, hindsight-revisable result table.
+        """
+        if not study or not record_type:
+            raise ValueError("forward record study and record_type must be non-empty")
+        if decision_time < 0 or recorded_at < 0:
+            raise ValueError("forward record timestamps must be non-negative")
+        digest = sha256(payload_json.encode("utf-8")).hexdigest()
+
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT payload_json, payload_sha256 FROM forward_records "
+                "WHERE study=? AND record_type=? AND decision_time=?",
+                (study, record_type, decision_time),
+            ).fetchone()
+            if existing is not None:
+                same_payload = existing["payload_json"] == payload_json
+                same_digest = existing["payload_sha256"] == digest
+                if same_payload and same_digest:
+                    return False
+                raise ValueError(
+                    "immutable forward record conflict for "
+                    f"{study}/{record_type}/{decision_time}"
+                )
+            conn.execute(
+                "INSERT INTO forward_records "
+                "(study, record_type, decision_time, recorded_at, payload_json, "
+                "payload_sha256) VALUES (?,?,?,?,?,?)",
+                (study, record_type, decision_time, recorded_at, payload_json, digest),
+            )
+        return True
 
     def _upsert(
         self,
@@ -323,6 +398,51 @@ class Store:
     def open_interest_coverage(self, ccy: str) -> tuple:
         return self.coverage("open_interest", "ccy", ccy, "ts")
 
+    def load_open_interest(
+        self,
+        ccy: str,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> pd.DataFrame:
+        """Stored OI observations indexed by UTC timestamp, ascending."""
+        query = "SELECT ts, oi_usd, volume_usd, fetched_at FROM open_interest WHERE ccy=?"
+        params: list = [ccy]
+        if start_ms is not None:
+            query += " AND ts >= ?"
+            params.append(start_ms)
+        if end_ms is not None:
+            query += " AND ts < ?"
+            params.append(end_ms)
+        query += " ORDER BY ts ASC"
+        frame = pd.read_sql_query(query, self._conn, params=params)
+        frame.index = pd.to_datetime(frame.pop("ts"), unit="ms", utc=True)
+        frame.index.name = "ts"
+        return frame
+
+    def load_funding_frame(
+        self,
+        inst_id: str,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> pd.DataFrame:
+        """Funding rows including availability metadata, ascending."""
+        query = (
+            "SELECT funding_time, funding_rate, realized_rate, fetched_at FROM funding "
+            "WHERE inst_id=?"
+        )
+        params: list = [inst_id]
+        if start_ms is not None:
+            query += " AND funding_time >= ?"
+            params.append(start_ms)
+        if end_ms is not None:
+            query += " AND funding_time < ?"
+            params.append(end_ms)
+        query += " ORDER BY funding_time ASC"
+        frame = pd.read_sql_query(query, self._conn, params=params)
+        frame.index = pd.to_datetime(frame.pop("funding_time"), unit="ms", utc=True)
+        frame.index.name = "funding_time"
+        return frame
+
     def load_funding(self, inst_id: str) -> dict[int, float]:
         """Measured funding settlements, keyed by settlement time.
 
@@ -341,6 +461,29 @@ class Store:
             (inst_id,),
         ).fetchall()
         return {int(row["funding_time"]): float(row["realized_rate"]) for row in rows}
+
+    def load_forward_records(
+        self, study: str, record_type: str | None = None
+    ) -> list[ForwardRecord]:
+        """Read an immutable study ledger in decision-time order."""
+        query = "SELECT * FROM forward_records WHERE study=?"
+        params: list = [study]
+        if record_type is not None:
+            query += " AND record_type=?"
+            params.append(record_type)
+        query += " ORDER BY decision_time, record_type"
+        rows = self._conn.execute(query, params).fetchall()
+        return [
+            ForwardRecord(
+                study=str(row["study"]),
+                record_type=str(row["record_type"]),
+                decision_time=int(row["decision_time"]),
+                recorded_at=int(row["recorded_at"]),
+                payload_json=str(row["payload_json"]),
+                payload_sha256=str(row["payload_sha256"]),
+            )
+            for row in rows
+        ]
 
     # ---- backfill resumption -------------------------------------------
 
