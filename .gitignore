@@ -66,6 +66,14 @@ data/*.db-shm
 data/cryptoquant.db*
 data/*_paper.db*
 reports/
+# Keep the deterministic machine-readable outputs of the frozen DOGE studies.
+# Other ad-hoc reports remain ignored.
+!reports/
+reports/*
+!reports/research/
+reports/research/*
+!reports/research/doge_vcse_robustness.json
+!reports/research/doge_vcse_v2_exploration.json
 *.sqlite
 *.sqlite3
 

@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from cq.context import Context, Series
+from cq.core.types import CostModel
+from research.audit_doge_vcse_robustness import (
+    _block_bootstrap,
+    _matched_random_null,
+    _phase_series,
+    _round_trip_factors,
+    _year_jackknife,
+)
 from research.backtest_doge_vcse import DogeVcse, VcseParams, _atr_state
+from research.explore_doge_vcse_v2 import _v2_params
 from research.report_doge_vcse_yearly import WindowedVcse
 
 HOUR4_MS = 4 * 60 * 60 * 1000
@@ -129,3 +141,100 @@ def test_windowed_strategy_forces_flat_at_end() -> None:
     ctx.seek(700)
 
     assert strategy.on_bar(ctx).target == 0.0
+
+
+def test_phase_series_keeps_only_complete_shifted_groups() -> None:
+    index = pd.date_range("2026-01-01", periods=9, freq="1h", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "open": np.arange(9, dtype=float) + 1,
+            "high": np.arange(9, dtype=float) + 2,
+            "low": np.arange(9, dtype=float),
+            "close": np.arange(9, dtype=float) + 1.5,
+            "volume": np.ones(9),
+        },
+        index=index,
+    ).iloc[[0, 1, 3, 4, 5, 6, 7, 8]]
+
+    phase = _phase_series(frame, 0)
+
+    assert len(phase) == 1
+    assert phase.open[0] == 5.0
+    assert phase.high[0] == 9.0
+    assert phase.low[0] == 4.0
+    assert phase.close[0] == 8.5
+    assert phase.volume[0] == 4.0
+
+
+def test_block_bootstrap_is_reproducible_and_preserves_positive_paths() -> None:
+    first = _block_bootstrap([0.01, 0.02, 0.03], 2, samples=100, seed=3)
+    second = _block_bootstrap([0.01, 0.02, 0.03], 2, samples=100, seed=3)
+
+    assert first == second
+    assert first["p05"] > 0
+    assert first["probability_of_loss"] == 0
+
+
+def test_year_jackknife_removes_all_episodes_from_each_year() -> None:
+    rows = _year_jackknife([0.10, -0.05, 0.20], [2024, 2024, 2025])
+
+    assert rows == [
+        {
+            "removed_year": 2024,
+            "removed_trades": 2,
+            "remaining_trades": 1,
+            "return": pytest.approx(0.20),
+        },
+        {
+            "removed_year": 2025,
+            "removed_trades": 1,
+            "remaining_trades": 2,
+            "return": pytest.approx(0.045),
+        },
+    ]
+
+
+def test_round_trip_factor_charges_both_sides() -> None:
+    entry = np.array([100.0])
+    exit_ = np.array([110.0])
+
+    free = _round_trip_factors(
+        entry, exit_, CostModel(fee_bps=0.0, slippage_bps=0.0)
+    )
+    charged = _round_trip_factors(
+        entry, exit_, CostModel(fee_bps=10.0, slippage_bps=5.0)
+    )
+
+    assert free[0] == pytest.approx(1.1)
+    assert charged[0] < free[0]
+
+
+def test_matched_random_null_matches_year_and_holding_period() -> None:
+    series = _series(bars=12)
+    spans: list[tuple[int, int | None]] = [
+        (int(series.ts[2]), int(series.ts[5]))
+    ]
+
+    result = _matched_random_null(
+        series,
+        spans,
+        observed=0.0,
+        samples=50,
+        seed=4,
+        family_trials=2,
+        costs=CostModel(),
+    )
+
+    assert result["trades_matched"] == 1
+    assert result["samples"] == 50
+    assert 0 <= result["p_value"] <= 1
+    assert result["family_adjusted_p"] >= result["p_value"]
+
+
+def test_v2_only_removes_clv_and_volume_confirmations() -> None:
+    v1 = VcseParams()
+    v2 = _v2_params()
+
+    assert v2.use_clv is False
+    assert v2.use_volume is False
+    assert replace(v2, use_clv=True, use_volume=True) == v1

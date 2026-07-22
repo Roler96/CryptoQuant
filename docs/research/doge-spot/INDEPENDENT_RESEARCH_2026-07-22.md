@@ -1,5 +1,12 @@
 # DOGE 自身数据独立策略研究结论 (2026-07-22)
 
+> **后续审计更新：** VCSE v1 保留原“历史探索通过”记录，但强化稳健性门为
+> `ROBUSTNESS FAIL`；受污染的简化 v2 也为 `EXPLORATION FAIL`。当前仍不批准真实资金，
+> 且 v1 只保留低优先级冻结 shadow 记录。详见
+> `docs/research/doge-spot/CONTINUED_RESEARCH_2026-07-22.md`。
+> 安全 forward 边界也已按 v1 实际提交时间收紧到第一根完全位于其后的4h bar：
+> `2026-07-22 08:00 UTC`。
+
 ## 结论
 
 本次独立提出并预注册了 **DOGE VCSE (Volatility Compression-Spot Expansion)**。策略只读取 OKX `DOGE-USDT` 现货 OHLCV，不读取 BTC、ETH、DOGE 永续、资金费、OI、旧策略信号或旧研究参数。
