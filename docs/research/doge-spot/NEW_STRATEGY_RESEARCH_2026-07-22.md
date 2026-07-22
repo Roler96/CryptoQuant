@@ -294,6 +294,53 @@ DOGE残差跌破5%分位、DOGE自身6h为负、BTC/ETH组合6h非负且DOGE最�
 
 加入 ISR 后全量回归更新为505 passed；全仓 Ruff 和 ISR 定向 Pyright 均通过。
 
+## 后续独立循环：周内季节性（DWS v1）
+
+前面 40 个公式全部属于价格状态 / 动量 / 波动率 / 微观结构 / 衍生品流家族。本轮换到
+一个与它们完全正交的家族：**纯日历时钟**。DWS 不读取任何价格、动量、波动率、成交量、
+跨币或衍生品信息，只按 **UTC 星期几** 决定是否持有 DOGE 现货。先验来自加密日历异常
+文献（周末效应 / 星期效应），主策略先验固定为“持有工作日、周末持现”，`size=1.0`，
+1d bar，下一根 open 成交，仅 long/cash。
+
+协议、实现和15项定向测试在读取结果前完成，查询硬截止 `2024-01-01`。冻结主版本得到
+明确的 **DISCOVERY FAIL**：
+
+| Candidate | Return | Sharpe | MaxDD | Episodes |
+|---|---:|---:|---:|---:|
+| weekdays（主） | +205.29% | 0.71 | -95.14% | 156 |
+| ex_mon | +910.68% | 0.83 | -81.35% | 156 |
+| ex_sun_only | +653.99% | 0.87 | -93.91% | 157 |
+| weekend_only（placebo） | +101.99% | 0.63 | -43.39% | 157 |
+| buy_and_hold（基准） | +1472.28% | 0.98 | -92.33% | 1 |
+
+两个关键门失败，且都是**尺度不变**的结论（long/cash 固定仓位下 Sharpe 与匹配随机检验
+的符号不随 `size` 改变）：
+
+1. **`Sharpe(weekdays)=0.71 < Sharpe(buy_and_hold)=0.98`** —— 跳过周末不但没有改善、
+   反而**损害**了风险调整收益；
+2. **匹配随机入场 raw 单侧 `p=0.511`**（Sidak trials=44 后 `p=1.0`）—— 星期几日历
+   **不携带任何超出在场时长的信息**，同年、同持有长度的随机锚定持有块表现一样好
+   （null 中位数 `+224.73%` > observed `+205.29%`）。
+
+毛收益（0 成本）主策略为 `+387.48%`、Sharpe `0.77`，25bps 压力后仍为 `+123.46%`，
+所以**不是被成本吃掉**，而是效应本身不存在。描述性季节性图直接反证了文献先验：
+DOGE 2021-2023 周六 1d 对数收益均值 `+0.578%`、周日 `+0.169%`（周末并不弱），真正
+偏弱的是周一 `-0.765%` 和周三 `-0.067%`。也就是说加密“周末效应”在 DOGE 这段历史上
+不成立，逐年 jackknife 显示结果由 2021 单一年份主导（剔除 2021 后转为 `-71.59%`）。
+
+按协议主策略归档为 `DISCOVERY FAIL`，**不打开 2024**，不回到族里挑表现更好的
+`ex_mon`/`ex_sun_only` 替补，不改 `size` 再战。DWS v1 永久 `REJECTED`。累计尝试
+账本由 40 增至 **44**。这是又一个诚实的正交反证：DOGE 现货没有可交易的星期日历 alpha。
+
+- 冻结协议：`WEEKLY_SEASONALITY_PROTOCOL_2026-07-22.md`
+- 实现：`research/explore_doge_weekly_seasonality.py`（SHA256
+  `9df311834823b6365aa1e39973fecd00921173d0c2de5d5d38a79d419d1bf64a`）
+- 完整结果：`reports/research/doge_weekly_seasonality_discovery.json`
+- 自动报告：`WEEKLY_SEASONALITY_DISCOVERY_RESULTS_2026-07-22.md`
+
+加入 DWS 后全量回归更新为 **520 passed**；全仓 Ruff 通过，DWS 定向 Pyright（注入项目
+venv）0 errors。
+
 ## 学术机制参考
 
 - Moskowitz, Ooi & Pedersen, *Time Series Momentum*：
@@ -302,5 +349,10 @@ DOGE残差跌破5%分位、DOGE自身6h为负、BTC/ETH组合6h非负且DOGE最�
   https://www.nber.org/papers/w22208
 - Barndorff-Nielsen, Kinnebrock & Shephard, *Measuring Downside Risk — Realised
   Semivariance*：https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1262194
+- Caporale & Plastun, *The Day of the Week Effect in the Cryptocurrency Market*：
+  https://www.sciencedirect.com/science/article/abs/pii/S1544612318303751
+- Ma & Tanizaki, *On the Day-of-the-Week Effects of Bitcoin Markets*：
+  https://doi.org/10.1108/IMEFM-04-2019-0165
 
-这些文献只支持机制来源，不构成DOGE结果的外部验证。
+这些文献只支持机制来源，不构成DOGE结果的外部验证；DWS v1 的结果恰好反证了周末效应在
+DOGE 上的可交易性。
