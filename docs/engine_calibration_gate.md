@@ -94,6 +94,31 @@ rule to a target figure produces agreement that means nothing.
 
 Option 3 is the strongest and needs no historical baseline at all.
 
+### The instrument for option 3: constant-mix, not Donchian
+
+Donchian is a poor cross-check subject for the same reason it was a poor
+calibration subject: its result hangs on the exit and reversal semantics this
+gate could not pin down, so a paper-vs-backtest gap could be blamed on rule
+ambiguity rather than the engine. The 2026-07-22 volatility-harvest study
+produced a better instrument — `DogeConstantMix` (frozen in
+`cq/strategy/doge_constant_mix.py`). Its equity is a path integral over the
+whole run, not a handful of trades whose entry can slip a bar; it makes no
+forecast; and, crucially, the live path already sizes every bar, so it *is*
+`Sizing.REBALANCE` by construction — the band is the broker's `dust_fraction`
+in both places. Backtest and paper therefore run the same semantics with no
+disputed rule between them, and any divergence beyond the known
+close-vs-next-open sizing price is an engine defect outright.
+
+It is now paper-runnable:
+
+```
+cq paper run --strategy constant-mix --weight 0.3 --band 0.1 --inst DOGE-USDT --tf 1h
+```
+
+Opening the gate this way still requires a demo session to accrue bars and a
+script that reconciles its JSONL log against a backtest over the same bars;
+that reconciliation is not yet written. The instrument and the live wiring are.
+
 ## Reproducing this record
 
 ```

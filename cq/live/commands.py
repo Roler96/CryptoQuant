@@ -13,7 +13,13 @@ from cq.core.clock import BASE_TIMEFRAME
 from cq.core.types import Side
 from cq.data.feed import FeedStalledError, LiveFeed
 from cq.data.okx import OkxPublicClient
-from cq.live.broker import LiveBroker, min_base_amount_of, spec_from_market
+from cq.engine.loop import Strategy
+from cq.live.broker import (
+    DEFAULT_DUST_FRACTION,
+    LiveBroker,
+    min_base_amount_of,
+    spec_from_market,
+)
 from cq.live.client import (
     OkxTradeClient,
     TradeError,
@@ -32,6 +38,7 @@ from cq.live.recovery import (
     reconcile_restart,
 )
 from cq.live.session import PaperEvent, run_paper
+from cq.strategy.doge_constant_mix import DogeConstantMix, DogeConstantMixConfig
 
 DEFAULT_INSTRUMENT = "DOGE-USDT"
 PAPER_LOG_DIR = Path("logs/paper")
@@ -65,10 +72,22 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     run.add_argument("--tf", default=BASE_TIMEFRAME, help="bar timeframe, e.g. 1m or 1h")
     run.add_argument(
-        "--strategy", default="probe", choices=("probe",), help="only the plumbing probe for now"
+        "--strategy",
+        default="probe",
+        choices=("probe", "constant-mix"),
+        help="probe (plumbing) or constant-mix (bounded-risk rebalancer, "
+        "frozen main is --weight 0.3 --band 0.1)",
     )
-    run.add_argument("--weight", type=float, default=0.02, help="probe target weight")
+    run.add_argument(
+        "--weight", type=float, default=0.02, help="target weight (probe default 0.02)"
+    )
     run.add_argument("--period", type=int, default=1, help="probe flip cadence in bars")
+    run.add_argument(
+        "--band",
+        type=float,
+        default=0.10,
+        help="constant-mix no-trade band: weight drift before rebalancing",
+    )
     run.add_argument(
         "--leverage",
         type=float,
@@ -175,12 +194,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     except (TradeError, ValueError) as exc:
         print(f"refusing unsupported paper market/account configuration: {exc}")
         return 1
+    strategy: Strategy
+    if args.strategy == "constant-mix":
+        # The live path re-sizes every bar, so it is REBALANCE by construction:
+        # the band is the broker's dust fraction, exactly as in the backtest.
+        strategy = DogeConstantMix(DogeConstantMixConfig(weight=args.weight, band=args.band))
+        dust = args.band
+    else:
+        strategy = HeartbeatProbe(weight=args.weight, period=args.period)
+        dust = DEFAULT_DUST_FRACTION
     broker = LiveBroker(
         client=trade,
         spec=spec,
         min_base_amount=min_base_amount_of(market),
+        dust_fraction=dust,
     )
-    strategy = HeartbeatProbe(weight=args.weight, period=args.period)
     checkpoint = load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
     feed = LiveFeed(
         public,

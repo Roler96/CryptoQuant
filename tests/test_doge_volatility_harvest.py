@@ -1,9 +1,11 @@
 """Tests for the DOGE constant-mix volatility-harvest study.
 
-Two things need pinning: that the constant-mix strategy forecasts nothing (its
-target never depends on the bars it sees), and that the engine's `dust_fraction`
-is exactly the rebalance band the study relies on — a wider band trades less,
-and a static allocation of the same weight trades once and then drifts.
+Three things need pinning: that the constant-mix policy forecasts nothing (its
+target never depends on the bars it sees), that the engine's `dust_fraction` is
+exactly the rebalance band the study relies on (a wider band trades less; a
+static allocation of the same weight trades once and then drifts), and that the
+frozen deployment version in `cq.strategy` names the same target as the research
+sweep it was promoted from.
 """
 
 from __future__ import annotations
@@ -12,10 +14,11 @@ import numpy as np
 import pytest
 
 from cq.context import Context, Series
-from cq.core.types import CostModel, MarketSpec, Sizing
+from cq.core.types import CostModel, Intent, MarketSpec, Sizing
 from cq.engine.loop import run_backtest
 from cq.engine.sim import SimBroker
-from research.explore_doge_volatility_harvest import DogeConstantMix, _run, _summary
+from cq.strategy.doge_constant_mix import DogeConstantMix, DogeConstantMixConfig
+from research.explore_doge_volatility_harvest import ConstantMix, _run, _summary
 
 HOUR_MS = 60 * 60 * 1000
 SPEC = MarketSpec("DOGE-USDT", "spot")
@@ -41,7 +44,7 @@ def _oscillating_series(bars: int = 400, amplitude: float = 0.4, seed: int = 5) 
     )
 
 
-def _targets(strategy: DogeConstantMix, series: Series) -> np.ndarray:
+def _targets(strategy: ConstantMix | DogeConstantMix, series: Series) -> np.ndarray:
     context = Context(series)
     out = np.zeros(len(series), dtype=float)
     for index in range(strategy.warmup_bars - 1, len(series)):
@@ -51,7 +54,7 @@ def _targets(strategy: DogeConstantMix, series: Series) -> np.ndarray:
 
 
 def test_constant_mix_target_is_the_weight_and_reads_no_history() -> None:
-    strategy = DogeConstantMix(0.3)
+    strategy = ConstantMix(0.3)
     a = _targets(strategy, _oscillating_series(seed=1))
     b = _targets(strategy, _oscillating_series(seed=99, amplitude=0.7))
     assert strategy.warmup_bars == 1
@@ -63,19 +66,12 @@ def test_constant_mix_target_is_the_weight_and_reads_no_history() -> None:
 @pytest.mark.parametrize("weight", [-0.1, 0.0, 1.5])
 def test_constant_mix_rejects_out_of_range_weight(weight: float) -> None:
     with pytest.raises(ValueError, match="weight"):
-        DogeConstantMix(weight)
-
-
-def test_constant_mix_checkpoint_round_trip() -> None:
-    strategy = DogeConstantMix(0.4)
-    strategy.restore_state(strategy.snapshot_state())
-    with pytest.raises(ValueError, match="weight"):
-        strategy.restore_state({"weight": 0.25})
+        ConstantMix(weight)
 
 
 def _fills(sizing: Sizing, dust: float | None, series: Series, weight: float = 0.3) -> int:
     result = run_backtest(
-        DogeConstantMix(weight),
+        ConstantMix(weight),
         series,
         SPEC,
         10_000.0,
@@ -107,11 +103,11 @@ def test_wider_band_rebalances_less_often() -> None:
 def test_dust_fraction_none_matches_the_broker_default() -> None:
     series = _oscillating_series(seed=7)
     default = run_backtest(
-        DogeConstantMix(0.3), series, SPEC, 10_000.0, sizing=Sizing.REBALANCE,
+        ConstantMix(0.3), series, SPEC, 10_000.0, sizing=Sizing.REBALANCE,
         dust_fraction=None,
     )
     explicit = run_backtest(
-        DogeConstantMix(0.3), series, SPEC, 10_000.0, sizing=Sizing.REBALANCE,
+        ConstantMix(0.3), series, SPEC, 10_000.0, sizing=Sizing.REBALANCE,
         dust_fraction=SimBroker.DEFAULT_DUST_FRACTION,
     )
     assert default.equity == explicit.equity
@@ -136,3 +132,51 @@ def test_band_rebalance_caps_drawdown_below_static_on_a_pump() -> None:
     assert band["max_drawdown"] < static["max_drawdown"]
     # The static sleeve balloons, so its drawdown approaches a full-weight crash.
     assert static["max_drawdown"] > 0.8
+
+
+# ---- frozen deployment version -----------------------------------------
+
+
+def test_frozen_constant_mix_names_the_same_target_as_the_research_sweep() -> None:
+    series = _oscillating_series(seed=3)
+    frozen = DogeConstantMix(DogeConstantMixConfig(weight=0.3, band=0.1))
+    research = ConstantMix(0.3)
+    assert frozen.warmup_bars == 1
+    assert frozen.weight == 0.3
+    assert frozen.band == 0.1
+    np.testing.assert_array_equal(_targets(frozen, series), _targets(research, series))
+
+
+def test_frozen_constant_mix_defaults_to_the_study_main_config() -> None:
+    frozen = DogeConstantMix()
+    assert frozen.weight == 0.3
+    assert frozen.band == 0.1
+    assert frozen.name == "doge-cmix-w0.3-b0.1"
+
+
+@pytest.mark.parametrize(
+    ("weight", "band"),
+    [(-0.1, 0.1), (0.0, 0.1), (1.5, 0.1), (0.3, 0.0), (0.3, 1.0)],
+)
+def test_frozen_constant_mix_rejects_bad_config(weight: float, band: float) -> None:
+    with pytest.raises(ValueError, match=r"weight|band"):
+        DogeConstantMixConfig(weight=weight, band=band)
+
+
+def test_frozen_constant_mix_checkpoint_round_trip() -> None:
+    frozen = DogeConstantMix(DogeConstantMixConfig(weight=0.4, band=0.2))
+    frozen.restore_state(frozen.snapshot_state())
+    with pytest.raises(ValueError, match="configuration does not match"):
+        frozen.restore_state(DogeConstantMix().snapshot_state())
+
+
+def test_frozen_constant_mix_emits_a_constant_target() -> None:
+    frozen = DogeConstantMix()
+    intent = frozen.on_bar(_ctx_at(_oscillating_series(), -1))
+    assert intent == Intent(target=0.3, reason="doge-cmix-w0.3-b0.1")
+
+
+def _ctx_at(series: Series, index: int) -> Context:
+    ctx = Context(series)
+    ctx.seek(index if index >= 0 else len(series) + index)
+    return ctx

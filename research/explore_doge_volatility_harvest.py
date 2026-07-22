@@ -55,16 +55,15 @@ OUTPUT_MD = Path(
 )
 
 
-class DogeConstantMix:
-    """Hold a constant target weight of DOGE; the band decides when to trade.
+class ConstantMix:
+    """Research sweep of the constant-mix policy; weight-only, band is the run.
 
-    Reads no history and forecasts nothing: ``on_bar`` always names the same
-    target weight. Whether that weight has drifted far enough to be worth a
-    trade is the engine's rebalance-band decision (``dust_fraction`` under
-    ``Sizing.REBALANCE``), not the strategy's. With ``Sizing.ON_ENTRY`` the
-    same class is a static allocation that is sized once and then left to
-    drift, which is exactly the benchmark the rebalancing action is measured
-    against.
+    Kept parametric and separate from the frozen deployment version in
+    ``cq.strategy.doge_constant_mix`` (the same split as DogeDvrTailRisk vs
+    DogeDvrTail20): here the band is supplied per run as ``dust_fraction`` so
+    one class serves every (weight, band) cell and every benchmark. Reads no
+    history and forecasts nothing. Under ``Sizing.ON_ENTRY`` it is the static
+    allocation the rebalancing action is measured against.
     """
 
     def __init__(self, weight: float):
@@ -104,10 +103,10 @@ def _run(
     end_ms: int | None = None,
 ) -> RunResult:
     if start_ms is None and end_ms is None:
-        strategy: Any = DogeConstantMix(weight)
+        strategy: Any = ConstantMix(weight)
     else:
         strategy = WindowedStrategy(
-            lambda: DogeConstantMix(weight),
+            lambda: ConstantMix(weight),
             start_ms if start_ms is not None else int(series.ts[0]),
             end_ms if end_ms is not None else int(series.ts[-1]) + 1,
         )
