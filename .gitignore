@@ -111,4 +111,5 @@ temp/
 .omo/*
 .claude/*
 .agents/*
+!.agents/*.md
 /research/data_cache
