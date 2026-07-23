@@ -9,8 +9,8 @@ import pandas as pd
 
 from cq.core.clock import BASE_TIMEFRAME, duration_ms
 from cq.data.derivatives import archive_funding, archive_open_interest
-from cq.data.fetch import incremental_start, sync_ohlcv
-from cq.data.okx import OkxPublicClient
+from cq.data.fetch import SyncJob, incremental_start, sync_ohlcv_concurrent
+from cq.data.okx import HISTORY_CANDLES_MAX_PER_SEC, OkxPublicClient, RateLimiter
 from cq.data.quality import check_ohlcv
 from cq.data.resample import resample
 from cq.data.store import DEFAULT_DB_PATH, Store
@@ -32,6 +32,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     sync.add_argument("--instruments", nargs="*", default=None, help="default: whole universe")
     sync.add_argument(
         "--full", action="store_true", help="re-walk history, ignoring what is stored"
+    )
+    sync.add_argument(
+        "--concurrency",
+        type=int,
+        default=8,
+        help="parallel page fetchers (1 = sequential); a shared rate limit caps the total",
     )
     sync.set_defaults(handler=cmd_sync)
 
@@ -99,30 +105,50 @@ def cmd_sync(args: argparse.Namespace) -> int:
     instruments = args.instruments or list(universe.all_instruments)
     default_start = _parse_utc_date(args.start or DEFAULT_HISTORY_START)
     end_ms = _parse_utc_date(args.end) if args.end else None
+    concurrency = max(1, args.concurrency)
 
-    client = OkxPublicClient()
-    failed = False
+    # One limiter shared by every fetcher: the exchange caps the *stream*, not
+    # each connection, so the workers must budget requests together.
+    limiter = RateLimiter(HISTORY_CANDLES_MAX_PER_SEC)
+
+    def client_factory() -> OkxPublicClient:
+        return OkxPublicClient(rate_limiter=limiter)
+
+    now_ms = client_factory().milliseconds()
+
     with Store(args.db) as store:
+        jobs = []
         for inst_id in instruments:
             if args.start or args.full:
                 start_ms = default_start
             else:
                 start_ms = incremental_start(store, inst_id, BASE_TIMEFRAME, default_start)
-            try:
-                outcome = sync_ohlcv(
-                    client, store, inst_id, start_ms=start_ms, end_ms=end_ms
-                )
-            except Exception as exc:  # noqa: BLE001 - reported per instrument
-                print(f"{inst_id:<18} FAILED: {type(exc).__name__}: {exc}")
-                failed = True
-                continue
-            span = "-"
-            if outcome.oldest_ts is not None and outcome.newest_ts is not None:
-                span = f"{_fmt(outcome.oldest_ts)} .. {_fmt(outcome.newest_ts)}"
-            print(
-                f"{inst_id:<18}{outcome.result.new:>8} new /{outcome.result.seen:>8} seen  "
-                f"{span}  (dropped {outcome.skipped_unclosed} unclosed)"
-            )
+            jobs.append(SyncJob(inst_id=inst_id, start_ms=start_ms))
+
+        results, errors = sync_ohlcv_concurrent(
+            client_factory,
+            store,
+            jobs,
+            now_ms=now_ms,
+            end_ms=end_ms,
+            timeframe=BASE_TIMEFRAME,
+            concurrency=concurrency,
+        )
+
+    by_inst = {result.inst_id: result for result in results}
+    failed = bool(errors)
+    for inst_id in instruments:
+        if inst_id in errors:
+            print(f"{inst_id:<18} FAILED: {errors[inst_id]}")
+            continue
+        outcome = by_inst[inst_id]
+        span = "-"
+        if outcome.oldest_ts is not None and outcome.newest_ts is not None:
+            span = f"{_fmt(outcome.oldest_ts)} .. {_fmt(outcome.newest_ts)}"
+        print(
+            f"{inst_id:<18}{outcome.result.new:>8} new /{outcome.result.seen:>8} seen  "
+            f"{span}  (dropped {outcome.skipped_unclosed} unclosed)"
+        )
     return 1 if failed else 0
 
 

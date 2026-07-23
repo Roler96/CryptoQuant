@@ -6,6 +6,7 @@ module can never place an order.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -25,6 +26,41 @@ RETRYABLE = (
     ccxt.ExchangeNotAvailable,
     ccxt.DDoSProtection,
 )
+
+# OKX rate-limits /market/history-candles at 20 requests per 2 seconds per IP.
+# A backfill run stays a little under that so a momentary burst does not trip
+# the exchange's DDoS guard and cost a retry cycle.
+HISTORY_CANDLES_MAX_PER_SEC = 8.0
+
+
+class RateLimiter:
+    """A shared cap on how fast requests may *start*, safe across threads.
+
+    ccxt's own ``enableRateLimit`` throttles each client in isolation, so N
+    clients fetching in parallel would collectively fire N times the allowed
+    rate. A concurrent backfill hands every worker the same limiter instead, so
+    the exchange sees one evenly-spaced request stream no matter how many
+    threads produce it.
+
+    Slots are reserved under the lock but waited on outside it: a thread that
+    draws a slot 300ms out must not keep every other thread from reserving
+    theirs while it sleeps.
+    """
+
+    def __init__(self, max_per_second: float):
+        self._min_interval = 1.0 / max_per_second if max_per_second > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+
+    def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        with self._lock:
+            target = max(time.monotonic(), self._next_at)
+            self._next_at = target + self._min_interval
+        wait = target - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
 
 class OkxPublicClient:
@@ -52,10 +88,16 @@ class OkxPublicClient:
         max_retries: int = 5,
         backoff_base_s: float = 1.0,
         trust_env: bool = True,
+        rate_limiter: RateLimiter | None = None,
     ):
         self.max_retries = max_retries
         self.backoff_base_s = backoff_base_s
-        self._ex = ccxt.okx({"enableRateLimit": True, "timeout": timeout_ms})
+        # A shared limiter governs the whole request stream, so ccxt's per-client
+        # throttle would only double up the wait. Without one, keep ccxt's.
+        self._rate_limiter = rate_limiter
+        self._ex = ccxt.okx(
+            {"enableRateLimit": rate_limiter is None, "timeout": timeout_ms}
+        )
         # ccxt sets `trust_env = False` on its session, which makes requests
         # ignore HTTPS_PROXY. On a network that can only reach OKX through a
         # proxy that turns every call into a connect timeout.
@@ -76,6 +118,8 @@ class OkxPublicClient:
         """Invoke an OKX endpoint, retrying transient failures."""
         last: Exception | None = None
         for attempt in range(self.max_retries):
+            if self._rate_limiter is not None:
+                self._rate_limiter.acquire()
             try:
                 response = fn(params)
             except RETRYABLE as exc:

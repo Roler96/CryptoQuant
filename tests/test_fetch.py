@@ -1,9 +1,16 @@
 """OHLCV backfill: closed-bar filtering, paging and resumption."""
 
+import threading
+
 import pytest
 
 from cq.core.clock import HOUR_MS
-from cq.data.fetch import incremental_start, sync_ohlcv
+from cq.data.fetch import (
+    SyncJob,
+    incremental_start,
+    sync_ohlcv,
+    sync_ohlcv_concurrent,
+)
 from cq.data.store import Store
 
 START = 1_700_000_000_000 - (1_700_000_000_000 % HOUR_MS)
@@ -233,3 +240,173 @@ def test_an_instrument_listed_after_the_requested_start_still_resumes(store):
 
 def test_incremental_start_falls_back_when_nothing_is_stored(store):
     assert incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START) == START
+
+
+# ---- concurrent backfill ---------------------------------------------------
+
+
+# Enough hourly bars (80 pages) to split into several windows, so the
+# multi-window path is actually exercised rather than collapsing to one walk.
+MULTI_WINDOW_BARS = 8000
+
+
+def _now_after(rows):
+    """A clock just past the newest row, so partitioning has an upper edge."""
+    return max(int(r[0]) for r in rows) + HOUR_MS
+
+
+def test_concurrent_backfill_stores_the_same_bars_as_a_sequential_walk(store):
+    # The whole point: splitting one instrument's range across windows must not
+    # drop or duplicate a bar.
+    rows = [candle(START + i * HOUR_MS, close=float(i)) for i in range(MULTI_WINDOW_BARS)]
+
+    results, errors = sync_ohlcv_concurrent(
+        lambda: FakeCandles(rows),
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START)],
+        now_ms=_now_after(rows),
+        concurrency=6,
+    )
+
+    assert errors == {}
+    frame = store.load_ohlcv("DOGE-USDT-SWAP", "1h")
+    assert len(frame) == MULTI_WINDOW_BARS
+    # Every close survived intact and in order — no window overwrote another's.
+    assert list(frame["close"]) == [float(i) for i in range(MULTI_WINDOW_BARS)]
+    (result,) = results
+    assert result.result.new == MULTI_WINDOW_BARS
+    assert result.oldest_ts == START
+    assert result.newest_ts == START + (MULTI_WINDOW_BARS - 1) * HOUR_MS
+    assert result.complete
+
+
+def test_concurrent_backfill_runs_windows_in_parallel(store):
+    # Latency, not the rate limit, is the cost being cut, so the fetchers must
+    # actually overlap. A barrier that only releases once `concurrency` calls
+    # are in flight deadlocks unless the walks truly run at once.
+    rows = [candle(START + i * HOUR_MS) for i in range(MULTI_WINDOW_BARS)]
+    concurrency = 4
+    barrier = threading.Barrier(concurrency, timeout=5)
+
+    class Overlapping(FakeCandles):
+        def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+            if not getattr(self, "_synced", False):
+                self._synced = True
+                barrier.wait()  # raises BrokenBarrierError on timeout
+            return super().history_candles(inst_id, bar, before_ts, limit)
+
+    _, errors = sync_ohlcv_concurrent(
+        lambda: Overlapping(rows),
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START)],
+        now_ms=_now_after(rows),
+        concurrency=concurrency,
+    )
+
+    assert errors == {}
+    assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == MULTI_WINDOW_BARS
+
+
+def test_concurrent_backfill_covers_several_instruments(store):
+    rows_a = [candle(START + i * HOUR_MS, close=1.0) for i in range(150)]
+    rows_b = [candle(START + i * HOUR_MS, close=2.0) for i in range(150)]
+    rows_by_inst = {"DOGE-USDT-SWAP": rows_a, "BTC-USDT-SWAP": rows_b}
+
+    def factory():
+        # One client per worker; it serves whichever instrument it is asked
+        # about from the shared row sets.
+        class MultiInst(FakeCandles):
+            def __init__(self):
+                super().__init__([])
+
+            def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+                self.rows = sorted(
+                    rows_by_inst[inst_id], key=lambda r: int(r[0]), reverse=True
+                )
+                return super().history_candles(inst_id, bar, before_ts, limit)
+
+        return MultiInst()
+
+    results, errors = sync_ohlcv_concurrent(
+        factory,
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START), SyncJob("BTC-USDT-SWAP", START)],
+        now_ms=_now_after(rows_a),
+        concurrency=4,
+    )
+
+    assert errors == {}
+    assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == 150
+    assert len(store.load_ohlcv("BTC-USDT-SWAP", "1h")) == 150
+    assert {r.inst_id for r in results} == {"DOGE-USDT-SWAP", "BTC-USDT-SWAP"}
+
+
+def test_concurrent_backfill_marks_a_completed_history_resumable(store):
+    count = MULTI_WINDOW_BARS
+    rows = [candle(START + i * HOUR_MS) for i in range(count)]
+
+    sync_ohlcv_concurrent(
+        lambda: FakeCandles(rows),
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START)],
+        now_ms=_now_after(rows),
+        concurrency=4,
+    )
+
+    # A finished concurrent walk must record its span, or the next run would
+    # decide the history was never covered and re-walk all of it. Resumption
+    # lands one bar before the newest, to re-read a tail written mid-page.
+    newest = START + (count - 1) * HOUR_MS
+    resume = incremental_start(store, "DOGE-USDT-SWAP", "1h", default_start_ms=START)
+    assert resume == newest - HOUR_MS
+
+
+def test_concurrent_backfill_isolates_a_failing_instrument(store):
+    good = [candle(START + i * HOUR_MS) for i in range(150)]
+
+    def factory():
+        class Selective(FakeCandles):
+            def __init__(self):
+                super().__init__([])
+
+            def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+                if inst_id == "BROKEN":
+                    raise RuntimeError("connection reset")
+                self.rows = sorted(good, key=lambda r: int(r[0]), reverse=True)
+                return super().history_candles(inst_id, bar, before_ts, limit)
+
+        return Selective()
+
+    _, errors = sync_ohlcv_concurrent(
+        factory,
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START), SyncJob("BROKEN", START)],
+        now_ms=_now_after(good),
+        concurrency=4,
+    )
+
+    # The healthy instrument still lands; the broken one is reported, not raised.
+    assert "BROKEN" in errors
+    assert len(store.load_ohlcv("DOGE-USDT-SWAP", "1h")) == 150
+    # And the broken one is left un-finished, so a rerun restarts its walk.
+    assert incremental_start(store, "BROKEN", "1h", default_start_ms=START) == START
+
+
+def test_concurrent_backfill_reaches_the_requested_start_across_windows(store):
+    # A window that stops short would leave a hole between two others. Pin that
+    # the union of windows spans [start, newest] with no gaps.
+    count = MULTI_WINDOW_BARS
+    rows = [candle(START + i * HOUR_MS) for i in range(count)]
+
+    sync_ohlcv_concurrent(
+        lambda: FakeCandles(rows),
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START)],
+        now_ms=_now_after(rows),
+        concurrency=8,
+    )
+
+    frame = store.load_ohlcv("DOGE-USDT-SWAP", "1h")
+    stored_ts = [int(ts.timestamp() * 1000) for ts in frame.index]
+    expected = [START + i * HOUR_MS for i in range(count)]
+    assert stored_ts == expected, "windows left a gap or overlap in the timeline"
