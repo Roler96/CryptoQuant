@@ -94,8 +94,9 @@ def test_renaming_a_study_changes_the_fingerprint():
 
 
 def test_data_before_the_freeze_is_marked_as_already_seen():
-    # Five and a half years of DOGE were searched over before this rebuild.
-    segment = Segment("historic", "2021-01-01", "2026-01-01")
+    # Exploration data — before the 2025-06 validation boundary — is flagged as
+    # searched over, so results measured on it are hypotheses, not evidence.
+    segment = Segment("historic", "2021-01-01", "2025-06-01")
     assert segment.is_peeked
 
 

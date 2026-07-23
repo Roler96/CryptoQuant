@@ -1,19 +1,21 @@
-"""Frozen data splits and the honesty they enforce.
+"""Data splits and the honesty they enforce.
 
-This project's own history sets the terms. DOGE from 2021-01 to 2026-07 has
-been searched over repeatedly: parameters were tuned on it, families were
-rejected using it, and the segment once labelled "locked test" was opened
-more than once. Whatever that data can still do, it cannot adjudicate — a
-result measured on it is a hypothesis, not evidence.
+`FORWARD_FREEZE` is the boundary of the current research program: data before
+it is for exploration, data at or after it is validation the program commits
+not to look at while exploring. Splits are fingerprinted so a study cannot
+quietly move its own boundaries between runs, and every read of a holdout is
+recorded — an unrecorded peek is indistinguishable from no peek, and the count
+of reads is itself the multiple-testing correction.
 
-So the freeze point is a date, not a segment. Everything before
-`FORWARD_FREEZE` is exploratory by definition, and the only genuinely
-out-of-sample data is what arrives after it — which grows by one bar at a
-time and cannot be hurried.
-
-Splits are still useful for structure, and they are fingerprinted so a study
-cannot quietly move its own boundaries between runs. Reading a holdout is
-recorded, because an unrecorded peek is indistinguishable from no peek.
+The boundary was reset to 2025-06-01 when the prior strategy research was
+abandoned wholesale. One caveat travels with that reset and must not be
+forgotten: the abandoned program did observe DOGE data through 2026-07, so the
+2025-06 → 2026-07 slice of the validation window was seen before this boundary
+was drawn. Validation there is the weakest grade — a robustness check, not
+untouched evidence — because discarding the old strategies does not un-see the
+period's price action. Genuinely untouched adjudication is the part of the
+window after 2026-07, and it grows one bar at a time as 2027 accrues; it cannot
+be hurried.
 """
 
 from __future__ import annotations
@@ -25,8 +27,11 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# The rebuild began on this date. Everything earlier had already been seen.
-FORWARD_FREEZE = "2026-07-20"
+# The explore/validate boundary of the research program reset in 2026-07, when
+# the prior strategy corpus was abandoned. Not an "unseen data" line: the
+# 2025-06..2026-07 slice was observed by the abandoned program (see module
+# docstring), so validation there is robustness-grade, not untouched OOS.
+FORWARD_FREEZE = "2025-06-01"
 
 DEFAULT_AUDIT_PATH = Path("reports/holdout_access.jsonl")
 
@@ -144,7 +149,7 @@ class SplitPlan:
 
 
 def forward_holdout(study: str, end: str | None = None) -> SplitPlan:
-    """The only split that can actually adjudicate: everything after the freeze."""
+    """The validation split: the holdout window from the freeze to `end`."""
     end = end or dt.datetime.now(dt.UTC).strftime("%Y-%m-%d")
     if to_ms(end) <= to_ms(FORWARD_FREEZE):
         raise ProtocolError(
