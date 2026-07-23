@@ -368,6 +368,19 @@ class Store:
         ).fetchone()
         return (row["n"], row["lo"], row["hi"])
 
+    def ohlcv_timeframes(self, inst_id: str) -> list[str]:
+        """Timeframes with stored bars for an instrument, unordered.
+
+        Coverage reporting drove this out: it used to assume the base timeframe
+        was the only one ever stored, so anything fetched at another resolution
+        was invisible in the record of what the database holds.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT timeframe FROM ohlcv WHERE inst_id=?",
+            (inst_id,),
+        ).fetchall()
+        return [row["timeframe"] for row in rows]
+
     def load_ohlcv(
         self,
         inst_id: str,

@@ -7,7 +7,7 @@ import datetime as dt
 
 import pandas as pd
 
-from cq.core.clock import BASE_TIMEFRAME
+from cq.core.clock import BASE_TIMEFRAME, duration_ms
 from cq.data.derivatives import archive_funding, archive_open_interest
 from cq.data.fetch import incremental_start, sync_ohlcv
 from cq.data.okx import OkxPublicClient
@@ -167,8 +167,14 @@ def cmd_coverage(args: argparse.Namespace) -> int:
         print(f"{'series':<24}{'rows':>7}  {'oldest':<17}{'newest':<17}{'lag':>10}")
         print("-" * 76)
         for inst_id in universe.all_instruments:
-            count, lo, hi = store.ohlcv_coverage(inst_id, BASE_TIMEFRAME)
-            print(_coverage_line(f"{BASE_TIMEFRAME} {inst_id}", count, lo, hi, now_ms))
+            # Every stored timeframe, not just the base: a series fetched at 5m
+            # was previously absent from coverage entirely. The base line is
+            # kept even when nothing is stored so an instrument that has never
+            # been synced still reports "never" rather than vanishing.
+            timeframes = set(store.ohlcv_timeframes(inst_id)) | {BASE_TIMEFRAME}
+            for timeframe in sorted(timeframes, key=duration_ms):
+                count, lo, hi = store.ohlcv_coverage(inst_id, timeframe)
+                print(_coverage_line(f"{timeframe:<3} {inst_id}", count, lo, hi, now_ms))
         for inst_id in universe.swap:
             count, lo, hi = store.funding_coverage(inst_id)
             print(_coverage_line(f"funding {inst_id}", count, lo, hi, now_ms))

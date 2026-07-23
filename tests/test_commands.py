@@ -7,11 +7,12 @@ import argparse
 
 import pytest
 
-from cq.data.commands import cmd_quality
+from cq.data.commands import cmd_coverage, cmd_quality
 from cq.data.store import Store
 from cq.universe import DEFAULT_UNIVERSE_PATH, PACKAGED_UNIVERSE_PATH, load_universe
 
 HOUR_MS = 3_600_000
+MIN5_MS = 5 * 60_000
 START = 1_700_000_000_000 - (1_700_000_000_000 % (24 * HOUR_MS))
 
 
@@ -35,6 +36,47 @@ def quality_args(db, universe, timeframe="1h"):
     return argparse.Namespace(
         db=str(db), universe=str(universe), timeframe=timeframe, show_gaps=5
     )
+
+
+def coverage_args(db, universe):
+    return argparse.Namespace(db=str(db), universe=str(universe))
+
+
+def test_coverage_lists_every_stored_timeframe(tmp_path, universe_file, capsys):
+    # A 5m series used to be invisible: coverage only ever queried the 1h base,
+    # so a whole resolution stored in the database went unreported.
+    db = tmp_path / "cq.db"
+    with Store(db) as store:
+        bars(store, 24)  # 1h
+        store.upsert_ohlcv(
+            [
+                ("DOGE-USDT", "5m", START + i * MIN5_MS, 1.0, 2.0, 0.5, 1.5, 100.0, 150.0)
+                for i in range(288)
+            ]
+        )
+
+    code = cmd_coverage(coverage_args(db, universe_file))
+
+    out = capsys.readouterr().out
+    assert "5m  DOGE-USDT" in out, out
+    assert "1h  DOGE-USDT" in out, out
+    # Ordered by bar size: the finer 5m line comes before 1h.
+    assert out.index("5m  DOGE-USDT") < out.index("1h  DOGE-USDT"), out
+    assert code == 0
+
+
+def test_coverage_keeps_a_base_line_for_an_unsynced_instrument(tmp_path, universe_file, capsys):
+    # Showing every stored timeframe must not drop the "this was never synced"
+    # signal for an instrument that has no rows at all.
+    db = tmp_path / "cq.db"
+    Store(db).close()
+
+    code = cmd_coverage(coverage_args(db, universe_file))
+
+    out = capsys.readouterr().out
+    assert "1h  DOGE-USDT" in out, out
+    assert "never" in out, out
+    assert code == 0
 
 
 def test_quality_on_a_higher_timeframe_resamples_the_stored_base(tmp_path, universe_file, capsys):
