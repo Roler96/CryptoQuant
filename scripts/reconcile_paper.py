@@ -3,8 +3,20 @@
 
 The calibration instrument the M5 gate needs: the live path and the backtest
 share the decision (`Context` over closed bars) and the sizing (`target_delta`),
-and differ only in the broker. This script proves that on real data — it takes a
-`logs/paper/*.jsonl` session and checks, bar by bar, that:
+and differ only in the broker. This is a CODE-vs-CODE check — it establishes
+that the backtest engine faithfully mirrors the live code path, which is the
+discrimination the gate lacked.
+
+Scope, stated so it is not mistaken for more: OKX *demo* fills and prices differ
+from production (a separate simulated book), so the demo decision bars come from
+the public production feed but the demo fills do not reflect real depth or
+slippage. The load-bearing results here are the decision, accounting and band
+parity (sections 1-3) and the decision half of section 5 - those hold whatever
+prices the venue printed. The realised slippage/fee (section 4) are *demo*
+figures shown for context only; they do NOT calibrate production execution cost,
+which only real-money fills or a deliberately pessimistic model can bound.
+
+It takes a `logs/paper/*.jsonl` session and checks, bar by bar, that:
 
 1. DECISION PARITY (exact, log-only): feeding each bar's live pre-trade state
    through the *same* `target_delta` the backtest uses reproduces the live order
@@ -289,11 +301,11 @@ def _render(payload: dict[str, Any]) -> str:
         f"- {'PASS' if be['band_passed'] else 'FAIL'}: "
         f"{len(be['band_breaks'])} bars held past the band",
         "",
-        "## 4. Execution calibration (realised vs modelled)",
+        "## 4. Demo execution (context only — OKX demo ≠ production fills)",
         f"- trades: {be['trades']}",
-        f"- slippage: realised {be['mean_slippage_bps']:+.2f} bps vs model "
-        f"{be['model_slippage_bps']:.2f} bps (fill vs decision close)",
-        f"- fee: realised {be['mean_fee_bps']:.2f} bps vs model {be['model_fee_bps']:.2f} bps",
+        f"- slippage: demo {be['mean_slippage_bps']:+.2f} bps vs model "
+        f"{be['model_slippage_bps']:.2f} bps (fill vs decision close) — DEMO, not production",
+        f"- fee: demo {be['mean_fee_bps']:.2f} bps vs model {be['model_fee_bps']:.2f} bps",
         "",
         "## 5. Backtest equity parity",
     ]
@@ -354,8 +366,8 @@ def main() -> int:
 
     exact_passed = decision["passed"] and accounting["passed"] and band_exec["band_passed"]
     verdict = (
-        "RECONCILED: decisions, accounting and band semantics match; "
-        "equity gap explained by execution cost"
+        "RECONCILED (code parity): decisions, accounting and band semantics match; "
+        "residual equity gap is demo-fill execution, not a production cost calibration"
         if exact_passed
         else "DIVERGENCE: see failed sections above"
     )

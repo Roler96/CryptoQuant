@@ -133,26 +133,31 @@ closed 1h bars, one entry then a hold) — **RECONCILED**:
   buy fee in **base coin** (≈305 fewer DOGE), while the sim models the fee as a
   quote-cash deduction and keeps full base. Same equity hit, different split.
 - **Band semantics (exact):** 0 bars held past the weight-drift band.
-- **Execution calibration:** realised slippage +5.51 bps vs the modelled 5.00
-  (the fill was a touch worse than the decision close, as designed — never
-  better); realised fee 10.00 bps vs the modelled 10.00 (OKX demo taker = the
-  model exactly).
-- **Backtest equity parity:** a real `run_backtest` over the same bars, seeded
-  at the session's opening equity, tracked the live equity to a **max per-bar
-  relative difference of 0.0018%** (live final 73,889.25 vs backtest 73,890.40),
-  the gap fully attributed to the +0.51 bps slippage and the fee-currency split.
+- **Demo execution (context only):** demo slippage +5.51 bps and fee 10.00 bps.
+  These are **OKX demo figures, not production** — the demo runs a separate
+  simulated book, so they do not calibrate real execution cost and are not
+  claimed to. Real slippage stays an unknown to be bounded pessimistically.
+- **Backtest equity parity:** a real `run_backtest` over the same production
+  bars, seeded at the session's opening equity, tracked the live equity to a
+  **max per-bar relative difference of 0.0018%** (live final 73,889.25 vs
+  backtest 73,890.40). The decision half of this is a real code check; the
+  residual gap is demo fill price vs the modelled fill, not a production number.
 
-This is the discrimination the gate lacked: a divergence between the live path
-(CCXT/OKX) and the backtest (SimBroker) — genuinely different code — would be an
-engine defect by construction, and there was none beyond the two bounded,
-attributed execution effects. **It does not by itself flip the headline verdict:**
-15 bars with a single rebalance is a thin first cross-check, and it says nothing
-about the separate Donchian-baseline discrepancy (1,052.8% vs 1,747%), which is
-about pre-rebuild code and an ambiguous rule. The gate stays formally open until
-more bars and rebalances accrue, but Option 3's tooling is proven and its first
-result is a clean pass on the paper-vs-live axis — the strongest axis, because it
-validates the code that will actually be deployed. Re-run as the session grows:
-`uv run python scripts/reconcile_paper.py`.
+**What this establishes, and what it does not.** OKX demo fills and prices differ
+from production by construction, so this is a **code-vs-code** cross-check, not a
+market-realism one. It establishes the engine faithfulness the gate lacked: the
+live path (CCXT/OKX) and the backtest (SimBroker) — genuinely different code —
+produce identical decisions, accounting and band behaviour on the same public
+production bars, with no divergence attributable to the engine. It does **not**
+establish that the cost model matches real execution (demo fills are not real
+fills), and it says nothing about the Donchian-baseline discrepancy (1,052.8% vs
+1,747%, pre-rebuild code and an ambiguous rule). The gate stays formally open:
+15 bars with a single rebalance is a thin code cross-check, and production cost
+realism remains outside what demo can prove. Option 3's tooling is nonetheless
+proven and passing on the axis it can speak to. One real modelling gap it
+surfaced — the base-currency spot fee — is an accounting convention worth
+confirming against production/OKX docs before it is modelled, not assumed from
+demo. Re-run as the session grows: `uv run python scripts/reconcile_paper.py`.
 
 ## Reproducing this record
 
