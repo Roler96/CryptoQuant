@@ -115,9 +115,44 @@ It is now paper-runnable:
 cq paper run --strategy constant-mix --weight 0.3 --band 0.1 --inst DOGE-USDT --tf 1h
 ```
 
-Opening the gate this way still requires a demo session to accrue bars and a
-script that reconciles its JSONL log against a backtest over the same bars;
-that reconciliation is not yet written. The instrument and the live wiring are.
+Opening the gate this way requires a demo session to accrue bars and a script
+that reconciles its JSONL log against a backtest over the same bars. Both now
+exist: the reconciler is `scripts/reconcile_paper.py`.
+
+### First reconcile result (2026-07-23)
+
+`scripts/reconcile_paper.py` on the first constant-mix demo session
+(`logs/paper/DOGE-USDT_1h_20260722T112312Z.jsonl`, `doge-cmix-w0.3-b0.1`, 15
+closed 1h bars, one entry then a hold) — **RECONCILED**:
+
+- **Decision parity (exact):** feeding each bar's live pre-trade state through
+  the backtest's own `target_delta` reproduced every live order — 15/15 bars,
+  0 mismatches. The live and backtest sizing are provably the same code.
+- **Accounting (exact):** logged post-trade holding and cash follow from the
+  fill on all bars. It surfaced one real convention gap: OKX charged the spot
+  buy fee in **base coin** (≈305 fewer DOGE), while the sim models the fee as a
+  quote-cash deduction and keeps full base. Same equity hit, different split.
+- **Band semantics (exact):** 0 bars held past the weight-drift band.
+- **Execution calibration:** realised slippage +5.51 bps vs the modelled 5.00
+  (the fill was a touch worse than the decision close, as designed — never
+  better); realised fee 10.00 bps vs the modelled 10.00 (OKX demo taker = the
+  model exactly).
+- **Backtest equity parity:** a real `run_backtest` over the same bars, seeded
+  at the session's opening equity, tracked the live equity to a **max per-bar
+  relative difference of 0.0018%** (live final 73,889.25 vs backtest 73,890.40),
+  the gap fully attributed to the +0.51 bps slippage and the fee-currency split.
+
+This is the discrimination the gate lacked: a divergence between the live path
+(CCXT/OKX) and the backtest (SimBroker) — genuinely different code — would be an
+engine defect by construction, and there was none beyond the two bounded,
+attributed execution effects. **It does not by itself flip the headline verdict:**
+15 bars with a single rebalance is a thin first cross-check, and it says nothing
+about the separate Donchian-baseline discrepancy (1,052.8% vs 1,747%), which is
+about pre-rebuild code and an ambiguous rule. The gate stays formally open until
+more bars and rebalances accrue, but Option 3's tooling is proven and its first
+result is a clean pass on the paper-vs-live axis — the strongest axis, because it
+validates the code that will actually be deployed. Re-run as the session grows:
+`uv run python scripts/reconcile_paper.py`.
 
 ## Reproducing this record
 
