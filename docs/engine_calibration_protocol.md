@@ -1,4 +1,4 @@
-# Engine calibration protocol — v2026-07-24.2
+# Engine calibration protocol — v2026-07-24.3
 
 > This is an engineering protocol, not a strategy study. It produces no claim
 > about profitability and does not calibrate production slippage from OKX demo.
@@ -35,6 +35,8 @@ new engine.
 - funding: `off`;
 - source session and time range must be named explicitly. `latest` is
   forbidden;
+- before exchange connection, the command fingerprints the complete calibrated
+  source set and writes that immutable identity into every event;
 - the source log, protocol and engine inputs are SHA-256 fingerprinted.
 
 The current constant-mix session with `weight=0.3, band=0.1` may be retained as
@@ -77,17 +79,19 @@ and no rebalance remains insufficient.
 
 Every eligible session must satisfy all of these:
 
-1. timestamps are contiguous and match the frozen timeframe;
-2. live fills match both the shared sizing implementation and a separately
+1. every event carries one identical runtime engine fingerprint and it matches
+   the source tree that the artifact will certify;
+2. timestamps are contiguous and match the frozen timeframe;
+3. live fills match both the shared sizing implementation and a separately
    implemented calibration formula;
-3. no-trade/trade decisions agree with the band;
-4. logged cash and holdings reconcile exactly, allowing only the explicitly
+4. no-trade/trade decisions agree with the band;
+5. logged cash and holdings reconcile exactly, allowing only the explicitly
    identified base-fee or quote-fee convention;
-5. pre-trade equity equals marked cash plus holdings, and one row's post-trade
+6. pre-trade equity equals marked cash plus holdings, and one row's post-trade
    state becomes the next row's pre-trade state;
-6. a real backtest covers every logged bar; unavailable or partial comparison
+7. a real backtest covers every logged bar; unavailable or partial comparison
    is a failure;
-7. every check above has a Boolean PASS in the artifact. Missing evidence fails
+8. every check above has a Boolean PASS in the artifact. Missing evidence fails
    closed.
 
 The raw demo-vs-model equity gap is reported but is not used to infer production

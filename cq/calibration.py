@@ -25,7 +25,7 @@ Capability = Literal["spot", "swap"]
 SizingMode = Literal["on_entry", "rebalance"]
 
 SCHEMA_VERSION = 1
-PROTOCOL_VERSION = "2026-07-24.2"
+PROTOCOL_VERSION = "2026-07-24.3"
 DEFAULT_ARTIFACT_DIR = Path("reports/calibration")
 SPOT_REBALANCE_CHECKS = frozenset(
     {
@@ -36,6 +36,7 @@ SPOT_REBALANCE_CHECKS = frozenset(
         "event_coverage",
         "backtest_available",
         "backtest_complete",
+        "runtime_source_match",
     }
 )
 REQUIRED_CHECKS: dict[tuple[Capability, SizingMode], frozenset[str]] = {

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import cast
 
+from cq.calibration import CalibrationClosed, engine_fingerprint
 from cq.core.clock import BASE_TIMEFRAME
 from cq.core.types import Side
 from cq.data.feed import FeedStalledError, LiveFeed
@@ -196,6 +197,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.new_session and not calibration:
         print("--new-session is reserved for the fail-closed calibration sequence")
         return 1
+    runtime_engine_fingerprint = None
+    if calibration:
+        try:
+            runtime_engine_fingerprint = engine_fingerprint()
+        except CalibrationClosed as exc:
+            print(f"refusing calibration with unidentifiable engine source: {exc}")
+            return 1
     if not swap and (args.leverage != 1.0 or args.margin_mode != "cross"):
         print("--leverage and --margin-mode only apply to swap instruments")
         return 1
@@ -305,6 +313,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 on_event=on_event,
                 max_bars=max_bars,
                 resume=resume,
+                runtime_engine_fingerprint=runtime_engine_fingerprint,
             )
         except KeyboardInterrupt:
             print("\n  stopped")
@@ -339,6 +348,7 @@ def _event_row(event: PaperEvent) -> dict:
         "average_entry": event.average_entry,
         "strategy_state": event.strategy_state,
         "account_event_cursor": event.account_event_cursor,
+        "runtime_engine_fingerprint": event.runtime_engine_fingerprint,
         "account_events": [
             {
                 "bill_id": item.bill_id,

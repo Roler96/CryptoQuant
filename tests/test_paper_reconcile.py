@@ -43,9 +43,36 @@ def row(reconcile, position: int, *, fill=None, rejected: int = 0, **changes):
         "account_events": (),
         "strategy_state": None,
         "has_full_ohlcv": True,
+        "runtime_engine_fingerprint": "runtime-fingerprint",
     }
     values.update(changes)
     return reconcile.Row(**values)
+
+
+def test_runtime_provenance_requires_every_row_to_match_current_source(reconcile, monkeypatch):
+    monkeypatch.setattr(reconcile, "engine_fingerprint", lambda: "current")
+    matching = row(
+        reconcile,
+        0,
+        runtime_engine_fingerprint="current",
+    )
+    missing = row(
+        reconcile,
+        1,
+        runtime_engine_fingerprint=None,
+    )
+    stale = row(
+        reconcile,
+        2,
+        runtime_engine_fingerprint="stale",
+    )
+
+    passed = reconcile._runtime_provenance([matching])
+    assert passed["passed"]
+    assert passed["missing_rows"] == 0
+
+    assert not reconcile._runtime_provenance([matching, missing])["passed"]
+    assert not reconcile._runtime_provenance([matching, stale])["passed"]
 
 
 def test_independent_formula_catches_a_shared_sizing_false_agreement(

@@ -56,6 +56,7 @@ import numpy as np
 
 from cq.calibration import (
     build_gate_artifact,
+    engine_fingerprint,
     file_sha256,
     write_gate_artifact,
 )
@@ -74,7 +75,7 @@ from cq.research.split import ProtocolError, forward_holdout, record_holdout_acc
 CALIBRATION_STUDY = "ENGINE_CALIBRATION_SPOT_V1"
 CALIBRATION_HYPOTHESIS = (
     "the named deterministic spot/rebalance session satisfies every exact parity and "
-    "event-coverage check in engine calibration protocol v2026-07-24.2"
+    "event-coverage check in engine calibration protocol v2026-07-24.3"
 )
 MIN_BARS = 200
 MIN_POST_INITIAL_FILLS = 20
@@ -107,6 +108,7 @@ class Row:
     account_events: tuple[dict[str, Any], ...]
     strategy_state: dict[str, Any] | None
     has_full_ohlcv: bool
+    runtime_engine_fingerprint: str | None
 
 
 def _load_rows(path: Path) -> list[Row]:
@@ -141,9 +143,31 @@ def _load_rows(path: Path) -> list[Row]:
                 has_full_ohlcv=all(
                     field in r for field in ("open", "high", "low", "close", "volume")
                 ),
+                runtime_engine_fingerprint=(
+                    r["runtime_engine_fingerprint"]
+                    if isinstance(r.get("runtime_engine_fingerprint"), str)
+                    else None
+                ),
             )
         )
     return rows
+
+
+def _runtime_provenance(rows: list[Row]) -> dict[str, Any]:
+    """Prove the finished log was emitted by the engine source being certified."""
+    current = engine_fingerprint()
+    recorded = {
+        row.runtime_engine_fingerprint
+        for row in rows
+        if row.runtime_engine_fingerprint is not None
+    }
+    missing_rows = sum(row.runtime_engine_fingerprint is None for row in rows)
+    return {
+        "passed": missing_rows == 0 and recorded == {current},
+        "current_engine_fingerprint": current,
+        "recorded_engine_fingerprints": sorted(recorded),
+        "missing_rows": missing_rows,
+    }
 
 
 def _signed_fill(fill: dict[str, Any] | None) -> tuple[float, float, float]:
@@ -481,6 +505,7 @@ def _render(payload: dict[str, Any]) -> str:
     be = payload["band_exec"]
     coverage = payload["coverage"]
     frozen = payload["frozen_sequence"]
+    provenance = payload["runtime_provenance"]
     eq = payload["equity"]
     lines = [
         f"# Paper↔backtest reconcile — {payload['log']}",
@@ -488,14 +513,19 @@ def _render(payload: dict[str, Any]) -> str:
         f"Session: {payload['strategy']} on {payload['inst']} {payload['timeframe']}, "
         f"{payload['bars']} bars, {payload['range']}",
         "",
-        "## 0. Frozen calibration sequence",
+        "## 0. Runtime source provenance",
+        f"- {'PASS' if provenance['passed'] else 'FAIL'}: "
+        f"{provenance['missing_rows']} rows missing a runtime fingerprint; "
+        f"{len(provenance['recorded_engine_fingerprints'])} distinct fingerprints",
+        "",
+        "## 1. Frozen calibration sequence",
         f"- {'PASS' if frozen['passed'] else 'FAIL'}: "
         + ", ".join(
             f"{name}={'PASS' if passed else 'FAIL'}"
             for name, passed in frozen["checks"].items()
         ),
         "",
-        "## 1. Decision parity (exact, shared + independent sizing)",
+        "## 2. Decision parity (exact, shared + independent sizing)",
         f"- {'PASS' if d['passed'] else 'FAIL'}: {d['bars']} bars, "
         f"{len(d['mismatches'])} mismatches",
     ]
@@ -506,7 +536,7 @@ def _render(payload: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "## 2. Accounting consistency + fee convention",
+        "## 3. Accounting consistency + fee convention",
         f"- {'PASS' if a['passed'] else 'FAIL'}: {len(a['breaks'])} breaks",
         f"- fee charged in BASE coin on {a['fee_in_base_bars']} trade bars, "
         f"in QUOTE on {a['fee_in_quote_bars']} — the sim models a quote deduction, so a "
@@ -517,24 +547,24 @@ def _render(payload: dict[str, Any]) -> str:
         lines.append(f"  - ts {b['ts']}: {b['why']}")
     lines += [
         "",
-        "## 3. Band semantics",
+        "## 4. Band semantics",
         f"- {'PASS' if be['band_passed'] else 'FAIL'}: "
         f"{len(be['band_breaks'])} bars held past the band",
         f"- inside-band holds: {be['holds_inside_band']}; "
         f"post-initial outside-band trades: {be['post_initial_trades_outside_band']}",
         "",
-        "## 4. Frozen event coverage",
+        "## 5. Frozen event coverage",
         f"- {'PASS' if coverage['passed'] else 'FAIL'}: "
         f"{coverage['bars']} bars, {coverage['post_initial_fills']} post-initial fills "
         f"({coverage['post_initial_buys']} buys, {coverage['post_initial_sells']} sells)",
         "",
-        "## 5. Demo execution (context only — OKX demo ≠ production fills)",
+        "## 6. Demo execution (context only — OKX demo ≠ production fills)",
         f"- trades: {be['trades']}",
         f"- slippage: demo {be['mean_slippage_bps']:+.2f} bps vs model "
         f"{be['model_slippage_bps']:.2f} bps (fill vs decision close) — DEMO, not production",
         f"- fee: demo {be['mean_fee_bps']:.2f} bps vs model {be['model_fee_bps']:.2f} bps",
         "",
-        "## 6. Backtest equity parity",
+        "## 7. Backtest equity parity",
     ]
     if not eq["available"]:
         lines.append(f"- skipped: {eq['reason']}")
@@ -627,6 +657,7 @@ def main() -> int:
         return 2
 
     decision = _decision_parity(rows)
+    provenance = _runtime_provenance(rows)
     accounting = _accounting(rows)
     band_exec = _band_and_execution(rows)
     coverage = _coverage(rows, head["timeframe"], band_exec)
@@ -641,6 +672,7 @@ def main() -> int:
         "event_coverage": coverage["passed"],
         "backtest_available": equity["available"],
         "backtest_complete": bool(equity.get("complete", False)),
+        "runtime_source_match": provenance["passed"],
     }
     exact_passed = all(checks.values())
     verdict = (
@@ -664,6 +696,7 @@ def main() -> int:
         "band_exec": band_exec,
         "coverage": coverage,
         "frozen_sequence": frozen,
+        "runtime_provenance": provenance,
         "equity": equity,
         "exact_passed": exact_passed,
         "verdict": verdict,
@@ -691,6 +724,9 @@ def main() -> int:
             "range_start_ms": rows[0].ts,
             "range_end_ms": rows[-1].ts,
             "holdout_fingerprint": split.fingerprint,
+            "runtime_engine_fingerprint": provenance["current_engine_fingerprint"],
+            "runtime_fingerprint_missing_rows": provenance["missing_rows"],
+            "runtime_fingerprints_recorded": provenance["recorded_engine_fingerprints"],
         }
         artifact = build_gate_artifact(
             "spot",

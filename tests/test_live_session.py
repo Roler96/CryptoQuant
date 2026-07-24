@@ -492,6 +492,7 @@ def test_event_checkpoint_records_post_trade_cost_and_strategy_state():
         inst_id=INST,
         timeframe=TF,
         max_bars=1,
+        runtime_engine_fingerprint="source-fingerprint",
     )[0]
     row = _event_row(event)
 
@@ -507,6 +508,7 @@ def test_event_checkpoint_records_post_trade_cost_and_strategy_state():
     assert row["cash_after"] < 1000.0
     assert row["average_entry"] == pytest.approx(0.073)
     assert row["strategy_state"] == {"count": 1, "weight": 0.05, "period": 1}
+    assert row["runtime_engine_fingerprint"] == "source-fingerprint"
 
 
 def test_probe_phase_and_cost_basis_continue_from_a_checkpoint():

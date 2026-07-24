@@ -65,6 +65,7 @@ class PaperEvent:
     strategy_state: dict[str, object] | None
     account_events: tuple[AccountEvent, ...]
     account_event_cursor: int | None
+    runtime_engine_fingerprint: str | None
 
 
 class _LiveLoopBroker:
@@ -78,6 +79,7 @@ class _LiveLoopBroker:
         timeframe: str,
         average_entry: float | None,
         account_event_cursor: int | None,
+        runtime_engine_fingerprint: str | None,
     ):
         self.strategy = strategy
         self.broker = broker
@@ -85,6 +87,7 @@ class _LiveLoopBroker:
         self.timeframe = timeframe
         self.average_entry = average_entry
         self.account_event_cursor = account_event_cursor
+        self.runtime_engine_fingerprint = runtime_engine_fingerprint
 
     def before_bar(self, bar: Bar) -> None:
         """The venue has already applied fills, protection, funding and liq."""
@@ -265,6 +268,7 @@ class _LiveLoopBroker:
             strategy_state=strategy_state,
             account_events=account_events,
             account_event_cursor=self.account_event_cursor,
+            runtime_engine_fingerprint=self.runtime_engine_fingerprint,
         )
 
 
@@ -278,6 +282,7 @@ def run_paper(
     on_event: Callable[[PaperEvent], None] | None = None,
     max_bars: int | None = None,
     resume: SessionResume | None = None,
+    runtime_engine_fingerprint: str | None = None,
 ) -> None:
     """Drive `strategy` against a live `feed`, routing targets to `broker`.
 
@@ -316,6 +321,7 @@ def run_paper(
         timeframe,
         average_entry,
         account_event_cursor,
+        runtime_engine_fingerprint,
     )
     # A fresh run uses the loop's canonical reset. Recovery restored explicit
     # checkpoint state above, so the loop must preserve it.
