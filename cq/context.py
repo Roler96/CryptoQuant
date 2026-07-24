@@ -191,8 +191,20 @@ class Context:
     instruments, other timeframes — are aligned to it by close time.
     """
 
-    def __init__(self, primary: Series, aux: Iterable[Series] = ()):
+    def __init__(
+        self,
+        primary: Series,
+        aux: Iterable[Series] = (),
+        *,
+        index_offset: int = 0,
+    ):
+        if index_offset < 0:
+            raise ValueError(f"index_offset must be non-negative, got {index_offset}")
         self._primary = primary
+        # Live contexts retain only a bounded lookback window. The offset keeps
+        # `index` on the same logical bar ordinal a historical context exposes,
+        # even after older in-memory bars have been discarded.
+        self._index_offset = index_offset
         self._aux: dict[tuple[str, str], Series] = {}
         for series in aux:
             if series.key in self._aux:
@@ -216,7 +228,9 @@ class Context:
 
     @property
     def index(self) -> int:
-        return self._cursor
+        if self._cursor < 0:
+            return -1
+        return self._index_offset + self._cursor
 
     @property
     def now(self) -> int:

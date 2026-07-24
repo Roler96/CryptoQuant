@@ -20,6 +20,11 @@ from cq.live.broker import (
     min_base_amount_of,
     spec_from_market,
 )
+from cq.live.calibration_probe import (
+    CALIBRATION_BAND,
+    CALIBRATION_BARS,
+    SpotCalibrationSequence,
+)
 from cq.live.client import (
     OkxTradeClient,
     TradeError,
@@ -74,9 +79,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     run.add_argument(
         "--strategy",
         default="probe",
-        choices=("probe", "constant-mix"),
-        help="probe (plumbing) or constant-mix (bounded-risk rebalancer, "
-        "frozen main is --weight 0.3 --band 0.1)",
+        choices=("probe", "constant-mix", "calibration-sequence"),
+        help="probe (plumbing), constant-mix, or demo-only calibration sequence",
     )
     run.add_argument(
         "--weight", type=float, default=0.02, help="target weight (probe default 0.02)"
@@ -109,6 +113,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="seconds past an expected bar close before the feed fails as stalled",
     )
     run.add_argument("--max-bars", type=int, default=None, help="stop after this many live bars")
+    run.add_argument(
+        "--new-session",
+        action="store_true",
+        help="ignore older checkpoints and require the exchange account to be flat",
+    )
     run.add_argument(
         "--live",
         action="store_true",
@@ -171,6 +180,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     """Run a strategy against live closed bars, trading on OKX demo by default."""
     inst, tf = args.inst, args.tf
     swap = is_swap(inst)
+    calibration = args.strategy == "calibration-sequence"
+    if calibration and args.live:
+        print("calibration-sequence is demo-only; --live is forbidden")
+        return 1
+    if calibration and (inst != "DOGE-USDT" or tf != "5m"):
+        print("calibration-sequence is frozen to DOGE-USDT spot 5m")
+        return 1
+    if calibration and not args.new_session:
+        print("calibration-sequence requires --new-session and a flat demo account")
+        return 1
+    if calibration and args.max_bars is not None and args.max_bars < CALIBRATION_BARS:
+        print(f"calibration-sequence requires at least {CALIBRATION_BARS} bars")
+        return 1
+    if args.new_session and not calibration:
+        print("--new-session is reserved for the fail-closed calibration sequence")
+        return 1
     if not swap and (args.leverage != 1.0 or args.margin_mode != "cross"):
         print("--leverage and --margin-mode only apply to swap instruments")
         return 1
@@ -195,7 +220,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"refusing unsupported paper market/account configuration: {exc}")
         return 1
     strategy: Strategy
-    if args.strategy == "constant-mix":
+    if calibration:
+        strategy = SpotCalibrationSequence()
+        dust = CALIBRATION_BAND
+    elif args.strategy == "constant-mix":
         # The live path re-sizes every bar, so it is REBALANCE by construction:
         # the band is the broker's dust fraction, exactly as in the backtest.
         strategy = DogeConstantMix(DogeConstantMixConfig(weight=args.weight, band=args.band))
@@ -209,7 +237,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         min_base_amount=min_base_amount_of(market),
         dust_fraction=dust,
     )
-    checkpoint = load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
+    checkpoint = None if args.new_session else load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
     feed = LiveFeed(
         public,
         inst,
@@ -262,9 +290,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             os.fsync(log.fileno())
 
         try:
+            max_bars = (
+                CALIBRATION_BARS
+                if calibration and args.max_bars is None
+                else args.max_bars
+            )
             run_paper(
-                strategy, broker, feed, inst, tf,
-                warmup=warmup, on_event=on_event, max_bars=args.max_bars, resume=resume,
+                strategy,
+                broker,
+                feed,
+                inst,
+                tf,
+                warmup=warmup,
+                on_event=on_event,
+                max_bars=max_bars,
+                resume=resume,
             )
         except KeyboardInterrupt:
             print("\n  stopped")
@@ -284,7 +324,11 @@ def _event_row(event: PaperEvent) -> dict:
         "inst_id": event.inst_id,
         "timeframe": event.timeframe,
         "strategy": event.strategy,
+        "open": event.open,
+        "high": event.high,
+        "low": event.low,
         "close": event.close,
+        "volume": event.volume,
         "target": event.target,
         "reason": event.reason,
         "held": event.held,

@@ -499,6 +499,10 @@ def test_event_checkpoint_records_post_trade_cost_and_strategy_state():
     assert row["inst_id"] == INST
     assert row["timeframe"] == TF
     assert row["strategy"] == "heartbeat-probe"
+    assert row["open"] == event.close
+    assert row["high"] == event.close
+    assert row["low"] == event.close
+    assert row["volume"] == 100.0
     assert row["held_after"] > 0
     assert row["cash_after"] < 1000.0
     assert row["average_entry"] == pytest.approx(0.073)

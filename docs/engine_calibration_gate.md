@@ -83,6 +83,11 @@ rule to a target figure produces agreement that means nothing.
 
 ## What would open the gate
 
+The executable acceptance criteria are now frozen separately in
+[`docs/engine_calibration_protocol.md`](engine_calibration_protocol.md).
+Passing evidence is capability-specific: a spot result cannot open swap
+research, and any relevant source change invalidates the artifact.
+
 1. **Forward data.** Genuine out-of-sample bars accrue after the 2026-07-20
    freeze. They adjudicate strategies, not engines, but they do give live and
    backtest something to disagree about.
@@ -92,7 +97,9 @@ rule to a target figure produces agreement that means nothing.
    same bars through a different broker: a divergence there is an engine
    defect by construction, which is the discrimination this gate lacked.
 
-Option 3 is the strongest and needs no historical baseline at all.
+Option 3 is the strongest and needs no historical baseline at all. Its current
+protocol covers only `spot/rebalance`; it cannot authorize `spot/on_entry` or
+any swap result.
 
 ### The instrument for option 3: constant-mix, not Donchian
 
@@ -115,9 +122,11 @@ It is now paper-runnable:
 cq paper run --strategy constant-mix --weight 0.3 --band 0.1 --inst DOGE-USDT --tf 1h
 ```
 
-Opening the gate this way requires a demo session to accrue bars and a script
-that reconciles its JSONL log against a backtest over the same bars. Both now
-exist: the reconciler is `scripts/reconcile_paper.py`.
+Opening the `spot/rebalance` scope this way requires a demo session to accrue
+the frozen event coverage and a script that reconciles its explicitly named
+JSONL log against a backtest over the same bars. The reconciler is
+`scripts/reconcile_paper.py`; the first session below predates the frozen
+coverage threshold and remains diagnostic only.
 
 ### First reconcile result (2026-07-23)
 
@@ -151,13 +160,16 @@ produce identical decisions, accounting and band behaviour on the same public
 production bars, with no divergence attributable to the engine. It does **not**
 establish that the cost model matches real execution (demo fills are not real
 fills), and it says nothing about the Donchian-baseline discrepancy (1,052.8% vs
-1,747%, pre-rebuild code and an ambiguous rule). The gate stays formally open:
+1,747%, pre-rebuild code and an ambiguous rule). The question remains
+unresolved and the gate stays **CLOSED**:
 15 bars with a single rebalance is a thin code cross-check, and production cost
 realism remains outside what demo can prove. Option 3's tooling is nonetheless
 proven and passing on the axis it can speak to. One real modelling gap it
 surfaced — the base-currency spot fee — is an accounting convention worth
 confirming against production/OKX docs before it is modelled, not assumed from
-demo. Re-run as the session grows: `uv run python scripts/reconcile_paper.py`.
+demo. Any terminal re-run must name the log and fixed exclusive holdout end,
+then record the access, as specified by
+`docs/engine_calibration_protocol.md`.
 
 ## Reproducing this record
 

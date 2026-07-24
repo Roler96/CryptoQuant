@@ -1,10 +1,11 @@
-"""The matching loop.
+"""The single closed-bar event loop.
 
-One loop drives backtest, paper and live: only the broker and the feed
-differ. That is the structural reason a backtest here cannot be more
-optimistic than live — there is no second implementation to drift from.
+`run_event_loop` drives backtest, paper and live. Only its `EngineFeed` and
+`LoopBroker` implementations differ, so warmup, strategy timing, lifecycle,
+observer dispatch and finite-run behavior cannot drift into separate runtime
+implementations.
 
-Order of events within a bar, fixed and singular:
+For the simulated broker, the fixed within-bar sequence is:
 
 1. funding settled up to and including this bar's open, against the position
    carried in, priced at the open;
@@ -12,11 +13,13 @@ Order of events within a bar, fixed and singular:
 3. protective exits and liquidation, triggered from this bar's high and low;
 4. funding settled strictly inside the bar, against the position now held,
    priced at the close;
-5. the strategy sees the closed bar and names a target for the next one;
-6. equity is marked at the close.
+5. the shared loop lets the strategy see the closed bar and name a target;
+6. the broker marks equity at the close.
 
-Step 5 comes after steps 2-3 by construction, so a strategy cannot act on a
-bar before that bar has finished.
+The live broker observes the same two loop phases, but the venue has already
+applied funding, protective exits and liquidation to the reconciled account.
+The target named after the close is submitted immediately for the next market
+tick instead of being filled from a historical next-open value.
 
 Splitting funding across steps 1 and 4 is what makes it land on the position
 that actually existed at each settlement. Charging every settlement in a bar
@@ -31,13 +34,14 @@ of vanishing with the missing bars.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, TypeVar
 
-from cq.context import Context, Series, series_fingerprint
+from cq.context import Bar, Context, Series, series_fingerprint
 from cq.core.clock import duration_ms
 from cq.core.types import CostModel, Fill, Intent, MarketSpec, Sizing
+from cq.data.feed import EngineFeed, HistoricalEngineFeed
 from cq.engine.funding import FundingModel, NoFunding
 from cq.engine.portfolio import FundingPayment, Portfolio
 from cq.engine.sim import Rejection, SimBroker
@@ -73,6 +77,66 @@ class Checkpointable(Protocol):
     def snapshot_state(self) -> dict[str, object]: ...
 
     def restore_state(self, state: dict[str, object]) -> None: ...
+
+
+EventT_co = TypeVar("EventT_co", covariant=True)
+EventT = TypeVar("EventT")
+
+
+class LoopBroker(Protocol[EventT_co]):
+    """Execution boundary used by the one shared closed-bar event loop.
+
+    `before_bar` handles everything that happened before the strategy may see
+    this closed bar: a simulated next-open fill and intrabar exits in a
+    backtest, or exchange reconciliation hooks in live trading.
+
+    `after_bar` accepts the target decided from that closed bar. A simulated
+    broker queues it for the next historical open; a live broker routes it to
+    the venue immediately after the close so it reaches the next market tick.
+    """
+
+    def before_bar(self, bar: Bar) -> None: ...
+
+    def after_bar(self, bar: Bar, intent: Intent | None) -> EventT_co | None: ...
+
+
+def run_event_loop(
+    strategy: Strategy,
+    feed: EngineFeed,
+    broker: LoopBroker[EventT],
+    *,
+    on_event: Callable[[EventT], None] | None = None,
+    max_bars: int | None = None,
+    reset_strategy: bool = True,
+) -> None:
+    """Drive backtest, paper and live through one fixed event sequence.
+
+    Feed implementations own only causal context construction. Broker
+    implementations own only execution/account state. Strategy scheduling,
+    warmup enforcement, lifecycle reset, observer dispatch and finite-run
+    bounds live here once.
+    """
+    if reset_strategy:
+        reset = getattr(strategy, "reset", None)
+        if callable(reset):
+            reset()
+
+    decisions = 0
+    for item in feed:
+        broker.before_bar(item.bar)
+        intent = (
+            strategy.on_bar(item.context)
+            if item.context is not None
+            else None
+        )
+        event = broker.after_bar(item.bar, intent)
+        if intent is None:
+            continue
+        if event is not None and on_event is not None:
+            on_event(event)
+        decisions += 1
+        if max_bars is not None and decisions >= max_bars:
+            return
 
 
 @dataclass(frozen=True)
@@ -187,6 +251,104 @@ class RunResult:
         )
 
 
+class _BacktestLoopBroker:
+    """Simulated implementation of the shared loop broker contract."""
+
+    def __init__(
+        self,
+        *,
+        broker: SimBroker,
+        portfolio: Portfolio,
+        result: RunResult,
+        funding: FundingModel,
+        sizing: Sizing,
+        bar_ms: int,
+        first_ts: int,
+    ):
+        self.broker = broker
+        self.portfolio = portfolio
+        self.result = result
+        self.funding = funding
+        self.sizing = sizing
+        self.bar_ms = bar_ms
+        self.pending: Intent | None = None
+        self.active = Intent()
+        self.is_swap = broker.spec.market_type == "swap"
+        self.settled_through = first_ts
+
+    def before_bar(self, bar: Bar) -> None:
+        """Apply the pre-decision half of the canonical bar sequence."""
+        if self.is_swap:
+            for ts, rate in self.funding.settlements(
+                self.settled_through, bar.ts + 1
+            ):
+                if not self.portfolio.is_flat:
+                    self.result.funding_payments.append(
+                        self.portfolio.apply_funding(ts, rate, bar.open)
+                    )
+
+        if self.pending is not None:
+            target_changed = self.pending.target != self.active.target
+            if self.sizing is Sizing.REBALANCE or target_changed:
+                delta = self.broker.quantity_for_target(
+                    self.pending.target,
+                    bar.open,
+                    self.portfolio.equity(bar.open),
+                    self.portfolio.quantity,
+                    self.portfolio.cash,
+                )
+                fill = self.broker.execute(
+                    self.portfolio,
+                    bar,
+                    delta,
+                    reason=self.pending.reason,
+                )
+                if fill is not None:
+                    self.result.fills.append(fill)
+                    self.active = self.pending
+                    self.pending = None
+            else:
+                self.active = self.pending
+                self.pending = None
+
+        exit_now = self.broker.triggered_exit(
+            self.portfolio,
+            bar,
+            self.active.stop_loss,
+            self.active.take_profit,
+        )
+        if exit_now is not None:
+            price, reason = exit_now
+            fill = self.broker.execute(
+                self.portfolio,
+                bar,
+                -self.portfolio.quantity,
+                reason=reason,
+                reference_price=price,
+            )
+            if fill is not None:
+                self.result.fills.append(fill)
+                self.active = Intent()
+                self.pending = None
+
+        if self.is_swap:
+            for ts, rate in self.funding.settlements(
+                bar.ts + 1, bar.ts + self.bar_ms
+            ):
+                if not self.portfolio.is_flat:
+                    self.result.funding_payments.append(
+                        self.portfolio.apply_funding(ts, rate, bar.close)
+                    )
+        self.settled_through = bar.ts + self.bar_ms
+
+    def after_bar(self, bar: Bar, intent: Intent | None) -> None:
+        """Queue this close's decision and mark the simulated account."""
+        if intent is not None:
+            self.pending = intent
+        self.result.timestamps.append(bar.ts)
+        self.result.equity.append(self.portfolio.equity(bar.close))
+
+
 def run_backtest(
     strategy: Strategy,
     primary: Series,
@@ -220,17 +382,6 @@ def run_backtest(
     )
     portfolio = Portfolio(spec, initial_cash)
     aux = list(aux)
-    ctx = Context(primary, aux=aux)
-    bar_ms = duration_ms(primary.timeframe)
-
-    # A strategy instance carries state — DonchianTrend remembers its target —
-    # and instances get reused across splits and parameter sweeps. Without
-    # this, run two picks up mid-position from run one and prints a trade that
-    # belongs to neither.
-    reset = getattr(strategy, "reset", None)
-    if callable(reset):
-        reset()
-
     # Fingerprint the inputs before the loop touches them. The Series columns
     # are read-only, so what is hashed here is exactly what the run replays.
     manifest = RunManifest(
@@ -260,79 +411,17 @@ def run_backtest(
         aux_keys=tuple(series.key for series in aux),
     )
 
-    pending: Intent | None = None
-    active = Intent()
-    is_swap = spec.market_type == "swap"
-    # Funding is charged over elapsed time, not per bar, so the window starts
-    # where the last one ended. On the first bar there is nothing before it.
-    settled_through = int(primary.ts[0]) if len(primary) else 0
-
-    for i in range(len(primary)):
-        ctx.seek(i)
-        bar = ctx.bar
-
-        # 1. Funding settled since the last bar closed, up to and including
-        #    this bar's open, on the position carried in. The `+ 1` makes a
-        #    settlement falling exactly on the open belong to this window:
-        #    it is paid by whoever held through it, before any order fills.
-        if is_swap:
-            for ts, rate in funding.settlements(settled_through, bar.ts + 1):
-                if not portfolio.is_flat:
-                    result.funding_payments.append(
-                        portfolio.apply_funding(ts, rate, bar.open)
-                    )
-
-        # 2. Last bar's decision fills at this bar's open.
-        if pending is not None:
-            target_changed = pending.target != active.target
-            if sizing is Sizing.REBALANCE or target_changed:
-                delta = broker.quantity_for_target(
-                    pending.target,
-                    bar.open,
-                    portfolio.equity(bar.open),
-                    portfolio.quantity,
-                    portfolio.cash,
-                )
-                fill = broker.execute(portfolio, bar, delta, reason=pending.reason)
-                if fill is not None:
-                    result.fills.append(fill)
-                    active = pending
-                    pending = None
-            else:
-                # ON_ENTRY: an unchanged target holds its quantity. Re-deriving
-                # it every bar would trim the position as it moves in favour.
-                active = pending
-                pending = None
-
-        # 3. Protective exits and liquidation, from this bar's range.
-        exit_now = broker.triggered_exit(portfolio, bar, active.stop_loss, active.take_profit)
-        if exit_now is not None:
-            price, reason = exit_now
-            fill = broker.execute(
-                portfolio, bar, -portfolio.quantity, reason=reason, reference_price=price
-            )
-            if fill is not None:
-                result.fills.append(fill)
-                active = Intent()
-                pending = None
-
-        # 4. Funding settled strictly inside the bar, on the position actually
-        #    held after this bar's trading, marked at the last price known.
-        if is_swap:
-            for ts, rate in funding.settlements(bar.ts + 1, bar.ts + bar_ms):
-                if not portfolio.is_flat:
-                    result.funding_payments.append(
-                        portfolio.apply_funding(ts, rate, bar.close)
-                    )
-        settled_through = bar.ts + bar_ms
-
-        # 5. Only now may the strategy see this bar.
-        if i + 1 >= strategy.warmup_bars:
-            pending = strategy.on_bar(ctx)
-
-        # 6. Mark to close.
-        result.timestamps.append(bar.ts)
-        result.equity.append(portfolio.equity(bar.close))
+    loop_broker = _BacktestLoopBroker(
+        broker=broker,
+        portfolio=portfolio,
+        result=result,
+        funding=funding,
+        sizing=sizing,
+        bar_ms=duration_ms(primary.timeframe),
+        first_ts=int(primary.ts[0]) if len(primary) else 0,
+    )
+    feed = HistoricalEngineFeed(primary, strategy.warmup_bars, aux=aux)
+    run_event_loop(strategy, feed, loop_broker)
 
     result.rejections = broker.rejections
     return result

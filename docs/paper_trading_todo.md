@@ -7,12 +7,14 @@
 
 ## What already works
 
-`cq/live/` drives one live path end to end: `LiveFeed` closed bars → strategy →
-`LiveBroker` market order on OKX demo → reconcile against the exchange → JSONL
-session log. Spot and linear, quote-settled swaps use the same base-equivalent
-sizing as the backtest (`cq/engine/sizing.py::target_delta`); the OKX boundary
-converts swaps to contracts. Targets use market orders and protective exits use
-market-on-trigger OKX conditional/OCO algos. Versioned, fsynced JSONL
+`cq/live/` drives one live path end to end: `LiveFeed` closed bars →
+`LiveEngineFeed` causal contexts → the shared `run_event_loop` → the OKX broker
+adapter → reconcile against the exchange → JSONL session log. Backtest and live
+therefore share strategy scheduling as well as base-equivalent sizing
+(`cq/engine/sizing.py::target_delta`); only feed and broker implementations
+differ. The OKX boundary converts swaps to contracts. Targets use market orders
+and protective exits use market-on-trigger OKX conditional/OCO algos.
+Versioned, fsynced JSONL
 checkpoints allow a stopped process to resume when its last processed bar still
 matches the exchange. Target, protection, restoration and recovery creates
 carry stable client order ids derived from their closed-bar intent. Transient

@@ -13,13 +13,14 @@ happily serve a candle that is still forming.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
 from loguru import logger
 
-from cq.context import Bar, Series
+from cq.context import Bar, Context, Series
 from cq.core.clock import BASE_TIMEFRAME, duration_ms, is_closed, okx_bar
 from cq.data.fetch import _CONFIRM, _TS, CONFIRM_CLOSED
 from cq.data.okx import RETRYABLE
@@ -29,9 +30,28 @@ from cq.data.store import Store
 
 
 class Feed(Protocol):
-    """What the engine loop needs from any source of bars."""
+    """Raw closed-bar iteration before causal context preparation."""
 
     def __iter__(self) -> Iterator[Bar]: ...
+
+
+@dataclass(frozen=True)
+class EngineBar:
+    """One closed bar plus the causal context available at its close.
+
+    `context` is absent until the strategy's declared warmup is satisfied. The
+    shared engine loop still gives the broker the bar, but it cannot call the
+    strategy early.
+    """
+
+    bar: Bar
+    context: Context | None
+
+
+class EngineFeed(Protocol):
+    """Closed bars prepared for the single backtest/paper/live engine loop."""
+
+    def __iter__(self) -> Iterator[EngineBar]: ...
 
 
 def load_series(
@@ -81,6 +101,72 @@ class HistoricalFeed:
                 close=float(s.close[i]),
                 volume=float(s.volume[i]),
             )
+
+
+class HistoricalEngineFeed:
+    """A historical series exposed through the engine's causal feed contract."""
+
+    def __init__(
+        self,
+        primary: Series,
+        warmup_bars: int,
+        aux: Iterable[Series] = (),
+    ):
+        if warmup_bars < 0:
+            raise ValueError(f"warmup_bars must be non-negative, got {warmup_bars}")
+        self._primary = primary
+        self._warmup_bars = warmup_bars
+        self._aux = tuple(aux)
+
+    def __iter__(self) -> Iterator[EngineBar]:
+        context = Context(self._primary, aux=self._aux)
+        for index, bar in enumerate(HistoricalFeed(self._primary)):
+            context.seek(index)
+            ready = index + 1 >= self._warmup_bars
+            yield EngineBar(bar, context if ready else None)
+
+
+class LiveEngineFeed:
+    """Incrementally build the same causal context from a live bar feed.
+
+    Only a bounded window is retained. `Context.index_offset` preserves the
+    logical index a historical replay of the warmup plus live bars would expose.
+    """
+
+    def __init__(
+        self,
+        feed: Iterable[Bar],
+        inst_id: str,
+        timeframe: str,
+        warmup_bars: int,
+        warmup: Iterable[Bar] = (),
+    ):
+        if warmup_bars < 0:
+            raise ValueError(f"warmup_bars must be non-negative, got {warmup_bars}")
+        self._feed = feed
+        self._inst_id = inst_id
+        self._timeframe = timeframe
+        self._warmup_bars = warmup_bars
+        self._warmup = tuple(warmup)
+
+    def __iter__(self) -> Iterator[EngineBar]:
+        bars = list(self._warmup)
+        keep = max(self._warmup_bars * 4, 256)
+        dropped = 0
+        for bar in self._feed:
+            bars.append(bar)
+            if len(bars) > keep:
+                remove = len(bars) - keep
+                del bars[:remove]
+                dropped += remove
+            if dropped + len(bars) < self._warmup_bars:
+                yield EngineBar(bar, None)
+                continue
+
+            series = series_from_bars(self._inst_id, self._timeframe, bars)
+            context = Context(series, index_offset=dropped)
+            context.seek(len(bars) - 1)
+            yield EngineBar(bar, context)
 
 
 class FeedStalledError(RuntimeError):

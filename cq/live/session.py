@@ -1,10 +1,10 @@
-"""The paper trading session — the live counterpart of `run_backtest`.
+"""Paper/live execution through the engine's shared closed-bar loop.
 
-It shares the pieces that must not diverge from the backtest: the strategy sees
-a `Context` over closed bars only, and the target it names is sized by the same
-`target_delta`. What is genuinely different lives in `LiveBroker` — the exchange
-holds the position and the cash, so each bar reconciles against it rather than
-against a simulated portfolio.
+`run_paper` prepares a `LiveEngineFeed` and a live implementation of
+`LoopBroker`, then delegates strategy scheduling to `run_event_loop` — the same
+function `run_backtest` calls with historical and simulated implementations.
+The exchange still owns position and cash, so the live broker reconciles them
+instead of applying fills to a simulated portfolio.
 
 Timing, and how it maps to the backtest's fixed order of events:
 
@@ -14,12 +14,11 @@ Timing, and how it maps to the backtest's fixed order of events:
   opening of t+1. Same decision point, same "never act on an unclosed bar".
 
 The one honest difference: sizing uses bar t's close as the price, because t+1's
-open is not knowable yet. That is the last price available at the decision, and
-it makes live no more optimistic than the backtest — if anything the fill can
-be a touch worse, never better.
+open is not knowable yet. That is the last price available at the decision;
+the eventual venue fill can be better or worse and is reconciled explicitly.
 
-I/O is injected as `on_event` so the loop itself stays pure and testable; the
-CLI passes a callback that prints and appends to a session log.
+I/O is injected as `on_event`; the CLI passes a callback that prints and appends
+to a session log.
 """
 
 from __future__ import annotations
@@ -28,10 +27,10 @@ import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from cq.context import Bar, Context
-from cq.core.types import Fill, Side
-from cq.data.feed import series_from_bars
-from cq.engine.loop import Strategy
+from cq.context import Bar
+from cq.core.types import Fill, Intent, Side
+from cq.data.feed import LiveEngineFeed
+from cq.engine.loop import Strategy, run_event_loop
 from cq.live.broker import LiveBroker, Reconciliation
 from cq.live.ids import client_order_id
 from cq.live.protocols import AccountEvent, ProtectiveOrder
@@ -46,7 +45,11 @@ class PaperEvent:
     inst_id: str
     timeframe: str
     strategy: str
+    open: float
+    high: float
+    low: float
     close: float
+    volume: float
     target: float
     reason: str
     held: float
@@ -62,6 +65,207 @@ class PaperEvent:
     strategy_state: dict[str, object] | None
     account_events: tuple[AccountEvent, ...]
     account_event_cursor: int | None
+
+
+class _LiveLoopBroker:
+    """OKX-backed implementation of the shared loop broker contract."""
+
+    def __init__(
+        self,
+        strategy: Strategy,
+        broker: LiveBroker,
+        inst_id: str,
+        timeframe: str,
+        average_entry: float | None,
+        account_event_cursor: int | None,
+    ):
+        self.strategy = strategy
+        self.broker = broker
+        self.inst_id = inst_id
+        self.timeframe = timeframe
+        self.average_entry = average_entry
+        self.account_event_cursor = account_event_cursor
+
+    def before_bar(self, bar: Bar) -> None:
+        """The venue has already applied fills, protection, funding and liq."""
+
+    def after_bar(self, bar: Bar, intent: Intent | None) -> PaperEvent | None:
+        if intent is None:
+            return None
+
+        # Validate persistence before an order can leave the process. A state
+        # that cannot be logged is not crash recoverable and must fail closed.
+        strategy_state = _snapshot_strategy(self.strategy)
+
+        account_events: tuple[AccountEvent, ...] = ()
+        if self.account_event_cursor is not None:
+            event_end = self.broker.client.milliseconds()
+            if event_end < self.account_event_cursor:
+                raise RecoveryError(
+                    "exchange clock moved backwards while reading swap account events"
+                )
+            if event_end > self.account_event_cursor:
+                account_events = tuple(
+                    self.broker.account_events(
+                        self.account_event_cursor + 1,
+                        event_end,
+                    )
+                )
+                self.account_event_cursor = event_end
+
+        state = self.broker.reconcile()
+        if self.broker.is_effectively_flat(state.held):
+            self.average_entry = None
+        equity = state.equity(bar.close)
+        delta = self.broker.quantity_for_target(
+            intent.target,
+            bar.close,
+            equity,
+            state.held,
+            state.cash,
+        )
+        target_client_id = client_order_id(
+            "target",
+            self.inst_id,
+            bar.ts,
+            intent.target,
+            intent.stop_loss,
+            intent.take_profit,
+        )
+        protection_client_id = client_order_id(
+            "protection",
+            self.inst_id,
+            bar.ts,
+            intent.target,
+            intent.stop_loss,
+            intent.take_profit,
+        )
+        before = len(self.broker.rejections)
+        fill = None
+        after = state
+        if delta != 0:
+            # The old exit may cover a different size or race a target close,
+            # so remove it before the market order. Reconcile every outcome and
+            # restore protection around whatever the exchange actually holds,
+            # even when an order was rejected or its result was uncertain.
+            previous = self.broker.active_protection
+            self.broker.cancel_protection()
+            try:
+                fill = self.broker.execute(
+                    delta,
+                    bar.ts,
+                    reason=intent.reason,
+                    client_order_id=target_client_id,
+                )
+            except BaseException:
+                after = self.broker.reconcile()
+                if previous is not None:
+                    self.broker.sync_protection(
+                        after.held,
+                        previous.stop_loss,
+                        previous.take_profit,
+                        client_order_id=client_order_id(
+                            "restore",
+                            self.inst_id,
+                            bar.ts,
+                            intent.target,
+                            previous.stop_loss,
+                            previous.take_profit,
+                        ),
+                    )
+                else:
+                    self.broker.sync_protection(
+                        after.held,
+                        intent.stop_loss,
+                        intent.take_profit,
+                        client_order_id=protection_client_id,
+                    )
+                raise
+            after = self.broker.reconcile()
+            if fill is None and previous is not None:
+                # `execute` rejected before sending anything. Keep the old
+                # safety net because the intended target was not reached.
+                self.broker.sync_protection(
+                    after.held,
+                    previous.stop_loss,
+                    previous.take_profit,
+                    client_order_id=client_order_id(
+                        "restore",
+                        self.inst_id,
+                        bar.ts,
+                        intent.target,
+                        previous.stop_loss,
+                        previous.take_profit,
+                    ),
+                )
+            elif (
+                intent.target == 0
+                and not self.broker.is_effectively_flat(after.held)
+                and previous is not None
+            ):
+                # A partially filled close must protect its residual balance.
+                self.broker.sync_protection(
+                    after.held,
+                    previous.stop_loss,
+                    previous.take_profit,
+                    client_order_id=client_order_id(
+                        "restore",
+                        self.inst_id,
+                        bar.ts,
+                        intent.target,
+                        previous.stop_loss,
+                        previous.take_profit,
+                    ),
+                )
+            else:
+                self.broker.sync_protection(
+                    after.held,
+                    intent.stop_loss,
+                    intent.take_profit,
+                    client_order_id=protection_client_id,
+                )
+        else:
+            self.broker.sync_protection(
+                state.held,
+                intent.stop_loss,
+                intent.take_profit,
+                client_order_id=protection_client_id,
+            )
+        self.average_entry = _updated_average_entry(
+            self.broker,
+            self.average_entry,
+            state,
+            after,
+            fill,
+        )
+        rejected = len(self.broker.rejections) - before
+
+        return PaperEvent(
+            ts=bar.ts,
+            inst_id=self.inst_id,
+            timeframe=self.timeframe,
+            strategy=self.strategy.name,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            target=intent.target,
+            reason=intent.reason,
+            held=state.held,
+            cash=state.cash,
+            equity=equity,
+            fill=fill,
+            client_order_id=target_client_id if delta != 0 else None,
+            rejected=rejected,
+            protection=self.broker.active_protection,
+            held_after=after.held,
+            cash_after=after.cash,
+            average_entry=self.average_entry,
+            strategy_state=strategy_state,
+            account_events=account_events,
+            account_event_cursor=self.account_event_cursor,
+        )
 
 
 def run_paper(
@@ -82,9 +286,6 @@ def run_paper(
     sessions; omit it for a session that runs until interrupted.
     """
     if resume is None:
-        reset = getattr(strategy, "reset", None)
-        if callable(reset):
-            reset()
         average_entry = None
         account_event_cursor = (
             broker.client.milliseconds() if broker.spec.market_type == "swap" else None
@@ -101,192 +302,31 @@ def run_paper(
         if broker.spec.market_type == "swap" and account_event_cursor is None:
             account_event_cursor = broker.client.milliseconds()
 
-    bars: list[Bar] = list(warmup)
-    # Keep the rolling window bounded but always longer than the strategy can
-    # look back, so a long session does not grow without limit.
-    keep = max(strategy.warmup_bars * 4, 256)
-    seen = 0
-
-    for bar in feed:
-        bars.append(bar)
-        if len(bars) > keep:
-            del bars[: len(bars) - keep]
-        if len(bars) < strategy.warmup_bars:
-            continue
-
-        series = series_from_bars(inst_id, timeframe, bars)
-        ctx = Context(series)
-        ctx.seek(len(bars) - 1)
-        intent = strategy.on_bar(ctx)
-        # Validate persistence before an order can leave the process. A state
-        # that cannot be logged is not crash recoverable and must fail closed.
-        strategy_state = _snapshot_strategy(strategy)
-
-        account_events: tuple[AccountEvent, ...] = ()
-        if account_event_cursor is not None:
-            event_end = broker.client.milliseconds()
-            if event_end < account_event_cursor:
-                raise RecoveryError(
-                    "exchange clock moved backwards while reading swap account events"
-                )
-            if event_end > account_event_cursor:
-                account_events = tuple(
-                    broker.account_events(account_event_cursor + 1, event_end)
-                )
-                account_event_cursor = event_end
-
-        state = broker.reconcile()
-        if broker.is_effectively_flat(state.held):
-            average_entry = None
-        equity = state.equity(bar.close)
-        delta = broker.quantity_for_target(
-            intent.target, bar.close, equity, state.held, state.cash
-        )
-        target_client_id = client_order_id(
-            "target",
-            inst_id,
-            bar.ts,
-            intent.target,
-            intent.stop_loss,
-            intent.take_profit,
-        )
-        protection_client_id = client_order_id(
-            "protection",
-            inst_id,
-            bar.ts,
-            intent.target,
-            intent.stop_loss,
-            intent.take_profit,
-        )
-        before = len(broker.rejections)
-        fill = None
-        after = state
-        if delta != 0:
-            # The old exit may cover a different size or race a target close,
-            # so remove it before the market order. Reconcile every outcome and
-            # restore protection around whatever the exchange actually holds,
-            # even when an order was rejected or its result was uncertain.
-            previous = broker.active_protection
-            broker.cancel_protection()
-            try:
-                fill = broker.execute(
-                    delta,
-                    bar.ts,
-                    reason=intent.reason,
-                    client_order_id=target_client_id,
-                )
-            except BaseException:
-                after = broker.reconcile()
-                if previous is not None:
-                    broker.sync_protection(
-                        after.held,
-                        previous.stop_loss,
-                        previous.take_profit,
-                        client_order_id=client_order_id(
-                            "restore",
-                            inst_id,
-                            bar.ts,
-                            intent.target,
-                            previous.stop_loss,
-                            previous.take_profit,
-                        ),
-                    )
-                else:
-                    broker.sync_protection(
-                        after.held,
-                        intent.stop_loss,
-                        intent.take_profit,
-                        client_order_id=protection_client_id,
-                    )
-                raise
-            after = broker.reconcile()
-            if fill is None and previous is not None:
-                # `execute` rejected before sending anything. Keep the old
-                # safety net because the intended target was not reached.
-                broker.sync_protection(
-                    after.held,
-                    previous.stop_loss,
-                    previous.take_profit,
-                    client_order_id=client_order_id(
-                        "restore",
-                        inst_id,
-                        bar.ts,
-                        intent.target,
-                        previous.stop_loss,
-                        previous.take_profit,
-                    ),
-                )
-            elif (
-                intent.target == 0
-                and not broker.is_effectively_flat(after.held)
-                and previous is not None
-            ):
-                # A partially filled close must protect its residual balance.
-                broker.sync_protection(
-                    after.held,
-                    previous.stop_loss,
-                    previous.take_profit,
-                    client_order_id=client_order_id(
-                        "restore",
-                        inst_id,
-                        bar.ts,
-                        intent.target,
-                        previous.stop_loss,
-                        previous.take_profit,
-                    ),
-                )
-            else:
-                broker.sync_protection(
-                    after.held,
-                    intent.stop_loss,
-                    intent.take_profit,
-                    client_order_id=protection_client_id,
-                )
-        else:
-            broker.sync_protection(
-                state.held,
-                intent.stop_loss,
-                intent.take_profit,
-                client_order_id=protection_client_id,
-            )
-        average_entry = _updated_average_entry(
-            broker,
-            average_entry,
-            state,
-            after,
-            fill,
-        )
-        rejected = len(broker.rejections) - before
-
-        if on_event is not None:
-            on_event(
-                PaperEvent(
-                    ts=bar.ts,
-                    inst_id=inst_id,
-                    timeframe=timeframe,
-                    strategy=strategy.name,
-                    close=bar.close,
-                    target=intent.target,
-                    reason=intent.reason,
-                    held=state.held,
-                    cash=state.cash,
-                    equity=equity,
-                    fill=fill,
-                    client_order_id=target_client_id if delta != 0 else None,
-                    rejected=rejected,
-                    protection=broker.active_protection,
-                    held_after=after.held,
-                    cash_after=after.cash,
-                    average_entry=average_entry,
-                    strategy_state=strategy_state,
-                    account_events=account_events,
-                    account_event_cursor=account_event_cursor,
-                )
-            )
-
-        seen += 1
-        if max_bars is not None and seen >= max_bars:
-            return
+    engine_feed = LiveEngineFeed(
+        feed,
+        inst_id,
+        timeframe,
+        strategy.warmup_bars,
+        warmup=warmup,
+    )
+    loop_broker = _LiveLoopBroker(
+        strategy,
+        broker,
+        inst_id,
+        timeframe,
+        average_entry,
+        account_event_cursor,
+    )
+    # A fresh run uses the loop's canonical reset. Recovery restored explicit
+    # checkpoint state above, so the loop must preserve it.
+    run_event_loop(
+        strategy,
+        engine_feed,
+        loop_broker,
+        on_event=on_event,
+        max_bars=max_bars,
+        reset_strategy=resume is None,
+    )
 
 
 def _updated_average_entry(
