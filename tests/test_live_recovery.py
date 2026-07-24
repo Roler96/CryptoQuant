@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cq.core.types import Fill, MarketSpec, Side
+from cq.core.types import Fill, MarketSpec, Side, Sizing
 from cq.live.broker import LiveBroker
 from cq.live.protocols import CollateralBalance, ProtectiveOrder, SwapPosition
 from cq.live.recovery import (
@@ -139,18 +139,43 @@ def checkpoint_row():
         "average_entry": 0.073,
         "strategy_state": {"count": 7, "weight": 0.05, "period": 1},
         "protection": None,
+        "sizing": Sizing.REBALANCE.value,
+        "active_target_after": 0.05,
     }
 
 
 def test_loader_uses_the_last_complete_checkpoint_after_a_torn_line(tmp_path):
     path = tmp_path / f"{INST}_{TF}_20260721T000000Z.jsonl"
-    path.write_text(json.dumps(checkpoint_row()) + "\n{\"broken\":", encoding="utf-8")
+    path.write_text(json.dumps(checkpoint_row()) + '\n{"broken":', encoding="utf-8")
 
     loaded = load_latest_checkpoint(tmp_path, INST, TF)
 
     assert loaded is not None
     assert loaded.ts == 123
     assert loaded.strategy_state == {"count": 7, "weight": 0.05, "period": 1}
+    assert loaded.sizing is Sizing.REBALANCE
+    assert loaded.active_target == 0.05
+
+
+def test_version_one_checkpoint_is_rebalance_only(tmp_path):
+    row = checkpoint_row()
+    row["checkpoint_version"] = 1
+    row.pop("sizing")
+    row.pop("active_target_after")
+    path = tmp_path / f"{INST}_{TF}_20260721T000000Z.jsonl"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    loaded = load_latest_checkpoint(tmp_path, INST, TF)
+
+    assert loaded is not None
+    assert loaded.sizing is Sizing.REBALANCE
+    with pytest.raises(RecoveryError, match="does not match requested"):
+        reconcile_restart(
+            "heartbeat-probe",
+            make_broker(RecoveryClient()),
+            loaded,
+            Sizing.ON_ENTRY,
+        )
 
 
 def test_legacy_log_is_not_misread_as_a_resumable_checkpoint(tmp_path):
@@ -272,9 +297,7 @@ def test_triggered_but_not_reconciled_algo_is_not_duplicated(tmp_path):
     broker = make_broker(client)
 
     with pytest.raises(RecoveryError, match="absent from pending orders"):
-        reconcile_restart(
-            "heartbeat-probe", broker, checkpoint(tmp_path, protection=logged)
-        )
+        reconcile_restart("heartbeat-probe", broker, checkpoint(tmp_path, protection=logged))
 
     assert client.placed == []
 
@@ -307,9 +330,7 @@ def test_wrong_protection_size_is_rejected_even_when_algo_id_matches(tmp_path):
     broker = make_broker(RecoveryClient(held=100.0, pending=[venue]))
 
     with pytest.raises(RecoveryError, match="does not cover exchange holding"):
-        reconcile_restart(
-            "heartbeat-probe", broker, checkpoint(tmp_path, protection=logged)
-        )
+        reconcile_restart("heartbeat-probe", broker, checkpoint(tmp_path, protection=logged))
 
 
 def test_a_triggered_exit_can_resume_flat_with_no_cost_basis(tmp_path):

@@ -26,14 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sub = paper.add_subparsers(dest="paper_command", required=True)
     _register_paper_commands(paper_sub)
 
-    calibration = subparsers.add_parser(
-        "calibration", help="engine calibration gate status"
-    )
-    calibration_sub = calibration.add_subparsers(
-        dest="calibration_command", required=True
-    )
-    _register_calibration_commands(calibration_sub)
-
     research = subparsers.add_parser("research", help="causal research observers")
     research_sub = research.add_subparsers(dest="research_command", required=True)
     _register_research_commands(research_sub)
@@ -51,12 +43,6 @@ def _register_paper_commands(subparsers: argparse._SubParsersAction) -> None:
     from cq.live import commands
 
     commands.register(subparsers)
-
-
-def _register_calibration_commands(subparsers: argparse._SubParsersAction) -> None:
-    from cq import calibration
-
-    calibration.register(subparsers)
 
 
 def _register_research_commands(subparsers: argparse._SubParsersAction) -> None:

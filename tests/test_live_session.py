@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 
 from cq.context import Bar, Context
-from cq.core.types import Fill, Intent, MarketSpec, Side
+from cq.core.types import Fill, Intent, MarketSpec, Side, Sizing
 from cq.engine.sizing import target_delta
 from cq.live.broker import LiveBroker
 from cq.live.commands import _event_row
 from cq.live.probe import HeartbeatProbe
 from cq.live.protocols import AccountEvent, CollateralBalance, SwapPosition
-from cq.live.recovery import CHECKPOINT_VERSION, SessionResume
+from cq.live.recovery import CHECKPOINT_VERSION, RecoveryError, SessionResume
 from cq.live.session import PaperEvent, run_paper
 
 INST = "DOGE-USDT"
@@ -175,8 +175,14 @@ def swap_broker(client):
 
 def bars(n, start_close=0.073):
     return [
-        Bar(ts=i * HOUR, open=start_close, high=start_close, low=start_close,
-            close=start_close, volume=100.0)
+        Bar(
+            ts=i * HOUR,
+            open=start_close,
+            high=start_close,
+            low=start_close,
+            close=start_close,
+            volume=100.0,
+        )
         for i in range(n)
     ]
 
@@ -239,6 +245,134 @@ def test_order_quantity_is_sized_from_the_close_by_shared_sizing():
     assert events[0].fill is not None
     assert events[0].fill.quantity == pytest.approx(abs(expected))
     assert events[0].close == close
+
+
+@dataclass
+class _RepeatedTarget:
+    name = "repeated-target"
+    warmup_bars = 1
+
+    def on_bar(self, ctx: Context) -> Intent:
+        return Intent(target=0.2)
+
+
+@dataclass
+class _CheckpointRepeatedTarget:
+    name = "checkpoint-repeated-target"
+    warmup_bars = 1
+    count: int = 0
+
+    def on_bar(self, ctx: Context) -> Intent:
+        self.count += 1
+        return Intent(target=0.2)
+
+    def snapshot_state(self) -> dict[str, object]:
+        return {"count": self.count}
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        count = state["count"]
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError("invalid count")
+        self.count = count
+
+
+def test_on_entry_sizes_once_while_rebalance_resizes_the_same_target():
+    moving = [
+        Bar(0, 0.073, 0.073, 0.073, 0.073, 100.0),
+        Bar(HOUR, 0.146, 0.146, 0.146, 0.146, 100.0),
+    ]
+    on_entry = collect(
+        strategy=_RepeatedTarget(),
+        broker=broker(),
+        feed=moving,
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=2,
+        sizing=Sizing.ON_ENTRY,
+    )
+    rebalance = collect(
+        strategy=_RepeatedTarget(),
+        broker=broker(),
+        feed=moving,
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=2,
+        sizing=Sizing.REBALANCE,
+    )
+
+    assert [event.fill is not None for event in on_entry] == [True, False]
+    assert [event.fill is not None for event in rebalance] == [True, True]
+    assert [event.sizing for event in on_entry] == ["on_entry", "on_entry"]
+    assert [event.active_target_before for event in on_entry] == [0.0, 0.2]
+    assert [event.active_target_after for event in on_entry] == [0.2, 0.2]
+
+
+def test_on_entry_retries_a_target_transition_after_rejection():
+    client = FakeTradeClient()
+    rejecting = LiveBroker(client=client, spec=SPEC, min_base_amount=10_000.0)
+
+    events = collect(
+        strategy=_RepeatedTarget(),
+        broker=rejecting,
+        feed=bars(2),
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=2,
+        sizing=Sizing.ON_ENTRY,
+    )
+
+    assert [event.rejected for event in events] == [1, 1]
+    assert [event.active_target_after for event in events] == [0.0, 0.0]
+
+
+def test_on_entry_resume_restores_active_target_without_rebalancing():
+    client = FakeTradeClient()
+    first = collect(
+        strategy=_CheckpointRepeatedTarget(),
+        broker=broker(client),
+        feed=bars(1),
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=1,
+        sizing=Sizing.ON_ENTRY,
+    )[0]
+    assert first.fill is not None
+    assert first.strategy_state is not None
+    resume = SessionResume(
+        checkpoint_ts=first.ts,
+        average_entry=first.average_entry,
+        strategy_state=first.strategy_state,
+        source=Path("prior.jsonl"),
+        sizing=Sizing.ON_ENTRY,
+        active_target=first.active_target_after,
+    )
+
+    second = collect(
+        strategy=_CheckpointRepeatedTarget(),
+        broker=broker(client),
+        feed=[Bar(HOUR, 0.146, 0.146, 0.146, 0.146, 100.0)],
+        inst_id=INST,
+        timeframe=TF,
+        max_bars=1,
+        resume=resume,
+        sizing=Sizing.ON_ENTRY,
+    )[0]
+
+    assert second.fill is None
+    assert second.active_target_before == 0.2
+    assert second.active_target_after == 0.2
+
+
+def test_fresh_on_entry_session_refuses_unexplained_holding():
+    with pytest.raises(RecoveryError, match="requires a flat"):
+        collect(
+            strategy=_RepeatedTarget(),
+            broker=broker(FakeTradeClient(held=100.0)),
+            feed=bars(1),
+            inst_id=INST,
+            timeframe=TF,
+            sizing=Sizing.ON_ENTRY,
+        )
 
 
 # ---- warmup and bounds -------------------------------------------------
@@ -492,7 +626,6 @@ def test_event_checkpoint_records_post_trade_cost_and_strategy_state():
         inst_id=INST,
         timeframe=TF,
         max_bars=1,
-        runtime_engine_fingerprint="source-fingerprint",
     )[0]
     row = _event_row(event)
 
@@ -508,7 +641,9 @@ def test_event_checkpoint_records_post_trade_cost_and_strategy_state():
     assert row["cash_after"] < 1000.0
     assert row["average_entry"] == pytest.approx(0.073)
     assert row["strategy_state"] == {"count": 1, "weight": 0.05, "period": 1}
-    assert row["runtime_engine_fingerprint"] == "source-fingerprint"
+    assert row["sizing"] == "rebalance"
+    assert row["active_target_before"] == 0.0
+    assert row["active_target_after"] == 0.05
 
 
 def test_probe_phase_and_cost_basis_continue_from_a_checkpoint():

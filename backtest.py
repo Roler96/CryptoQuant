@@ -7,8 +7,8 @@ There are no command-line arguments to configure: everything a run needs is a
 plain constant in the CONFIG block below, so the file runs the moment you hit
 "Debug" and you edit a value rather than a launch profile.
 
-This drives exactly the run `scripts/calibrate_donchian.py` and the tests build
-— the same `run_backtest`, so nothing here can be more optimistic than live.
+This drives the same `run_backtest` used by the test suite, so nothing here can
+be more optimistic than live.
 `scripts/debug_backtest.py` is the argparse version with the exhaustive per-bar
 tables and a pdb hook; reach for it when you want those. This file is for the
 IDE loop: set a breakpoint, run, step.

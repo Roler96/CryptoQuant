@@ -14,12 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cq.core.types import Side
+from cq.core.types import Side, Sizing
 from cq.live.broker import LiveBroker
 from cq.live.ids import client_order_id
 from cq.live.protocols import ProtectiveOrder
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
+LEGACY_CHECKPOINT_VERSION = 1
 
 
 class RecoveryError(RuntimeError):
@@ -42,6 +43,8 @@ class PaperCheckpoint:
     protection: ProtectiveOrder | None
     source: Path
     account_event_cursor: int | None = None
+    sizing: Sizing = Sizing.REBALANCE
+    active_target: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class SessionResume:
     strategy_state: dict[str, object]
     source: Path
     account_event_cursor: int | None = None
+    sizing: Sizing = Sizing.REBALANCE
+    active_target: float = 0.0
 
 
 def load_latest_checkpoint(
@@ -81,6 +86,7 @@ def reconcile_restart(
     strategy_name: str,
     broker: LiveBroker,
     checkpoint: PaperCheckpoint | None,
+    sizing: Sizing = Sizing.REBALANCE,
 ) -> SessionResume | None:
     """Validate durable state against OKX and adopt/rebuild its protection."""
     account = broker.reconcile()
@@ -109,13 +115,16 @@ def reconcile_restart(
 
     if checkpoint.strategy != strategy_name:
         raise RecoveryError(
-            f"latest checkpoint belongs to strategy {checkpoint.strategy!r}, "
-            f"not {strategy_name!r}"
+            f"latest checkpoint belongs to strategy {checkpoint.strategy!r}, not {strategy_name!r}"
+        )
+    if checkpoint.sizing is not sizing:
+        raise RecoveryError(
+            f"checkpoint sizing {checkpoint.sizing.value!r} does not match "
+            f"requested {sizing.value!r}"
         )
     if checkpoint.inst_id != broker.spec.inst_id:
         raise RecoveryError(
-            f"checkpoint instrument {checkpoint.inst_id!r} does not match "
-            f"{broker.spec.inst_id!r}"
+            f"checkpoint instrument {checkpoint.inst_id!r} does not match {broker.spec.inst_id!r}"
         )
 
     if actual_flat:
@@ -130,6 +139,8 @@ def reconcile_restart(
             strategy_state=dict(checkpoint.strategy_state),
             source=checkpoint.source,
             account_event_cursor=checkpoint.account_event_cursor,
+            sizing=checkpoint.sizing,
+            active_target=checkpoint.active_target,
         )
 
     if broker.is_effectively_flat(checkpoint.held) or not _quantity_matches(
@@ -146,9 +157,7 @@ def reconcile_restart(
     average_entry = checkpoint.average_entry
     if broker.spec.market_type == "swap":
         if account.average_entry is None:
-            raise RecoveryError(
-                f"{broker.spec.inst_id}: exchange position has no average entry"
-            )
+            raise RecoveryError(f"{broker.spec.inst_id}: exchange position has no average entry")
         if not _level_matches(account.average_entry, checkpoint.average_entry):
             raise RecoveryError(
                 f"{broker.spec.inst_id}: exchange average entry {account.average_entry} "
@@ -172,9 +181,7 @@ def reconcile_restart(
             logged.stop_loss,
             logged.take_profit,
         )
-    if logged is not None and not _quantity_matches(
-        broker, logged.quantity, abs(account.held)
-    ):
+    if logged is not None and not _quantity_matches(broker, logged.quantity, abs(account.held)):
         raise RecoveryError(
             f"{broker.spec.inst_id}: checkpoint protection quantity {logged.quantity} "
             f"does not cover exchange holding {account.held}"
@@ -221,6 +228,8 @@ def reconcile_restart(
         strategy_state=dict(checkpoint.strategy_state),
         source=checkpoint.source,
         account_event_cursor=checkpoint.account_event_cursor,
+        sizing=checkpoint.sizing,
+        active_target=checkpoint.active_target,
     )
 
 
@@ -249,10 +258,9 @@ def _checkpoint_from_row(
     expected_timeframe: str,
 ) -> PaperCheckpoint:
     """Validate an untrusted JSON object before it can control live state."""
-    if row.get("checkpoint_version") != CHECKPOINT_VERSION:
-        raise RecoveryError(
-            f"{source}: unsupported checkpoint version {row.get('checkpoint_version')!r}"
-        )
+    version = row.get("checkpoint_version")
+    if version not in (LEGACY_CHECKPOINT_VERSION, CHECKPOINT_VERSION):
+        raise RecoveryError(f"{source}: unsupported checkpoint version {version!r}")
     try:
         inst_id = str(row["inst_id"])
         timeframe = str(row["timeframe"])
@@ -272,6 +280,15 @@ def _checkpoint_from_row(
     if not isinstance(raw_state, dict):
         raise RecoveryError(f"{source}: checkpoint has no restorable strategy_state")
     average_entry = _optional_positive(row.get("average_entry"), "average_entry")
+    if version == LEGACY_CHECKPOINT_VERSION:
+        sizing = Sizing.REBALANCE
+        active_target = target
+    else:
+        try:
+            sizing = Sizing(str(row["sizing"]))
+            active_target = _finite_float(row["active_target_after"], "active_target_after")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RecoveryError(f"{source}: malformed sizing checkpoint: {exc}") from exc
     protection = _protection_from_row(row.get("protection"), source)
     is_swap = inst_id.endswith("-SWAP")
     if not is_swap and (held < 0 or cash < 0):
@@ -299,6 +316,8 @@ def _checkpoint_from_row(
         protection=protection,
         source=source,
         account_event_cursor=account_event_cursor,
+        sizing=sizing,
+        active_target=active_target,
     )
 
 
@@ -374,10 +393,7 @@ def _protection_matches(
 ) -> bool:
     return (
         venue.algo_id == logged.algo_id
-        and (
-            logged.client_order_id is None
-            or venue.client_order_id == logged.client_order_id
-        )
+        and (logged.client_order_id is None or venue.client_order_id == logged.client_order_id)
         and _protection_terms_match(broker, venue, logged)
     )
 

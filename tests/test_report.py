@@ -3,12 +3,6 @@
 import numpy as np
 import pytest
 
-from cq.calibration import (
-    SPOT_REBALANCE_CHECKS,
-    CalibrationClosed,
-    build_gate_artifact,
-    write_gate_artifact,
-)
 from cq.context import Series
 from cq.core.clock import HOUR_MS
 from cq.core.types import CostModel, Intent, MarketSpec, Sizing
@@ -184,42 +178,11 @@ def test_report_writes_a_file(tmp_path):
         sizing=Sizing.REBALANCE,
     )
     report = build_report(result, series, bootstrap_samples=100)
-    with pytest.raises(CalibrationClosed, match="CLOSED"):
-        report.write(tmp_path, calibration_artifact=tmp_path / "missing.json")
-
-    artifact = build_gate_artifact(
-        "spot",
-        "rebalance",
-        checks=dict.fromkeys(SPOT_REBALANCE_CHECKS, True),
-        evidence={"synthetic_test": True},
-        source_sha256="a" * 64,
-    )
-    artifact_path = write_gate_artifact(artifact, tmp_path / "spot.json")
-    path = report.write(tmp_path, calibration_artifact=artifact_path)
+    path = report.write(tmp_path)
 
     assert path.exists()
     assert path.suffix == ".md"
     assert "alternating" in path.read_text(encoding="utf-8")
-
-
-def test_rebalance_artifact_cannot_publish_an_on_entry_report(tmp_path):
-    result, series = a_run()
-    artifact = build_gate_artifact(
-        "spot",
-        "rebalance",
-        checks=dict.fromkeys(SPOT_REBALANCE_CHECKS, True),
-        evidence={"synthetic_test": True},
-        source_sha256="a" * 64,
-    )
-    artifact_path = write_gate_artifact(artifact, tmp_path / "spot_rebalance.json")
-
-    with pytest.raises(CalibrationClosed, match="spot/on_entry"):
-        build_report(result, series, bootstrap_samples=100).write(
-            tmp_path,
-            calibration_artifact=artifact_path,
-        )
-
-
 def test_metrics_and_bootstrap_appear_in_the_rendered_report():
     result, series = a_run()
     text = build_report(result, series, bootstrap_samples=200, seed=7).render()

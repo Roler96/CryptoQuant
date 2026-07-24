@@ -15,12 +15,10 @@ What it does, one closed bar at a time:
     demo -> reconcile against the exchange -> append a versioned JSONL checkpoint.
 
 Scope, stated so it is not mistaken for more: this collects forward paper data
-for the `docs/engine_calibration_gate.md` Option 3 comparison — the same loop on
-the same bars through the live broker, where a divergence from the backtest is
-an engine defect by construction. It does **not** by itself pass the calibration
-gate. Spot is the only order path proven against demo, and the strategy starts
-flat: the first real demo order fires on the first breakout. Set MAX_BARS to a
-small number for a shakeout before a long unattended run.
+through the same scheduling loop used by backtests. Spot is the only order path
+proven against demo, and the strategy starts flat: the first real demo order
+fires on the first breakout. Set MAX_BARS to a small number for a shakeout
+before a long unattended run.
 """
 
 from __future__ import annotations

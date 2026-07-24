@@ -35,24 +35,18 @@ PASS/FAIL 门槛与证伪条件。
 - 时间边界一律硬编码（用 `2027-06-01` 这类固定终点），**禁止用 `latest`/`now()`
   代替固定验证终点**——那会让每次运行悄悄移动自己的边界。
 
-### 2.2 校准闸门 CLOSED → 提案里没有数字
-引擎（`cq/`）的 M5 校准闸门判定**未通过**，其下游**不产出任何研究结论**，见
-`docs/engine_calibration_gate.md`。这与"只提案"叠加成同一条铁律：**协议文档里不得
-出现任何绩效数字**（收益/Sharpe/MaxDD/胜率/PF…）。数字只能作为**待填的门槛**存在
-（"Sharpe >= 1.0 才通过"可以写；"Sharpe = 1.3"不行）。
-
-### 2.3 标的宇宙
+### 2.2 标的宇宙
 只允许 **OKX 的 BTC / ETH / DOGE，现货 + USDT 线性永续**。不做山寨、不做多交易所。
 实盘方向偏现货。主力研究标的是 DOGE。
 
-### 2.4 衍生数据的历史深度约束
+### 2.3 衍生数据的历史深度约束
 - funding 实测只有 ~3 个月（最早 `2026-04-14`）、OI 1h 只有 ~30 天。
 - **绝不把短历史 forward-fill 到早期年份**。任何用到 funding/OI 的机制必须作为
   **单独的、受真实历史覆盖限制的研究版本**提出，并显式声明三种资金费口径之一：
   `off`（不计，结果是上界）/ `actual`（仅 `2026-04-14` 之后可用，缺任一根即报错）/
   `assumed:<bps>`（常数假设，仅作敏感性，须标注为假设）。
 
-### 2.5 现货不能做空
+### 2.4 现货不能做空
 现货 `target < 0` 会直接 raise，不会静默取 0。**不得**用"借币卖空现货腿"去凑
 对称回测。相对价值/基差类只能用「多现货 + 空永续」实现空头暴露。
 
@@ -215,7 +209,6 @@ PASS/FAIL 门槛与证伪条件。
 
 ## 9. 参考锚点（读，别硬抄）
 - `cq/research/split.py` — 冻结点、`forward_holdout`、`record_holdout_access`（单一事实源）
-- `docs/engine_calibration_gate.md` — 闸门为何 CLOSED、为何提案不出数字
 - `docs/research/doge-5m/BASIS_SHOCK_REVERSION_PROTOCOL_2026-07-23.md` — 一份合格协议范本
 - `docs/research/doge-spot/YEARLY_RESEARCH_PROTOCOL.md` — 数据隔离原则
 - `cq/strategy/*.py` — 已存在策略的规则写法（现货不做空、目标仓位口径）

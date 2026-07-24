@@ -9,9 +9,8 @@ import os
 from pathlib import Path
 from typing import cast
 
-from cq.calibration import CalibrationClosed, engine_fingerprint
 from cq.core.clock import BASE_TIMEFRAME
-from cq.core.types import Side
+from cq.core.types import Side, Sizing
 from cq.data.feed import FeedStalledError, LiveFeed
 from cq.data.okx import OkxPublicClient
 from cq.engine.loop import Strategy
@@ -20,11 +19,6 @@ from cq.live.broker import (
     LiveBroker,
     min_base_amount_of,
     spec_from_market,
-)
-from cq.live.calibration_probe import (
-    CALIBRATION_BAND,
-    CALIBRATION_BARS,
-    SpotCalibrationSequence,
 )
 from cq.live.client import (
     OkxTradeClient,
@@ -80,8 +74,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     run.add_argument(
         "--strategy",
         default="probe",
-        choices=("probe", "constant-mix", "calibration-sequence"),
-        help="probe (plumbing), constant-mix, or demo-only calibration sequence",
+        choices=("probe", "constant-mix"),
+        help="probe (plumbing) or constant-mix",
     )
     run.add_argument(
         "--weight", type=float, default=0.02, help="target weight (probe default 0.02)"
@@ -92,6 +86,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         type=float,
         default=0.10,
         help="constant-mix no-trade band: weight drift before rebalancing",
+    )
+    run.add_argument(
+        "--sizing",
+        choices=tuple(mode.value for mode in Sizing),
+        default=Sizing.REBALANCE.value,
+        help="rebalance every bar or size only when the target changes",
     )
     run.add_argument(
         "--leverage",
@@ -114,11 +114,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="seconds past an expected bar close before the feed fails as stalled",
     )
     run.add_argument("--max-bars", type=int, default=None, help="stop after this many live bars")
-    run.add_argument(
-        "--new-session",
-        action="store_true",
-        help="ignore older checkpoints and require the exchange account to be flat",
-    )
     run.add_argument(
         "--live",
         action="store_true",
@@ -144,15 +139,16 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
     mode = "DEMO" if demo else "LIVE — REAL MONEY"
     print(f"OKX paper smoke [{mode}]  {inst}")
-    print(f"  start balance: {client.free_balance(quote):.4f} {quote}, "
-          f"{client.base_holding(inst):.6f} {base}")
+    print(
+        f"  start balance: {client.free_balance(quote):.4f} {quote}, "
+        f"{client.base_holding(inst):.6f} {base}"
+    )
 
     price = client.last_price(inst)
     quantity = client.round_amount(inst, args.notional / price)
     if quantity <= 0:
         print(
-            f"  notional {args.notional} {quote} at {price} rounds below one lot; "
-            f"raise --notional"
+            f"  notional {args.notional} {quote} at {price} rounds below one lot; raise --notional"
         )
         return 1
     print(f"  last price {price} {quote}; buying {quantity} {base} (~{args.notional} {quote})")
@@ -167,12 +163,13 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         return 1
     sell = client.market_order(inst, Side.SELL, received, reason="smoke-sell")
     print(
-        f"  SELL filled {sell.quantity} {base} @ {sell.price} {quote}, "
-        f"fee {sell.fee:.6f} {quote}"
+        f"  SELL filled {sell.quantity} {base} @ {sell.price} {quote}, fee {sell.fee:.6f} {quote}"
     )
 
-    print(f"  end balance:   {client.free_balance(quote):.4f} {quote}, "
-          f"{client.base_holding(inst):.6f} {base}")
+    print(
+        f"  end balance:   {client.free_balance(quote):.4f} {quote}, "
+        f"{client.base_holding(inst):.6f} {base}"
+    )
     print("  round trip complete — order path is live")
     return 0
 
@@ -181,29 +178,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     """Run a strategy against live closed bars, trading on OKX demo by default."""
     inst, tf = args.inst, args.tf
     swap = is_swap(inst)
-    calibration = args.strategy == "calibration-sequence"
-    if calibration and args.live:
-        print("calibration-sequence is demo-only; --live is forbidden")
+    sizing = Sizing(args.sizing)
+    if args.strategy == "constant-mix" and sizing is not Sizing.REBALANCE:
+        print("constant-mix requires --sizing rebalance")
         return 1
-    if calibration and (inst != "DOGE-USDT" or tf != "5m"):
-        print("calibration-sequence is frozen to DOGE-USDT spot 5m")
-        return 1
-    if calibration and not args.new_session:
-        print("calibration-sequence requires --new-session and a flat demo account")
-        return 1
-    if calibration and args.max_bars is not None and args.max_bars < CALIBRATION_BARS:
-        print(f"calibration-sequence requires at least {CALIBRATION_BARS} bars")
-        return 1
-    if args.new_session and not calibration:
-        print("--new-session is reserved for the fail-closed calibration sequence")
-        return 1
-    runtime_engine_fingerprint = None
-    if calibration:
-        try:
-            runtime_engine_fingerprint = engine_fingerprint()
-        except CalibrationClosed as exc:
-            print(f"refusing calibration with unidentifiable engine source: {exc}")
-            return 1
     if not swap and (args.leverage != 1.0 or args.margin_mode != "cross"):
         print("--leverage and --margin-mode only apply to swap instruments")
         return 1
@@ -228,10 +206,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"refusing unsupported paper market/account configuration: {exc}")
         return 1
     strategy: Strategy
-    if calibration:
-        strategy = SpotCalibrationSequence()
-        dust = CALIBRATION_BAND
-    elif args.strategy == "constant-mix":
+    if args.strategy == "constant-mix":
         # The live path re-sizes every bar, so it is REBALANCE by construction:
         # the band is the broker's dust fraction, exactly as in the backtest.
         strategy = DogeConstantMix(DogeConstantMixConfig(weight=args.weight, band=args.band))
@@ -245,7 +220,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         min_base_amount=min_base_amount_of(market),
         dust_fraction=dust,
     )
-    checkpoint = None if args.new_session else load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
+    checkpoint = load_latest_checkpoint(PAPER_LOG_DIR, inst, tf)
     feed = LiveFeed(
         public,
         inst,
@@ -271,7 +246,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
             return 1
     try:
-        resume = reconcile_restart(strategy.name, broker, checkpoint)
+        resume = reconcile_restart(strategy.name, broker, checkpoint, sizing)
     except RecoveryError as exc:
         print(f"refusing to start unreconciled paper session: {exc}")
         return 1
@@ -280,7 +255,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     mode = "DEMO" if demo else "LIVE — REAL MONEY"
     print(
         f"paper run [{mode}]  {strategy.name} on {inst} {tf}  "
-        f"(warmup {len(warmup)} bars, min order {broker.min_base_amount} {base_currency(inst)})"
+        f"(sizing {sizing.value}, warmup {len(warmup)} bars, "
+        f"min order {broker.min_base_amount} {base_currency(inst)})"
     )
     if resume is not None:
         resumed_at = dt.datetime.fromtimestamp(resume.checkpoint_ts / 1000, dt.UTC).isoformat()
@@ -291,6 +267,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"  logging to {log_path}")
 
     with log_path.open("a", encoding="utf-8") as log:
+
         def on_event(event: PaperEvent) -> None:
             _print_event(event)
             log.write(json.dumps(_event_row(event), allow_nan=False) + "\n")
@@ -298,11 +275,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             os.fsync(log.fileno())
 
         try:
-            max_bars = (
-                CALIBRATION_BARS
-                if calibration and args.max_bars is None
-                else args.max_bars
-            )
             run_paper(
                 strategy,
                 broker,
@@ -311,9 +283,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 tf,
                 warmup=warmup,
                 on_event=on_event,
-                max_bars=max_bars,
+                max_bars=args.max_bars,
                 resume=resume,
-                runtime_engine_fingerprint=runtime_engine_fingerprint,
+                sizing=sizing,
             )
         except KeyboardInterrupt:
             print("\n  stopped")
@@ -348,7 +320,9 @@ def _event_row(event: PaperEvent) -> dict:
         "average_entry": event.average_entry,
         "strategy_state": event.strategy_state,
         "account_event_cursor": event.account_event_cursor,
-        "runtime_engine_fingerprint": event.runtime_engine_fingerprint,
+        "sizing": event.sizing,
+        "active_target_before": event.active_target_before,
+        "active_target_after": event.active_target_after,
         "account_events": [
             {
                 "bill_id": item.bill_id,
@@ -388,8 +362,7 @@ def _event_row(event: PaperEvent) -> dict:
 def _print_event(event: PaperEvent) -> None:
     when = dt.datetime.fromtimestamp(event.ts / 1000, dt.UTC).strftime("%m-%d %H:%M")
     line = (
-        f"  {when}  close {event.close:<12.6g} target {event.target:<5} "
-        f"equity {event.equity:,.2f}"
+        f"  {when}  close {event.close:<12.6g} target {event.target:<5} equity {event.equity:,.2f}"
     )
     if event.fill is not None:
         f = event.fill
@@ -398,8 +371,7 @@ def _print_event(event: PaperEvent) -> None:
         line += "  (rejected)"
     if event.account_events:
         changes = ", ".join(
-            f"{item.kind} {item.amount:+g} {item.currency}"
-            for item in event.account_events
+            f"{item.kind} {item.amount:+g} {item.currency}" for item in event.account_events
         )
         line += f"  [{changes}]"
     print(line)

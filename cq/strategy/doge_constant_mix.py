@@ -8,9 +8,8 @@ of the same weight. What it does deliver, and what static weighting cannot at
 any level, is a *bounded* risk exposure: a 100x pump balloons any static DOGE
 weight to near-full and then eats the crash (~90% drawdown at every weight),
 while rebalancing dials the drawdown down with the weight. Its honest role is a
-bounded-risk layer-1 allocation policy, and a clean engine-calibration
-instrument — its equity is a path integral, insensitive to the exit/sizing
-semantics the Donchian calibration gate still disputes.
+bounded-risk layer-1 allocation policy. Its equity is a path integral rather
+than a result dominated by one exit event.
 
 The policy is the pair ``(weight, band)``. ``on_bar`` only needs the weight; the
 band is the no-trade threshold applied by whoever runs it — ``dust_fraction``

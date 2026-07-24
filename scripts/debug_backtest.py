@@ -7,9 +7,7 @@ settlement, every rejection, the per-bar equity, and — with `--pdb-bar` — a
 live debugger stopped at the strategy's decision on a chosen bar.
 
 Nothing here decides anything the engine does not already decide. It selects
-the same run the calibration script and the tests build and prints what the
-RunResult already carries. `scripts/calibrate_donchian.py` is the
-research-gate version of the same wiring; read it for the numbers that matter.
+the same run the tests build and prints what the `RunResult` already carries.
 
 Examples
 --------

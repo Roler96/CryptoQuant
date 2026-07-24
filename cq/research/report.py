@@ -18,7 +18,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cq.calibration import Capability, SizingMode, require_calibration
 from cq.context import Series, series_fingerprint
 from cq.engine.loop import RunResult
 from cq.research.metrics import Metrics, compute_metrics, episode_returns
@@ -118,18 +117,8 @@ class Report:
 
         return "\n".join(lines) + "\n"
 
-    def write(
-        self,
-        directory: Path | str = DEFAULT_REPORT_DIR,
-        *,
-        calibration_artifact: Path | str | None = None,
-    ) -> Path:
-        """Publish only when this market capability has a current PASS."""
-        capability: Capability = "swap" if self.result.market_type == "swap" else "spot"
-        sizing: SizingMode = (
-            "rebalance" if self.result.sizing == "rebalance" else "on_entry"
-        )
-        require_calibration(capability, sizing, calibration_artifact)
+    def write(self, directory: Path | str = DEFAULT_REPORT_DIR) -> Path:
+        """Write the rendered report to `directory`."""
         target = Path(directory)
         target.mkdir(parents=True, exist_ok=True)
         stamp = self.generated_at.replace(":", "").replace("-", "")[:15]

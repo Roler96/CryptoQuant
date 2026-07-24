@@ -1,9 +1,8 @@
 # Paper trading — pending work (opened 2026-07-21)
 
 > **This is an engineering backlog, not a go-live checklist.** The spot pipe
-> exists and is proven against OKX demo, but it runs under a placeholder probe.
-> No strategy has passed the calibration gate, so nothing here implies the
-> system is ready to trade a real view — see `docs/engine_calibration_gate.md`.
+> exists and is proven against OKX demo, but transport completion alone does
+> not imply that a strategy is ready for real capital.
 
 ## What already works
 
@@ -70,8 +69,8 @@ live truth.
 Native request construction, contract conversion, long/short recovery and bill
 logging are covered by deterministic tests. This implementation did not place
 credentialed demo orders. The only bundled paper strategy remains the plumbing
-probe, so completing the swap transport does not pass the calibration gate or
-make the system ready for real-money trading.
+probe, so completing the swap transport does not make the system ready for
+real-money trading.
 
 ### 3. Restart-time reconciliation (crash recovery)
 - [x] On start, rebuild the session's notion of position and cost basis from
@@ -139,5 +138,4 @@ so this change made no external API or credentialed demo calls.
 ## Suggested order
 
 Items 1–5 are implemented. Item 6 remains deferred until a real strategy needs
-more than one page of warmup; strategy calibration remains the separate gate
-before this transport is eligible for real-money use.
+more than one page of warmup.
