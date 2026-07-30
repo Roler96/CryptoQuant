@@ -217,20 +217,35 @@ def combine_scales(observed: np.ndarray, null_draws: np.ndarray) -> Combined:
     if draws.ndim != 2 or draws.shape[1] != delta.size:
         raise ValueError("null_draws must have shape (B, n_scales)")
 
+    # observed must be fully finite.
+    if not np.all(np.isfinite(delta)):
+        non_finite_indices = np.where(~np.isfinite(delta))[0]
+        raise ValueError(
+            f"observed contains non-finite values at scales {non_finite_indices.tolist()}"
+        )
+
     spread = draws.std(axis=0, ddof=1)
-    spread = np.where(spread > 0, spread, np.nan)
-    statistic = float(np.nansum(delta / spread))
-    null_statistics = np.nansum(draws / spread, axis=1)
+
+    # The null distribution's spread must all be strictly positive.
+    if not np.all(spread > 0):
+        zero_var_indices = np.where(spread <= 0)[0]
+        raise ValueError(
+            f"null distribution has zero or negative variance at scales {zero_var_indices.tolist()}"
+        )
+
+    statistic = float(np.sum(delta / spread))
+    null_statistics = np.sum(draws / spread, axis=1)
 
     # Two-sided, with the +1 that keeps an empirical p-value from ever being 0.
     extreme = int(np.sum(np.abs(null_statistics) >= abs(statistic)))
     p_value = (extreme + 1) / (draws.shape[0] + 1)
 
     positive = int(np.sum(delta > 0))
+    negative = int(np.sum(delta < 0))
     return Combined(
         statistic=statistic,
         p_value=float(p_value),
-        sign_agreement=max(positive, delta.size - positive),
+        sign_agreement=max(positive, negative),
     )
 
 
@@ -245,6 +260,9 @@ def evaluate_gates(
     G2 is deliberately not a research verdict. Aggregating by traded value is
     known to reduce kurtosis; if it did not, the clock is mis-built and the run
     says INVALID rather than pretending to have measured the market.
+
+    When multiple measures share the winning p-value, the measure earliest in
+    alphabetical order is chosen as the winner.
     """
     required = int(np.ceil(0.75 * n_scales))
 
@@ -253,7 +271,7 @@ def evaluate_gates(
     significant = {name: p for name, p in combined.items() if p <= SIDAK_ALPHA}
     g1_passed = bool(significant)
 
-    winner = min(significant, key=lambda name: combined[name]) if significant else None
+    winner = min(significant, key=lambda name: (combined[name], name)) if significant else None
     g3_passed = bool(winner is not None and sign_agreement[winner] >= required)
 
     if not g2_passed:

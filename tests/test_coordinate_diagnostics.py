@@ -246,3 +246,85 @@ def test_nothing_significant_is_closed():
     )
     assert not report.g1_passed
     assert report.verdict == "CLOSED"
+
+
+def test_combine_raises_when_observed_contains_nan():
+    """Non-finite observed values prevent running the check."""
+    rng = np.random.default_rng(11)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 3))
+    observed = np.array([1.0, np.nan, 2.0])
+    with pytest.raises(ValueError, match="non-finite"):
+        combine_scales(observed, null_draws)
+
+
+def test_combine_raises_when_observed_contains_inf():
+    """Infinite observed values prevent running the check."""
+    rng = np.random.default_rng(12)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 3))
+    observed = np.array([1.0, np.inf, 2.0])
+    with pytest.raises(ValueError, match="non-finite"):
+        combine_scales(observed, null_draws)
+
+
+def test_combine_raises_when_null_variance_is_zero():
+    """A scale with zero variance in the null kills the normalization."""
+    observed = np.array([1.0, 2.0, 3.0])
+    null_draws = np.array(
+        [
+            [0.0, 1.0, 1.0],
+            [0.0, 2.0, 2.0],
+            [0.0, 3.0, 3.0],
+        ]
+    )
+    with pytest.raises(ValueError, match="zero or negative variance"):
+        combine_scales(observed, null_draws)
+
+
+def test_sign_agreement_is_zero_for_all_zeros():
+    """When all deltas are zero, there is no direction; sign_agreement == 0."""
+    rng = np.random.default_rng(13)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 4))
+    result = combine_scales(np.array([0.0, 0.0, 0.0, 0.0]), null_draws)
+    assert result.sign_agreement == 0
+
+
+def test_sign_agreement_excludes_zeros_from_both_counts():
+    """Zeros are not counted as positive or negative; only directional values."""
+    rng = np.random.default_rng(14)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 4))
+    # 2 zeros, 2 negative
+    result = combine_scales(np.array([0.0, -1.0, 0.0, -2.0]), null_draws)
+    assert result.sign_agreement == 2
+
+
+def test_sign_agreement_uses_majority_of_non_zero():
+    """When more scales are positive than negative, agree is count of positives."""
+    rng = np.random.default_rng(15)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 4))
+    # 2 zeros, 1 negative, 1 positive: positive wins with 1
+    result = combine_scales(np.array([0.0, -1.0, 1.0, 0.0]), null_draws)
+    assert result.sign_agreement == 1
+
+
+def test_winning_measure_breaks_p_ties_alphabetically():
+    """When two measures share the winning p-value, the earliest alphabetically wins."""
+    # Construct two dicts with identical content but different insertion order.
+    combined_order_1 = {"hit_rate": 0.01, "rank_autocorrelation": 0.01}
+    combined_order_2 = {"rank_autocorrelation": 0.01, "hit_rate": 0.01}
+    sign_agreement = {"hit_rate": 4, "rank_autocorrelation": 4}
+
+    report_1 = evaluate_gates(
+        combined=combined_order_1,
+        sign_agreement=sign_agreement,
+        kurtosis_reduced_scales=4,
+        n_scales=4,
+    )
+    report_2 = evaluate_gates(
+        combined=combined_order_2,
+        sign_agreement=sign_agreement,
+        kurtosis_reduced_scales=4,
+        n_scales=4,
+    )
+    assert report_1.winning_measure == "hit_rate"
+    assert report_2.winning_measure == "hit_rate"
+    assert report_1.winning_measure == report_2.winning_measure
