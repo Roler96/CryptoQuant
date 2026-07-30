@@ -1389,9 +1389,13 @@ git commit -m "feat(research): paired pooling across scales and the pre-register
 
 **Interfaces:**
 - Consumes: Task 3–9
-- Produces: `paired_null_draws(returns_5m, quote_volume, edges_by_scale, calendar_factors, measure, draws, mean_block, seed) -> tuple[np.ndarray, np.ndarray]` — 返回 `(observed_deltas, null_draws)`，形状 `(n_scales,)` 与 `(draws, n_scales)`
+- Produces:
+  - `paired_null_draws(returns_5m, quote_volume, edges_by_scale, calendar_factors, measure, draws, mean_block, seed) -> tuple[np.ndarray, np.ndarray]` — 返回 `(observed_deltas, null_draws)`，形状 `(n_scales,)` 与 `(draws, n_scales)`
+  - `delta_paired_null_draws(dollar_delta, dollar_forward, calendar_delta, calendar_forward, factors, draws, mean_block, seed) -> tuple[np.ndarray, np.ndarray]` — 同样的返回形状。四个 dict 均以 `factor` 为键
 
 **关键实现事实**：两个 null 都冻结成交额序列，所以桶划分在整个循环里不变——`edges_by_scale` 只算一次并传入。这既是性能（2000 次重采样只重算测度），也是 null 设计正确的体现。
+
+**δ null 必须是 block bootstrap 重排 δ，而非置换整个 frame。** spec §D3 要求「重排 δ 序列，收益与成交额都不动」。置换整个 frame 会同时打乱 `close`（收益动了）与 `quote_volume`（成交额动了、桶划分与数据错配），且 i.i.d. 置换破坏局部依赖会让 null 分布过窄——那是**假阳性**的直接来源。因此 δ 与 forward return 在聚合后配好对，null 只对聚合后的 δ 数组做 block 重排。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -1399,7 +1403,7 @@ git commit -m "feat(research): paired pooling across scales and the pre-register
 # 追加到 tests/test_coordinate_diagnostics.py
 from scipy import stats as scipy_stats
 
-from cq.research.coordinate_diagnostics import paired_null_draws
+from cq.research.coordinate_diagnostics import delta_paired_null_draws, paired_null_draws
 from cq.research.dollar_clock import bucket_edges, solve_bucket_size
 
 
@@ -1411,6 +1415,8 @@ def _synthetic_random_walk(n: int, seed: int):
     return returns, quote_volume
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(600)
 def test_p_values_are_uniform_on_data_with_no_effect():
     """The meta-test. A miscalibrated null shows up here and nowhere else."""
     factors = [1, 3, 12]
@@ -1455,6 +1461,60 @@ def test_null_draws_have_the_requested_shape():
     )
     assert observed.shape == (1,)
     assert draws.shape == (50, 1)
+
+
+def test_delta_null_leaves_forward_returns_and_turnover_untouched():
+    """spec D3: the delta null reshuffles delta only — nothing else may move."""
+    rng = np.random.default_rng(20)
+    dollar_delta = {1: rng.normal(0.0, 1.0, 4000)}
+    dollar_forward = {1: rng.normal(0.0, 1.0, 4000)}
+    calendar_delta = {1: rng.normal(0.0, 1.0, 4000)}
+    calendar_forward = {1: rng.normal(0.0, 1.0, 4000)}
+    before = dollar_forward[1].copy()
+    observed, draws = delta_paired_null_draws(
+        dollar_delta=dollar_delta,
+        dollar_forward=dollar_forward,
+        calendar_delta=calendar_delta,
+        calendar_forward=calendar_forward,
+        factors=[1],
+        draws=30,
+        mean_block=24.0,
+        seed=0,
+    )
+    np.testing.assert_array_equal(dollar_forward[1], before)
+    assert observed.shape == (1,)
+    assert draws.shape == (30, 1)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_delta_null_p_values_are_uniform_when_delta_carries_nothing():
+    """Same meta-test, applied to the second null. An i.i.d. shuffle fails this."""
+    p_values = []
+    for trial in range(40):
+        rng = np.random.default_rng(500 + trial)
+        # delta 与 forward 各自有局部依赖，但彼此无耦合 -> 真零效应
+        def ar1(n, phi, gen):
+            out = np.empty(n)
+            out[0] = gen.normal()
+            for i in range(1, n):
+                out[i] = phi * out[i - 1] + gen.normal()
+            return out
+
+        observed, draws = delta_paired_null_draws(
+            dollar_delta={1: ar1(3000, 0.5, rng)},
+            dollar_forward={1: ar1(3000, 0.5, rng)},
+            calendar_delta={1: ar1(3000, 0.5, rng)},
+            calendar_forward={1: ar1(3000, 0.5, rng)},
+            factors=[1],
+            draws=200,
+            mean_block=24.0,
+            seed=trial,
+        )
+        p_values.append(combine_scales(observed, draws).p_value)
+
+    ks_p = scipy_stats.kstest(p_values, "uniform").pvalue
+    assert ks_p > 0.01, f"delta null is miscalibrated: KS p={ks_p:.4f}"
 
 
 def test_null_draws_are_reproducible_from_the_seed():
@@ -1544,12 +1604,60 @@ def paired_null_draws(
         indices = stationary_bootstrap_indices(n, mean_block, rng)
         null[draw] = deltas(returns[indices])
     return observed, null
+
+
+def delta_paired_null_draws(
+    dollar_delta: dict[int, np.ndarray],
+    dollar_forward: dict[int, np.ndarray],
+    calendar_delta: dict[int, np.ndarray],
+    calendar_forward: dict[int, np.ndarray],
+    factors: list[int],
+    draws: int,
+    mean_block: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Observed and null paired differences for delta's predictive power.
+
+    The second null of the protocol: only the delta series is reshuffled, in
+    stationary blocks. Returns and turnover are left exactly as they were, so
+    both clocks keep their partitions and their price paths — the single thing
+    broken is the coupling between the volume centroid and what happens next.
+
+    Shuffling the whole bar instead would move `close` (returns change) and
+    `quote_volume` (the buckets no longer match the data), and an i.i.d. shuffle
+    would strip the local dependence the block bootstrap exists to preserve —
+    narrowing the null and manufacturing significance.
+    """
+    rng = np.random.default_rng(seed)
+
+    def paired(shuffled: bool) -> np.ndarray:
+        out = []
+        for factor in factors:
+            values = []
+            for feature, forward in (
+                (dollar_delta[factor], dollar_forward[factor]),
+                (calendar_delta[factor], calendar_forward[factor]),
+            ):
+                series = feature
+                if shuffled:
+                    series = feature[
+                        stationary_bootstrap_indices(feature.size, mean_block, rng)
+                    ]
+                values.append(abs(rank_predictive_power(series, forward)))
+            out.append(values[0] - values[1])
+        return np.asarray(out, dtype=np.float64)
+
+    observed = paired(shuffled=False)
+    null = np.empty((draws, len(factors)), dtype=np.float64)
+    for draw in range(draws):
+        null[draw] = paired(shuffled=True)
+    return observed, null
 ```
 
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `.venv/bin/python -m pytest tests/test_coordinate_diagnostics.py -v`
-Expected: 28 passed
+Expected: 30 passed（其中 2 个标记 `slow`，耗时数分钟）
 
 若 KS 检验失败，**不要放宽阈值**——那是 null 构造有 bug 的信号。按 `superpowers:systematic-debugging` 排查。
 
@@ -1661,6 +1769,7 @@ from cq.data.store import DEFAULT_DB_PATH, Store
 from cq.research.coordinate_diagnostics import (
     SIDAK_ALPHA,
     combine_scales,
+    delta_paired_null_draws,
     direction_hit_rate,
     evaluate_gates,
     excess_kurtosis,
@@ -1715,22 +1824,17 @@ def fingerprint(frame: pd.DataFrame) -> str:
     return digest.hexdigest()[:16]
 
 
-def _delta_power_deltas(frame: pd.DataFrame, edges: np.ndarray, factor: int) -> float:
-    """Paired difference for the delta measure, computed on aggregated bars."""
-    dollar = aggregate_by_edges(frame, edges)
-    calendar = aggregate_calendar(frame, factor)
-    out = []
-    for bars in (dollar, calendar):
-        delta = centroid_delta(
-            bars["high"].to_numpy(),
-            bars["low"].to_numpy(),
-            bars["close"].to_numpy(),
-            bars["quote_volume"].to_numpy(),
-            bars["volume"].to_numpy(),
-        )
-        forward = log_returns(bars["close"].to_numpy())
-        out.append(rank_predictive_power(delta[:-1], forward))
-    return abs(out[0]) - abs(out[1])
+def _delta_and_forward(bars: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Aligned (delta_t, r_{t+1}) for aggregated bars, dropping the last bar."""
+    delta = centroid_delta(
+        bars["high"].to_numpy(),
+        bars["low"].to_numpy(),
+        bars["close"].to_numpy(),
+        bars["quote_volume"].to_numpy(),
+        bars["volume"].to_numpy(),
+    )
+    forward = log_returns(bars["close"].to_numpy())
+    return delta[:-1], forward
 
 
 def run(db_path: str, out_path: Path) -> dict:
@@ -1793,20 +1897,25 @@ def run(db_path: str, out_path: Path) -> dict:
             "sign_agreement": pooled.sign_agreement,
         }
 
-    delta_observed = np.array(
-        [_delta_power_deltas(frame, edges_by_scale[f], f) for f in factors]
+    dollar_delta, dollar_forward, calendar_delta, calendar_forward = {}, {}, {}, {}
+    for factor in factors:
+        dollar_delta[factor], dollar_forward[factor] = _delta_and_forward(
+            aggregate_by_edges(frame, edges_by_scale[factor])
+        )
+        calendar_delta[factor], calendar_forward[factor] = _delta_and_forward(
+            aggregate_calendar(frame, factor)
+        )
+
+    delta_observed, delta_null = delta_paired_null_draws(
+        dollar_delta=dollar_delta,
+        dollar_forward=dollar_forward,
+        calendar_delta=calendar_delta,
+        calendar_forward=calendar_forward,
+        factors=factors,
+        draws=DRAWS,
+        mean_block=float(block),
+        seed=SEED,
     )
-    delta_null = np.empty((DRAWS, len(factors)))
-    rng = np.random.default_rng(SEED)
-    for draw in range(DRAWS):
-        shuffled = frame.copy()
-        order = np.random.default_rng(int(rng.integers(2**32))).permutation(len(frame))
-        shuffled[["high", "low", "close", "volume", "quote_volume"]] = frame[
-            ["high", "low", "close", "volume", "quote_volume"]
-        ].to_numpy()[order]
-        delta_null[draw] = [
-            _delta_power_deltas(shuffled, edges_by_scale[f], f) for f in factors
-        ]
     pooled_delta = combine_scales(delta_observed, delta_null)
     combined["delta_power"] = pooled_delta.p_value
     agreement["delta_power"] = pooled_delta.sign_agreement
@@ -2012,6 +2121,8 @@ Expected: 有一条 commit。若为空，回到 Task 12——**不得先跑后�
 
 Expected: 打印 verdict 与三个主测度的 p 值；写出 `reports/research/doge_dollar_clock_diagnose.json`。
 
+**预期耗时 25–30 分钟**（实测外推：bootstrap 索引生成约 4 分钟，三个测度各 2000 draws × 四尺度 Spearman 约 20 分钟）。不是卡死，不要中途 kill。建议 `--out` 先写到临时路径试跑一次小 `DRAWS` 验证管线通畅，再跑正式的。
+
 - [ ] **Step 3: 核对指纹**
 
 JSON 里的 `fingerprints.ohlcv` 必须与 PROTOCOL 中记录的一致。不一致说明诊断跑的不是预注册的那份数据，**作废重来**。
@@ -2073,5 +2184,6 @@ git commit -m "research(doge): adjudicate the dollar-clock coordinate diagnosis"
 - `aggregate_by_edges` / `aggregate_calendar` 列集合在 Task 5 固定为 8 列，Task 11 使用 `high/low/close/volume/quote_volume/duration_ms`，均在其中
 - `combine_scales` 返回 `Combined(statistic, p_value, sign_agreement)`，Task 11 三处使用一致
 - `evaluate_gates` 参数名 `combined` / `sign_agreement` / `kurtosis_reduced_scales` / `n_scales` 在 Task 9 与 Task 11 一致
-- `_measure` 仅支持 `rank_autocorrelation` 与 `hit_rate`；`delta_power` 走 Task 11 的独立路径（因其 null 不同），此处不重名冲突
+- `_measure` 仅支持 `rank_autocorrelation` 与 `hit_rate`；`delta_power` 走 `delta_paired_null_draws`（因其 null 不同），此处不重名冲突
+- `delta_paired_null_draws` 的四个 dict 参数均以 `factor`（`int`）为键，与 `edges_by_scale` 的键类型一致；Task 11 构造它们时用的正是 `factors = list(SCALES.values())`
 - `BAR_MS` 在 `dollar_clock.py` 定义一次，Task 11 从该模块导入，未重复定义
