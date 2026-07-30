@@ -113,3 +113,4 @@ temp/
 .agents/*
 !.agents/*.md
 /research/data_cache
+!reports/research/doge_dollar_clock_diagnose.json

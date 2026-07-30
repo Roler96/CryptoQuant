@@ -1,0 +1,192 @@
+{
+  "bars": 464256,
+  "bars_aligned": 464255,
+  "corroboration": {
+    "12h": {
+      "hit_rate_calendar": 0.49235092101155165,
+      "hit_rate_dollar": 0.49177274138466315,
+      "kurtosis_calendar": 70.19691644898118,
+      "kurtosis_dollar": 12.338774058456275,
+      "median_duration_hours": 4.083333333333333,
+      "rank_autocorr_calendar": -0.0065351742656271855,
+      "rank_autocorr_dollar": -0.02448861588156281,
+      "variance_ratio_calendar": {
+        "2": 1.1779955619109126,
+        "4": 1.1151380696626918,
+        "8": 1.1019880651022615
+      },
+      "variance_ratio_dollar": {
+        "2": 0.914099131054144,
+        "4": 0.8986042353972666,
+        "8": 0.9183272047567616
+      }
+    },
+    "15m": {
+      "hit_rate_calendar": 0.47546584056942337,
+      "hit_rate_dollar": 0.4971903169998829,
+      "kurtosis_calendar": 122.57080876596609,
+      "kurtosis_dollar": 76.41277887559265,
+      "median_duration_hours": 0.16666666666666666,
+      "rank_autocorr_calendar": -0.05901515929000309,
+      "rank_autocorr_dollar": -0.017697853991414582,
+      "variance_ratio_calendar": {
+        "2": 0.9570360385370195,
+        "4": 0.9317017688878837,
+        "8": 0.8998468377927525
+      },
+      "variance_ratio_dollar": {
+        "2": 0.957991031121738,
+        "4": 0.924486793927327,
+        "8": 0.8943716932324661
+      }
+    },
+    "1h": {
+      "hit_rate_calendar": 0.4725015713387806,
+      "hit_rate_dollar": 0.4957384523717002,
+      "kurtosis_calendar": 95.38619958218823,
+      "kurtosis_dollar": 21.32554400535102,
+      "median_duration_hours": 0.3333333333333333,
+      "rank_autocorr_calendar": -0.06786607873064367,
+      "rank_autocorr_dollar": -0.02174076290381975,
+      "variance_ratio_calendar": {
+        "2": 0.9714725679861432,
+        "4": 0.9443775701069477,
+        "8": 0.9286322545675794
+      },
+      "variance_ratio_dollar": {
+        "2": 0.9540554805906107,
+        "4": 0.9171150489277081,
+        "8": 0.8975729896433512
+      }
+    },
+    "4h": {
+      "hit_rate_calendar": 0.462195375963341,
+      "hit_rate_dollar": 0.49487418452935694,
+      "kurtosis_calendar": 97.98236765930797,
+      "kurtosis_dollar": 10.046863872629562,
+      "median_duration_hours": 1.3333333333333333,
+      "rank_autocorr_calendar": -0.07156970496780093,
+      "rank_autocorr_dollar": -0.01135785892321557,
+      "variance_ratio_calendar": {
+        "2": 0.9830011820500515,
+        "4": 1.0821849673951947,
+        "8": 1.174893783659477
+      },
+      "variance_ratio_dollar": {
+        "2": 0.9921171151532012,
+        "4": 0.9441244121017761,
+        "8": 0.9092590691921504
+      }
+    }
+  },
+  "coupling_premise": {
+    "median_spread_bps": 3.3938779061669853,
+    "spread_vs_inverse_turnover_spearman": -0.7314872875289234
+  },
+  "fidelity": {
+    "12h": {
+      "bucket_turnover_p5": 71651023.95891535,
+      "bucket_turnover_p50": 72443553.58836721,
+      "bucket_turnover_p95": 85357039.86146589,
+      "buckets": 3223,
+      "calendar_bars": 3223,
+      "converged": true,
+      "single_bar_buckets": 0.005274588892336333,
+      "target_value": 71626905.76804376
+    },
+    "15m": {
+      "bucket_turnover_p5": 541713.0452466535,
+      "bucket_turnover_p50": 801652.6579232218,
+      "bucket_turnover_p95": 4743064.197272306,
+      "buckets": 154751,
+      "calendar_bars": 154751,
+      "converged": true,
+      "single_bar_buckets": 0.4846042998106636,
+      "target_value": 528877.5870352874
+    },
+    "1h": {
+      "bucket_turnover_p5": 4418779.275711998,
+      "bucket_turnover_p50": 4944333.4489653325,
+      "bucket_turnover_p95": 11959134.484763902,
+      "buckets": 38687,
+      "calendar_bars": 38687,
+      "converged": true,
+      "single_bar_buckets": 0.18243854524775766,
+      "target_value": 4397782.1652277
+    },
+    "4h": {
+      "bucket_turnover_p5": 22313166.550418254,
+      "bucket_turnover_p50": 23019088.475354232,
+      "bucket_turnover_p95": 33408831.337692395,
+      "buckets": 9671,
+      "calendar_bars": 9671,
+      "converged": true,
+      "single_bar_buckets": 0.03546685968359011,
+      "target_value": 22286576.61361448
+    }
+  },
+  "fingerprints": {
+    "ohlcv": "12b8ca59c15fc519"
+  },
+  "gates": {
+    "g1_significance": true,
+    "g2_kurtosis_sanity": true,
+    "g3_sign_consistency": true,
+    "kurtosis_reduced_scales": 4,
+    "winning_measure": "delta_power"
+  },
+  "holdout_recorded": false,
+  "label": "doge-dollar-clock-diagnosis-v1",
+  "measures": {
+    "delta_power": {
+      "deltas": [
+        -0.01760802813452985,
+        -0.050358221747928845,
+        -0.06478761746852876,
+        0.014811434739765763
+      ],
+      "p_value": 0.0004997501249375312,
+      "sign_agreement": 3,
+      "statistic": -26.12264947668996
+    },
+    "hit_rate": {
+      "deltas": [
+        0.021724267134081265,
+        0.02323612984289325,
+        0.03267569905664919,
+        -0.000889251564036575
+      ],
+      "p_value": 0.0004997501249375312,
+      "sign_agreement": 3,
+      "statistic": 24.8205463180478
+    },
+    "rank_autocorrelation": {
+      "deltas": [
+        0.04133442163056676,
+        0.04617869833799228,
+        0.06068846488513826,
+        -0.018074253357569965
+      ],
+      "p_value": 0.0004997501249375312,
+      "sign_agreement": 3,
+      "statistic": 22.614905930307792
+    }
+  },
+  "verdict": "PASS",
+  "versions": {
+    "block_length": 12,
+    "draws": 2000,
+    "scales": {
+      "12h": 144,
+      "15m": 3,
+      "1h": 12,
+      "4h": 48
+    },
+    "seed": 0,
+    "sidak_alpha": 0.016952427508441503
+  },
+  "window": {
+    "end": "2025-06-01",
+    "start": "2021-01-01"
+  }
+}
