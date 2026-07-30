@@ -653,6 +653,24 @@ def test_bucket_duration_counts_the_calendar_time_the_bucket_consumed():
     assert out["duration_ms"].iloc[1] == 3 * BAR_MS
 
 
+def test_last_bucket_excludes_the_discarded_tail():
+    """reduceat's final segment runs to the array end; the tail must not leak in.
+
+    `bucket_edges` drops the trailing partial bucket, so edges[-1] is normally
+    short of the frame. A naive reduceat gives the last bucket those dropped
+    bars for free — and every other column would still look correct.
+    """
+    frame = _frame(6)
+    out = aggregate_by_edges(frame, np.array([2, 5]))
+    assert out["volume"].iloc[-1] == pytest.approx(frame["volume"].iloc[2:5].sum())
+    assert out["quote_volume"].iloc[-1] == pytest.approx(
+        frame["quote_volume"].iloc[2:5].sum()
+    )
+    assert out["high"].iloc[-1] == frame["high"].iloc[2:5].max()
+    assert out["low"].iloc[-1] == frame["low"].iloc[2:5].min()
+    assert out["close"].iloc[-1] == frame["close"].iloc[4]
+
+
 def test_aggregate_calendar_matches_edges_at_a_fixed_factor():
     frame = _frame(12)
     by_calendar = aggregate_calendar(frame, factor=3)
@@ -713,13 +731,23 @@ def aggregate_by_edges(frame: pd.DataFrame, edges: np.ndarray) -> pd.DataFrame:
         return pd.DataFrame(columns=_COLUMNS, index=frame.index[:0])
 
     starts = np.concatenate(([0], ends[:-1]))
+
+    # reduceat's final segment always runs to the end of the array, but
+    # `bucket_edges` discards the trailing partial bucket, so `ends[-1]` is
+    # normally short of the frame. Without this truncation the last bucket
+    # silently swallows the bars that were deliberately dropped.
+    stop = int(ends[-1])
+
+    def column(name: str) -> np.ndarray:
+        return frame[name].to_numpy()[:stop]
+
     rows = {
-        "open": frame["open"].to_numpy()[starts],
-        "high": np.maximum.reduceat(frame["high"].to_numpy(), starts),
-        "low": np.minimum.reduceat(frame["low"].to_numpy(), starts),
-        "close": frame["close"].to_numpy()[ends - 1],
-        "volume": np.add.reduceat(frame["volume"].to_numpy(), starts),
-        "quote_volume": np.add.reduceat(frame["quote_volume"].to_numpy(), starts),
+        "open": column("open")[starts],
+        "high": np.maximum.reduceat(column("high"), starts),
+        "low": np.minimum.reduceat(column("low"), starts),
+        "close": column("close")[ends - 1],
+        "volume": np.add.reduceat(column("volume"), starts),
+        "quote_volume": np.add.reduceat(column("quote_volume"), starts),
         "duration_ms": (ends - starts) * BAR_MS,
         "bars": ends - starts,
     }
