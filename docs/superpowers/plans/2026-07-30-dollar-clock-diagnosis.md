@@ -1477,7 +1477,9 @@ def _synthetic_random_walk(n: int, seed: int):
     """A series with no exploitable structure and realistically skewed turnover."""
     rng = np.random.default_rng(seed)
     returns = rng.normal(0.0, 0.004, n)
-    quote_volume = rng.lognormal(mean=11.0, sigma=1.6, size=n + 1)
+    # Same length on purpose: this mirrors the aligned pipeline, where the first
+    # bar is dropped so that returns[i] is the return of turnover bar i.
+    quote_volume = rng.lognormal(mean=11.0, sigma=1.6, size=n)
     return returns, quote_volume
 
 
@@ -1614,9 +1616,23 @@ Expected: FAIL — `ImportError: cannot import name 'paired_null_draws'`
 
 
 def _aggregate_returns(returns: np.ndarray, ends: np.ndarray) -> np.ndarray:
-    """Sum 5m log returns inside each bucket. Additivity is why they are logs."""
+    """Sum 5m log returns inside each bucket. Additivity is why they are logs.
+
+    `ends` indexes bars and `returns` indexes returns, and the caller is
+    responsible for having made those the same thing (drop the first bar, since
+    it has no return). An edge past the end of `returns` means that alignment
+    was not done, so this refuses rather than trimming: a silently shifted
+    bucket still produces a plausible number, and no meta-test can catch it --
+    under the null, returns and turnover are uncoupled whether or not the
+    buckets are shifted, so a shifted null is still a perfectly uniform null.
+    """
     if ends.size == 0:
         return np.empty(0, dtype=np.float64)
+    if int(ends[-1]) > returns.size:
+        raise ValueError(
+            f"bucket edge {int(ends[-1])} exceeds {returns.size} returns: "
+            "bars and returns are misaligned"
+        )
     starts = np.concatenate(([0], ends[:-1]))
     return np.add.reduceat(returns, starts)
 
@@ -1910,15 +1926,24 @@ def run(db_path: str, out_path: Path) -> dict:
         )
     assert_contiguous(frame)
 
-    close = frame["close"].to_numpy(np.float64)
-    quote_volume = frame["quote_volume"].to_numpy(np.float64)
-    returns = log_returns(close)
+    # Alignment, and it is load-bearing. `log_returns` yields one value fewer
+    # than there are bars: returns[i] is the return OF bar i+1. `bucket_edges`
+    # runs on turnover and emits BAR indices. Slicing returns with bar indices
+    # therefore shifts every bucket by one bar -- and no meta-test can catch it,
+    # because under the null returns and turnover are uncoupled either way, so a
+    # shifted null is still a valid null. Dropping the first bar makes the two
+    # arrays index-identical: returns[i] is exactly bar i of `aligned`.
+    returns = log_returns(frame["close"].to_numpy(np.float64))
+    aligned = frame.iloc[1:]
+    if len(aligned) != returns.size:
+        raise ProtocolError(f"alignment broken: {len(aligned)} bars vs {returns.size} returns")
+    quote_volume = aligned["quote_volume"].to_numpy(np.float64)
     block = select_block_length(returns)
 
     edges_by_scale: dict[int, np.ndarray] = {}
     fidelity = {}
     for label, factor in SCALES.items():
-        target_count = len(frame) // factor
+        target_count = len(aligned) // factor
         solution = solve_bucket_size(quote_volume, target_count)
         edges = bucket_edges(quote_volume, solution.target_value)
         edges_by_scale[factor] = edges
@@ -1966,10 +1991,10 @@ def run(db_path: str, out_path: Path) -> dict:
     dollar_delta, dollar_forward, calendar_delta, calendar_forward = {}, {}, {}, {}
     for factor in factors:
         dollar_delta[factor], dollar_forward[factor] = _delta_and_forward(
-            aggregate_by_edges(frame, edges_by_scale[factor])
+            aggregate_by_edges(aligned, edges_by_scale[factor])
         )
         calendar_delta[factor], calendar_forward[factor] = _delta_and_forward(
-            aggregate_calendar(frame, factor)
+            aggregate_calendar(aligned, factor)
         )
 
     delta_observed, delta_null = delta_paired_null_draws(
@@ -1995,8 +2020,8 @@ def run(db_path: str, out_path: Path) -> dict:
     corroboration = {}
     kurtosis_reduced = 0
     for label, factor in SCALES.items():
-        dollar = aggregate_by_edges(frame, edges_by_scale[factor])
-        calendar = aggregate_calendar(frame, factor)
+        dollar = aggregate_by_edges(aligned, edges_by_scale[factor])
+        calendar = aggregate_calendar(aligned, factor)
         dollar_r = log_returns(dollar["close"].to_numpy())
         calendar_r = log_returns(calendar["close"].to_numpy())
         k_dollar = excess_kurtosis(dollar_r)
@@ -2017,8 +2042,8 @@ def run(db_path: str, out_path: Path) -> dict:
         }
 
     # D4: the coupling premise the three-layer narrative rests on.
-    spread = corwin_schultz_spread(frame["high"].to_numpy(), frame["low"].to_numpy())
-    hourly = aggregate_calendar(frame, 12)
+    spread = corwin_schultz_spread(aligned["high"].to_numpy(), aligned["low"].to_numpy())
+    hourly = aggregate_calendar(aligned, 12)
     hourly_spread = np.add.reduceat(
         spread[: (len(spread) // 12) * 12], np.arange(0, (len(spread) // 12) * 12, 12)
     ) / 12.0
@@ -2041,6 +2066,7 @@ def run(db_path: str, out_path: Path) -> dict:
         "label": "doge-dollar-clock-diagnosis-v1",
         "window": {"start": EXPLORE_START, "end": EXPLORE_END},
         "bars": len(frame),
+        "bars_aligned": len(aligned),
         "fingerprints": {"ohlcv": fingerprint(frame)},
         "versions": {
             "scales": SCALES,
