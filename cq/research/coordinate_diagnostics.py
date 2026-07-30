@@ -40,11 +40,12 @@ def direction_hit_rate(returns: np.ndarray) -> HitRate:
     """How often the next return keeps the current one's sign.
 
     Flat bars carry no direction, so pairs touching a zero return are dropped
-    rather than silently counted as agreement or disagreement.
+    rather than silently counted as agreement or disagreement. Missing values
+    (NaN) are also dropped as they carry no direction information.
     """
     signs = np.sign(np.asarray(returns, dtype=np.float64))
     current, following = signs[:-1], signs[1:]
-    usable = (current != 0) & (following != 0)
+    usable = np.isfinite(current) & np.isfinite(following) & (current != 0) & (following != 0)
     pairs = int(usable.sum())
     dropped = int(usable.size - pairs)
     if pairs == 0:
@@ -54,7 +55,16 @@ def direction_hit_rate(returns: np.ndarray) -> HitRate:
 
 
 def rank_predictive_power(feature: np.ndarray, forward_returns: np.ndarray) -> float:
-    """Spearman correlation between a feature and the return that follows it."""
+    """Spearman correlation between a feature and the return that follows it.
+
+    The caller is responsible for time alignment: feature[t] must correspond to
+    forward_returns[t], where feature[t] is observable at time t and
+    forward_returns[t] is the return realized after time t. The function only
+    validates that the arrays have equal length; it cannot detect semantic
+    misalignment. If the caller mistakenly passes same-period returns instead
+    of forward returns, the function will return a valid correlation that
+    aliases autocorrelation as predictive power.
+    """
     x = np.asarray(feature, dtype=np.float64)
     y = np.asarray(forward_returns, dtype=np.float64)
     if x.size != y.size:

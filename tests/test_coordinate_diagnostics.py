@@ -57,3 +57,29 @@ def test_rank_predictive_power_finds_a_planted_link():
 def test_rank_predictive_power_rejects_mismatched_lengths():
     with pytest.raises(ValueError, match="same length"):
         rank_predictive_power(np.zeros(5), np.zeros(4))
+
+
+def test_hit_rate_drops_nan_returns_and_reports_how_many():
+    """NaN carries no direction, so NaN pairs are dropped like zero pairs."""
+    returns = np.array([np.nan, 1.0, 1.0, -1.0, 1.0])
+    # 样本对 (t, t+1): (nan,1) 丢, (1,1) 同号, (1,-1) 异号, (-1,1) 异号
+    result = direction_hit_rate(returns)
+    assert result.pairs == 3
+    assert result.dropped == 1
+    assert result.rate == pytest.approx(1.0 / 3)
+
+
+def test_hit_rate_pairs_dropped_invariant():
+    """Invariant: pairs + dropped == len(returns) - 1 holds across various inputs."""
+    test_cases = [
+        np.array([1.0, 1.0, 1.0, 1.0]),  # all same sign
+        np.array([1.0, -1.0, 1.0, -1.0]),  # alternating
+        np.array([0.0, 0.0, 0.0, 0.0]),  # all zeros
+        np.array([1.0, 0.0, 1.0, 0.0]),  # mixed with zeros
+        np.array([np.nan, 1.0, -1.0, 1.0]),  # mixed with NaN
+        np.array([1.0, np.nan, -1.0, np.nan]),  # multiple NaNs
+        np.array([0.0, np.nan, 1.0, -1.0]),  # both zeros and NaNs
+    ]
+    for returns in test_cases:
+        result = direction_hit_rate(returns)
+        assert result.pairs + result.dropped == len(returns) - 1
