@@ -117,19 +117,15 @@ def test_early_exit_respects_tolerance_boundary():
 
 
 def test_bisection_terminates_when_floating_point_precision_exhausted():
-    """Bisection exits early when mid can no longer change due to floating point.
+    """Prove the collapse break fires, not merely that the loop ended early.
 
-    With uniform bar values and a target falling between reachable bucket counts,
-    the interval inevitably shrinks until mid == low or mid == high. The early
-    termination check `if mid == low or mid == high` prevents pointless
-    recomputation of bucket_edges when the bracket is exhausted.
+    59_999 is deliberately not exactly reachable for this input: no bucket size
+    yields that count. The loop therefore cannot leave through the
+    `count == target_count` break, so an early exit can only be the collapse
+    branch. Asserting count != target_count is what separates the two paths --
+    `iterations < 100` alone cannot.
     """
-    # Construct data where bucket count is highly quantized: large uniform bars
-    # so many bucket sizes give identical bucket counts. Request a target
-    # between two reachable counts.
     qv = np.full(120_000, 1.0)
-    # low bound gives 120000 buckets, high bound gives 1 bucket.
-    # Request 60000 buckets: will likely not be exactly reachable.
-    # Bisection must terminate via mid in (low, high), not hit max_iter.
-    solution = solve_bucket_size(qv, target_count=60_000)
-    assert solution.iterations < 100  # proves early exit fired
+    solution = solve_bucket_size(qv, target_count=59_999)
+    assert solution.iterations < 100
+    assert solution.count != 59_999
