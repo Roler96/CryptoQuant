@@ -2,8 +2,11 @@ import numpy as np
 import pytest
 
 from cq.research.coordinate_diagnostics import (
+    SIDAK_ALPHA,
+    combine_scales,
     delta_r_squared,
     direction_hit_rate,
+    evaluate_gates,
     excess_kurtosis,
     rank_autocorrelation,
     rank_predictive_power,
@@ -170,3 +173,76 @@ def test_block_length_is_a_multiple_of_twelve_and_at_least_twelve():
     length = select_block_length(rng.normal(0.0, 1.0, 10_000))
     assert length >= 12
     assert length % 12 == 0
+
+
+def test_sidak_alpha_matches_three_primary_measures():
+    assert pytest.approx(1.0 - 0.95 ** (1.0 / 3.0), abs=1e-6) == SIDAK_ALPHA
+
+
+def test_combined_p_is_small_when_every_scale_shifts_the_same_way():
+    rng = np.random.default_rng(0)
+    null_draws = rng.normal(0.0, 1.0, size=(2000, 4))
+    observed = np.array([3.0, 3.2, 2.8, 3.1])
+    result = combine_scales(observed, null_draws)
+    assert result.p_value < 0.001
+    assert result.sign_agreement == 4
+
+
+def test_combined_p_is_large_when_the_shift_is_pure_noise():
+    rng = np.random.default_rng(1)
+    null_draws = rng.normal(0.0, 1.0, size=(2000, 4))
+    observed = np.array([0.1, -0.2, 0.05, -0.1])
+    assert combine_scales(observed, null_draws).p_value > 0.2
+
+
+def test_sign_agreement_counts_the_majority_direction():
+    rng = np.random.default_rng(2)
+    null_draws = rng.normal(0.0, 1.0, size=(500, 4))
+    result = combine_scales(np.array([2.0, 2.0, 2.0, -2.0]), null_draws)
+    assert result.sign_agreement == 3
+
+
+def test_gates_pass_only_when_all_three_hold():
+    passing = evaluate_gates(
+        combined={"rank_autocorrelation": 0.001, "hit_rate": 0.5, "delta_power": 0.4},
+        sign_agreement={"rank_autocorrelation": 4, "hit_rate": 2, "delta_power": 2},
+        kurtosis_reduced_scales=4,
+        n_scales=4,
+    )
+    assert passing.g1_passed and passing.g2_passed and passing.g3_passed
+    assert passing.verdict == "PASS"
+    assert passing.winning_measure == "rank_autocorrelation"
+
+
+def test_broken_clock_fails_the_kurtosis_gate_even_with_a_significant_result():
+    """G2 failing means the clock is broken, so the verdict must not be CLOSED."""
+    report = evaluate_gates(
+        combined={"rank_autocorrelation": 0.0001, "hit_rate": 0.5, "delta_power": 0.4},
+        sign_agreement={"rank_autocorrelation": 4, "hit_rate": 2, "delta_power": 2},
+        kurtosis_reduced_scales=1,
+        n_scales=4,
+    )
+    assert not report.g2_passed
+    assert report.verdict == "INVALID"
+
+
+def test_significant_but_inconsistent_signs_is_closed():
+    report = evaluate_gates(
+        combined={"rank_autocorrelation": 0.0001, "hit_rate": 0.5, "delta_power": 0.4},
+        sign_agreement={"rank_autocorrelation": 2, "hit_rate": 2, "delta_power": 2},
+        kurtosis_reduced_scales=4,
+        n_scales=4,
+    )
+    assert report.g1_passed and not report.g3_passed
+    assert report.verdict == "CLOSED"
+
+
+def test_nothing_significant_is_closed():
+    report = evaluate_gates(
+        combined={"rank_autocorrelation": 0.3, "hit_rate": 0.5, "delta_power": 0.4},
+        sign_agreement={"rank_autocorrelation": 4, "hit_rate": 4, "delta_power": 4},
+        kurtosis_reduced_scales=4,
+        n_scales=4,
+    )
+    assert not report.g1_passed
+    assert report.verdict == "CLOSED"

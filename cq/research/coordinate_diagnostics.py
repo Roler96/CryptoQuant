@@ -15,6 +15,9 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import stats
 
+# Three primary measures, family alpha 0.05.
+SIDAK_ALPHA = 1.0 - 0.95 ** (1.0 / 3.0)
+
 
 @dataclass(frozen=True)
 class HitRate:
@@ -23,6 +26,26 @@ class HitRate:
     rate: float
     pairs: int
     dropped: int
+
+
+@dataclass(frozen=True)
+class Combined:
+    """One measure's evidence, pooled across scales."""
+
+    statistic: float
+    p_value: float
+    sign_agreement: int
+
+
+@dataclass(frozen=True)
+class GateReport:
+    """The pre-registered verdict."""
+
+    g1_passed: bool
+    g2_passed: bool
+    g3_passed: bool
+    winning_measure: str | None
+    verdict: str  # PASS | CLOSED | INVALID
 
 
 def rank_autocorrelation(returns: np.ndarray, lag: int = 1) -> float:
@@ -179,3 +202,71 @@ def select_block_length(returns: np.ndarray, max_lag: int = 288) -> int:
             chosen = lag
             break
     return max(12, int(np.ceil(chosen / 12.0)) * 12)
+
+
+def combine_scales(observed: np.ndarray, null_draws: np.ndarray) -> Combined:
+    """Pool paired differences across scales against a jointly generated null.
+
+    Each scale is normalised by its own null spread, then summed. Because the
+    null draws are generated jointly, the correlation between scales is already
+    inside the null distribution of the sum — no independence assumption is made
+    anywhere.
+    """
+    delta = np.asarray(observed, dtype=np.float64)
+    draws = np.asarray(null_draws, dtype=np.float64)
+    if draws.ndim != 2 or draws.shape[1] != delta.size:
+        raise ValueError("null_draws must have shape (B, n_scales)")
+
+    spread = draws.std(axis=0, ddof=1)
+    spread = np.where(spread > 0, spread, np.nan)
+    statistic = float(np.nansum(delta / spread))
+    null_statistics = np.nansum(draws / spread, axis=1)
+
+    # Two-sided, with the +1 that keeps an empirical p-value from ever being 0.
+    extreme = int(np.sum(np.abs(null_statistics) >= abs(statistic)))
+    p_value = (extreme + 1) / (draws.shape[0] + 1)
+
+    positive = int(np.sum(delta > 0))
+    return Combined(
+        statistic=statistic,
+        p_value=float(p_value),
+        sign_agreement=max(positive, delta.size - positive),
+    )
+
+
+def evaluate_gates(
+    combined: dict[str, float],
+    sign_agreement: dict[str, int],
+    kurtosis_reduced_scales: int,
+    n_scales: int,
+) -> GateReport:
+    """Apply G1/G2/G3 exactly as pre-registered in the protocol.
+
+    G2 is deliberately not a research verdict. Aggregating by traded value is
+    known to reduce kurtosis; if it did not, the clock is mis-built and the run
+    says INVALID rather than pretending to have measured the market.
+    """
+    required = int(np.ceil(0.75 * n_scales))
+
+    g2_passed = kurtosis_reduced_scales >= required
+
+    significant = {name: p for name, p in combined.items() if p <= SIDAK_ALPHA}
+    g1_passed = bool(significant)
+
+    winner = min(significant, key=lambda name: combined[name]) if significant else None
+    g3_passed = bool(winner is not None and sign_agreement[winner] >= required)
+
+    if not g2_passed:
+        verdict = "INVALID"
+    elif g1_passed and g3_passed:
+        verdict = "PASS"
+    else:
+        verdict = "CLOSED"
+
+    return GateReport(
+        g1_passed=g1_passed,
+        g2_passed=g2_passed,
+        g3_passed=g3_passed,
+        winning_measure=winner,
+        verdict=verdict,
+    )
