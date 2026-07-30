@@ -46,14 +46,19 @@ TIMEFRAME = "5m"
 EXPLORE_START = "2021-01-01"
 EXPLORE_END = "2025-06-01"
 SCALES = {"15m": 3, "1h": 12, "4h": 48, "12h": 144}
-PRIMARY_MEASURES = ("rank_autocorrelation", "hit_rate", "delta_power")
 DRAWS = 2000
 SEED = 0
 DEFAULT_OUT = Path("reports/research/doge_dollar_clock_diagnose.json")
 
 
-def assert_contiguous(frame: pd.DataFrame) -> None:
-    """Refuse a gapped series instead of quietly diagnosing a different one."""
+def assert_contiguous(frame: pd.DataFrame, expected_bars: int | None = None) -> None:
+    """Refuse a gapped series instead of quietly diagnosing a different one.
+
+    `expected_bars`, when given, additionally refuses a series that is
+    internally contiguous but shorter (or longer) than the requested window --
+    a self-consistent frame does not prove the store actually returned the
+    whole window, only that whatever it returned has no internal gaps.
+    """
     if frame.empty:
         raise ProtocolError("no bars loaded")
     stamps = frame.index.astype("int64") // 1_000_000
@@ -65,6 +70,10 @@ def assert_contiguous(frame: pd.DataFrame) -> None:
     expected = round(span_days * 288)
     if len(frame) != expected:
         raise ProtocolError(f"expected {expected} contiguous bars, loaded {len(frame)}")
+    if expected_bars is not None and len(frame) != expected_bars:
+        raise ProtocolError(
+            f"expected {expected_bars} bars for the requested window, loaded {len(frame)}"
+        )
 
 
 def fingerprint(frame: pd.DataFrame) -> str:
@@ -92,7 +101,8 @@ def _delta_and_forward(bars: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 def run(db_path: str, out_path: Path) -> dict:
     with Store(db_path) as store:
         frame = store.load_ohlcv(INST_ID, TIMEFRAME, to_ms(EXPLORE_START), to_ms(EXPLORE_END))
-    assert_contiguous(frame)
+    expected_bars = (to_ms(EXPLORE_END) - to_ms(EXPLORE_START)) // BAR_MS
+    assert_contiguous(frame, expected_bars=expected_bars)
 
     # Alignment, and it is load-bearing. `log_returns` yields one value fewer
     # than there are bars: returns[i] is the return OF bar i+1. `bucket_edges`
