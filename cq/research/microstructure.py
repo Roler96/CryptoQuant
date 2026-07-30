@@ -47,3 +47,31 @@ def centroid_delta(
     out = np.zeros_like(hi)
     np.divide(cl - centre, span, out=out, where=usable)
     return out
+
+
+_CS_K = 3.0 - 2.0 * np.sqrt(2.0)
+
+
+def corwin_schultz_spread(high: np.ndarray, low: np.ndarray) -> np.ndarray:
+    """Effective spread estimated from two consecutive bars' high-low ranges.
+
+    Corwin & Schultz (2012). The point of estimating it at all is that this
+    project's cost wall has always been a constant 15 bps assumption; a spread
+    that varies bar to bar turns cost into a state variable, and a strategy can
+    then decline to trade when trading is expensive.
+
+    Negative estimates are a known small-sample artefact of the estimator and
+    are truncated to zero rather than propagated.
+    """
+    hi = np.asarray(high, dtype=np.float64)
+    lo = np.asarray(low, dtype=np.float64)
+
+    single = np.log(hi / lo) ** 2
+    beta = single[:-1] + single[1:]
+    hi2 = np.maximum(hi[:-1], hi[1:])
+    lo2 = np.minimum(lo[:-1], lo[1:])
+    gamma = np.log(hi2 / lo2) ** 2
+
+    alpha = (np.sqrt(2.0 * beta) - np.sqrt(beta)) / _CS_K - np.sqrt(gamma / _CS_K)
+    spread = 2.0 * (np.exp(alpha) - 1.0) / (1.0 + np.exp(alpha))
+    return np.where(np.isfinite(spread), np.maximum(spread, 0.0), 0.0)

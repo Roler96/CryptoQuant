@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cq.research.microstructure import centroid_delta, log_returns, vwap
+from cq.research.microstructure import centroid_delta, corwin_schultz_spread, log_returns, vwap
 
 
 def test_log_returns_are_additive_across_aggregation():
@@ -56,3 +56,34 @@ def test_centroid_delta_stays_in_unit_interval():
     quote_volume = rng.uniform(low, high) * volume
     d = centroid_delta(high, low, close, quote_volume, volume)
     assert np.all(d >= -1.0) and np.all(d <= 1.0)
+
+
+def test_spread_is_zero_when_price_never_moves():
+    # 无波动 -> beta = gamma = 0 -> alpha = 0 -> S = 0
+    high = np.full(10, 5.0)
+    low = np.full(10, 5.0)
+    s = corwin_schultz_spread(high, low)
+    assert s.shape == (9,)
+    np.testing.assert_allclose(s, 0.0, atol=1e-12)
+
+
+def test_spread_is_nonnegative_and_finite_on_random_bars():
+    rng = np.random.default_rng(7)
+    n = 2000
+    mid = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.002, n)))
+    half = mid * rng.uniform(0.0005, 0.004, n)
+    high = mid + half
+    low = mid - half
+    s = corwin_schultz_spread(high, low)
+    assert np.all(np.isfinite(s))
+    assert np.all(s >= 0.0)
+
+
+def test_spread_rises_with_injected_bid_ask_bounce():
+    """A wider true spread must produce a wider estimate."""
+    rng = np.random.default_rng(11)
+    n = 4000
+    mid = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.001, n)))
+    narrow = corwin_schultz_spread(mid * 1.0005, mid * 0.9995)
+    wide = corwin_schultz_spread(mid * 1.005, mid * 0.995)
+    assert np.median(wide) > np.median(narrow)
