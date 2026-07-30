@@ -4,6 +4,7 @@ from scipy import stats as scipy_stats
 
 from cq.research.coordinate_diagnostics import (
     SIDAK_ALPHA,
+    _aggregate_returns,
     combine_scales,
     delta_paired_null_draws,
     delta_r_squared,
@@ -338,7 +339,9 @@ def _synthetic_random_walk(n: int, seed: int):
     """A series with no exploitable structure and realistically skewed turnover."""
     rng = np.random.default_rng(seed)
     returns = rng.normal(0.0, 0.004, n)
-    quote_volume = rng.lognormal(mean=11.0, sigma=1.6, size=n + 1)
+    # Same length on purpose: this mirrors the aligned pipeline, where the first
+    # bar is dropped so that returns[i] is the return of turnover bar i.
+    quote_volume = rng.lognormal(mean=11.0, sigma=1.6, size=n)
     return returns, quote_volume
 
 
@@ -346,7 +349,11 @@ def _synthetic_random_walk(n: int, seed: int):
 @pytest.mark.timeout(600)
 def test_p_values_are_uniform_on_data_with_no_effect():
     """The meta-test. A miscalibrated null shows up here and nowhere else."""
-    factors = [1, 3, 12]
+    # factor=1 is excluded by design, not by convenience: sample-size matching
+    # would ask for as many buckets as bars, every bucket would hold exactly one
+    # bar, and the two clocks would partition identically -- Delta identically
+    # zero and a null with no variance. The real protocol's ladder starts at 15m.
+    factors = [3, 12, 48]
     p_values = []
     for trial in range(40):
         returns, quote_volume = _synthetic_random_walk(12_000, seed=1000 + trial)
@@ -462,3 +469,12 @@ def test_null_draws_are_reproducible_from_the_seed():
     first = paired_null_draws(**kwargs)
     second = paired_null_draws(**kwargs)
     np.testing.assert_array_equal(first[1], second[1])
+
+
+def test_aggregate_returns_refuses_a_misaligned_edge():
+    """A bucket edge past the end of returns means bars and returns were never
+    aligned by the caller -- this must raise, not silently trim, because a
+    shifted bucket still looks like a valid number to every downstream check."""
+    returns = np.zeros(5)
+    with pytest.raises(ValueError, match="misaligned"):
+        _aggregate_returns(returns, np.array([2, 6], dtype=np.int64))

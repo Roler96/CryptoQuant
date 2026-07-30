@@ -293,19 +293,22 @@ def evaluate_gates(
 def _aggregate_returns(returns: np.ndarray, ends: np.ndarray) -> np.ndarray:
     """Sum 5m log returns inside each bucket. Additivity is why they are logs.
 
-    `ends` comes from `bucket_edges` run against the turnover series, which can
-    be one bar longer than the return series -- a return needs a price and its
-    predecessor, so n+1 bars of turnover yield only n returns. Any edge landing
-    past the end of `returns` is therefore an artifact of that extra bar, not a
-    real bucket boundary in return-space, and is dropped exactly the way
-    `bucket_edges` itself drops a trailing partial bucket.
+    `ends` indexes bars and `returns` indexes returns, and the caller is
+    responsible for having made those the same thing (drop the first bar, since
+    it has no return). An edge past the end of `returns` means that alignment
+    was not done, so this refuses rather than trimming: a silently shifted
+    bucket still produces a plausible number, and no meta-test can catch it --
+    under the null, returns and turnover are uncoupled whether or not the
+    buckets are shifted, so a shifted null is still a perfectly uniform null.
     """
     if ends.size == 0:
         return np.empty(0, dtype=np.float64)
-    usable_ends = ends[ends <= returns.size]
-    if usable_ends.size == 0:
-        return np.empty(0, dtype=np.float64)
-    starts = np.concatenate(([0], usable_ends[:-1]))
+    if int(ends[-1]) > returns.size:
+        raise ValueError(
+            f"bucket edge {int(ends[-1])} exceeds {returns.size} returns: "
+            "bars and returns are misaligned"
+        )
+    starts = np.concatenate(([0], ends[:-1]))
     return np.add.reduceat(returns, starts)
 
 
