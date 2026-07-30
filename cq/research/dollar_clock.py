@@ -71,13 +71,30 @@ def solve_bucket_size(
         raise ValueError("quote_volume must contain positive turnover")
 
     tolerance = max(1, int(0.001 * target_count))
-    low = total / (target_count * 50.0)
+
+    # Provable bracket, not a magic factor. Bucket count is maximised when the
+    # bucket size is smallest, and any target at or below the smallest non-zero
+    # turnover makes every non-empty bar its own bucket -- that is the ceiling.
+    # A heuristic lower bound can start above the true solution, in which case
+    # the branch that would widen the search never fires and a perfectly
+    # matchable target is reported unconverged. Heavy-tailed turnover (this
+    # module's whole subject) is exactly where that happens.
+    low = float(qv[qv > 0].min())
     high = total
-    best = (low, len(bucket_edges(qv, low)))
-    iterations = 0
+    reachable = len(bucket_edges(qv, low))
+    if reachable < target_count:
+        return BucketSolution(
+            target_value=low,
+            count=reachable,
+            iterations=0,
+            converged=False,
+        )
+
+    best = (low, reachable)
+    used = 0
 
     for _ in range(1, max_iter + 1):
-        iterations += 1
+        used += 1
         mid = 0.5 * (low + high)
         count = len(bucket_edges(qv, mid))
         if abs(count - target_count) < abs(best[1] - target_count):
@@ -89,10 +106,12 @@ def solve_bucket_size(
             low = mid  # too many buckets: they are too small
         else:
             high = mid
+        if high - low < 1.0e-12:
+            break
 
     return BucketSolution(
         target_value=best[0],
         count=best[1],
-        iterations=iterations,
+        iterations=used,
         converged=abs(best[1] - target_count) <= tolerance,
     )

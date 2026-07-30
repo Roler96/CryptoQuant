@@ -77,3 +77,24 @@ def test_impossible_target_reports_failure_rather_than_looping_forever():
     solution = solve_bucket_size(qv, target_count=500)
     assert not solution.converged
     assert solution.iterations <= 100
+
+
+def test_heavy_tailed_turnover_still_converges():
+    """The bracket must hold where the tail is fattest -- that is the whole subject.
+
+    A heuristic lower bound (e.g. total/(N*50)) can start *above* the true
+    solution here, pinning the search and reporting a reachable target as
+    unconverged.
+    """
+    rng = np.random.default_rng(31)
+    qv = rng.lognormal(mean=9.0, sigma=3.4, size=40_000)
+    solution = solve_bucket_size(qv, target_count=4_000)
+    assert solution.converged
+    assert abs(solution.count - 4_000) <= max(1, int(0.001 * 4_000))
+
+
+def test_unreachable_target_exits_immediately_without_burning_iterations():
+    qv = np.full(50, 1.0)
+    solution = solve_bucket_size(qv, target_count=500)
+    assert not solution.converged
+    assert solution.iterations == 0
