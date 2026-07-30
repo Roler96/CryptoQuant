@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -115,3 +116,66 @@ def solve_bucket_size(
         iterations=used,
         converged=abs(best[1] - target_count) <= tolerance,
     )
+
+
+BAR_MS = 300_000
+
+_COLUMNS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "duration_ms",
+    "bars",
+]
+
+
+def aggregate_by_edges(frame: pd.DataFrame, edges: np.ndarray) -> pd.DataFrame:
+    """Collapse 5m bars into the buckets delimited by `edges`.
+
+    `duration_ms` is the calendar time the bucket consumed. Once turnover per
+    bucket is held constant, that duration is where the information about
+    activity went — and it is a variable no prior study in this repository has
+    carried.
+    """
+    ends = np.asarray(edges, dtype=np.int64)
+    if ends.size == 0:
+        return pd.DataFrame(columns=_COLUMNS, index=frame.index[:0])
+
+    starts = np.concatenate(([0], ends[:-1]))
+
+    # reduceat's final segment always runs to the end of the array, but
+    # `bucket_edges` discards the trailing partial bucket, so `ends[-1]` is
+    # normally short of the frame. Without this truncation the last bucket
+    # silently swallows the bars that were deliberately dropped.
+    stop = int(ends[-1])
+
+    def column(name: str) -> np.ndarray:
+        return frame[name].to_numpy()[:stop]
+
+    rows = {
+        "open": column("open")[starts],
+        "high": np.maximum.reduceat(column("high"), starts),
+        "low": np.minimum.reduceat(column("low"), starts),
+        "close": column("close")[ends - 1],
+        "volume": np.add.reduceat(column("volume"), starts),
+        "quote_volume": np.add.reduceat(column("quote_volume"), starts),
+        "duration_ms": (ends - starts) * BAR_MS,
+        "bars": ends - starts,
+    }
+    return pd.DataFrame(rows, index=frame.index[starts])
+
+
+def aggregate_calendar(frame: pd.DataFrame, factor: int) -> pd.DataFrame:
+    """Collapse 5m bars into fixed groups of `factor` — the calendar clock arm.
+
+    Deliberately routed through the same aggregation as the dollar clock so the
+    two arms of the paired comparison cannot differ by an accident of plumbing.
+    """
+    if factor < 1:
+        raise ValueError("factor must be at least 1")
+    usable = (len(frame) // factor) * factor
+    edges = np.arange(factor, usable + 1, factor, dtype=np.int64)
+    return aggregate_by_edges(frame.iloc[:usable], edges)

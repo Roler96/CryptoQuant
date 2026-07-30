@@ -1,7 +1,14 @@
 # tests/test_dollar_clock.py
 import numpy as np
+import pandas as pd
+import pytest
 
-from cq.research.dollar_clock import bucket_edges, solve_bucket_size
+from cq.research.dollar_clock import (
+    aggregate_by_edges,
+    aggregate_calendar,
+    bucket_edges,
+    solve_bucket_size,
+)
 
 
 def test_edges_close_on_first_bar_that_reaches_target():
@@ -129,3 +136,91 @@ def test_bisection_terminates_when_floating_point_precision_exhausted():
     solution = solve_bucket_size(qv, target_count=59_999)
     assert solution.iterations < 100
     assert solution.count != 59_999
+
+
+BAR_MS = 300_000
+
+
+def _frame(n: int, seed: int = 0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    close = 0.1 * np.exp(np.cumsum(rng.normal(0.0, 0.003, n)))
+    open_ = np.concatenate(([close[0]], close[:-1]))
+    spread = np.abs(rng.normal(0.0, 0.001, n)) * close
+    index = pd.to_datetime(np.arange(n) * BAR_MS, unit="ms", utc=True)
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": np.maximum(open_, close) + spread,
+            "low": np.minimum(open_, close) - spread,
+            "close": close,
+            "volume": rng.lognormal(10.0, 1.0, n),
+            "quote_volume": rng.lognormal(11.0, 1.5, n),
+        },
+        index=index,
+    )
+
+
+def test_aggregate_by_edges_composes_ohlcv_correctly():
+    frame = _frame(6)
+    out = aggregate_by_edges(frame, np.array([2, 5]))
+    assert list(out.index) == [frame.index[0], frame.index[2]]
+    assert out["open"].iloc[0] == frame["open"].iloc[0]
+    assert out["close"].iloc[0] == frame["close"].iloc[1]
+    assert out["high"].iloc[0] == frame["high"].iloc[:2].max()
+    assert out["low"].iloc[0] == frame["low"].iloc[:2].min()
+    assert out["volume"].iloc[0] == pytest.approx(frame["volume"].iloc[:2].sum())
+    assert out["bars"].iloc[0] == 2
+    assert out["bars"].iloc[1] == 3
+
+
+def test_bucket_duration_counts_the_calendar_time_the_bucket_consumed():
+    frame = _frame(6)
+    out = aggregate_by_edges(frame, np.array([2, 5]))
+    # 这是关键的新变量: 等额之后, 信息守恒地转移到桶耗掉的日历时长上
+    assert out["duration_ms"].iloc[0] == 2 * BAR_MS
+    assert out["duration_ms"].iloc[1] == 3 * BAR_MS
+
+
+def test_last_bucket_excludes_the_discarded_tail():
+    """reduceat's final segment runs to the array end; the tail must not leak in.
+
+    `bucket_edges` drops the trailing partial bucket, so edges[-1] is normally
+    short of the frame. A naive reduceat gives the last bucket those dropped
+    bars for free — and every other column would still look correct.
+    """
+    frame = _frame(6)
+    out = aggregate_by_edges(frame, np.array([2, 5]))
+    assert out["volume"].iloc[-1] == pytest.approx(frame["volume"].iloc[2:5].sum())
+    assert out["quote_volume"].iloc[-1] == pytest.approx(frame["quote_volume"].iloc[2:5].sum())
+    assert out["high"].iloc[-1] == frame["high"].iloc[2:5].max()
+    assert out["low"].iloc[-1] == frame["low"].iloc[2:5].min()
+    assert out["close"].iloc[-1] == frame["close"].iloc[4]
+
+
+def test_aggregate_calendar_matches_edges_at_a_fixed_factor():
+    frame = _frame(12)
+    by_calendar = aggregate_calendar(frame, factor=3)
+    by_edges = aggregate_by_edges(frame, np.array([3, 6, 9, 12]))
+    pd.testing.assert_frame_equal(by_calendar, by_edges)
+
+
+def test_aggregate_calendar_discards_the_trailing_partial_group():
+    frame = _frame(11)
+    out = aggregate_calendar(frame, factor=3)
+    assert len(out) == 3
+    assert out["bars"].unique().tolist() == [3]
+
+
+def test_aggregate_by_edges_on_empty_edges_returns_empty_frame():
+    out = aggregate_by_edges(_frame(4), np.array([], dtype=np.int64))
+    assert out.empty
+    assert list(out.columns) == [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "duration_ms",
+        "bars",
+    ]
