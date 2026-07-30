@@ -380,14 +380,18 @@ def test_p_values_are_uniform_on_data_with_no_effect():
 
 
 def test_null_draws_have_the_requested_shape():
+    # factor=3, not 1: target_count = n // 3 = 1000 forces real merging (avg 3
+    # bars/bucket), so the dollar and calendar partitions actually differ. At
+    # factor=1 target_count == n and the two clocks degenerate to an identical
+    # one-bar-per-bucket partition (see test_p_values_are_uniform_on_data_with_no_effect).
     returns, quote_volume = _synthetic_random_walk(3_000, seed=1)
-    solution = solve_bucket_size(quote_volume, 3_000)
-    edges = {1: bucket_edges(quote_volume, solution.target_value)}
+    solution = solve_bucket_size(quote_volume, 1_000)
+    edges = {3: bucket_edges(quote_volume, solution.target_value)}
     observed, draws = paired_null_draws(
         returns_5m=returns,
         quote_volume=quote_volume,
         edges_by_scale=edges,
-        calendar_factors=[1],
+        calendar_factors=[3],
         measure="rank_autocorrelation",
         draws=50,
         mean_block=24.0,
@@ -423,7 +427,17 @@ def test_delta_null_leaves_forward_returns_and_turnover_untouched():
 @pytest.mark.slow
 @pytest.mark.timeout(600)
 def test_delta_null_p_values_are_uniform_when_delta_carries_nothing():
-    """Same meta-test, applied to the second null. An i.i.d. shuffle fails this."""
+    """Same meta-test, applied to the second null.
+
+    Under this AR(0.9) construction, an i.i.d. shuffle does fail this -- see
+    test_delta_null_meta_test_catches_an_iid_shuffle below, which proves it by
+    running the identical procedure with `stationary_bootstrap_indices` swapped
+    for `rng.permutation` and asserting the KS check rejects. That claim used
+    to sit here undemonstrated against an AR(0.5) construction, where a
+    counterfactual sweep showed it was false: AR(0.5)'s local dependence is too
+    weak to separate the block-bootstrap null from an i.i.d. one, so the
+    original phrasing was retracted rather than left as an unverified promise.
+    """
     p_values = []
     for trial in range(40):
         rng = np.random.default_rng(500 + trial)
@@ -437,13 +451,13 @@ def test_delta_null_p_values_are_uniform_when_delta_carries_nothing():
             return out
 
         observed, draws = delta_paired_null_draws(
-            dollar_delta={1: ar1(3000, 0.5, rng)},
-            dollar_forward={1: ar1(3000, 0.5, rng)},
-            calendar_delta={1: ar1(3000, 0.5, rng)},
-            calendar_forward={1: ar1(3000, 0.5, rng)},
+            dollar_delta={1: ar1(3000, 0.9, rng)},
+            dollar_forward={1: ar1(3000, 0.9, rng)},
+            calendar_delta={1: ar1(3000, 0.9, rng)},
+            calendar_forward={1: ar1(3000, 0.9, rng)},
             factors=[1],
             draws=200,
-            mean_block=24.0,
+            mean_block=60.0,
             seed=trial,
         )
         p_values.append(combine_scales(observed, draws).p_value)
@@ -452,15 +466,91 @@ def test_delta_null_p_values_are_uniform_when_delta_carries_nothing():
     assert ks_p > 0.01, f"delta null is miscalibrated: KS p={ks_p:.4f}"
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_delta_null_meta_test_catches_an_iid_shuffle():
+    """Proves the meta-test above has teeth, rather than just being uniform by
+    construction.
+
+    Same AR(0.9) delta/forward data, same trial/draw counts, same pairing
+    logic as test_delta_null_p_values_are_uniform_when_delta_carries_nothing --
+    the only change is that `stationary_bootstrap_indices` is replaced by
+    `rng.permutation`, in a local counterfactual copy of the pairing loop
+    (production code gets no test-only switch to degrade itself). An i.i.d.
+    permutation destroys delta's own local dependence, which narrows the null
+    distribution of the paired |Spearman| statistic relative to what the
+    (dependent) observed statistic actually needs; combine_scales's p-values
+    are then systematically too small, and the KS check must reject uniformity.
+    If this assertion ever passed the other way (ks_p > 0.01), it would mean
+    the meta-test above could no longer tell a correctly-implemented block
+    bootstrap from a silently-degraded i.i.d. one.
+    """
+    p_values = []
+    for trial in range(40):
+        rng = np.random.default_rng(500 + trial)
+
+        def ar1(n, phi, gen):
+            out = np.empty(n)
+            out[0] = gen.normal()
+            for i in range(1, n):
+                out[i] = phi * out[i - 1] + gen.normal()
+            return out
+
+        dollar_delta = ar1(3000, 0.9, rng)
+        dollar_forward = ar1(3000, 0.9, rng)
+        calendar_delta = ar1(3000, 0.9, rng)
+        calendar_forward = ar1(3000, 0.9, rng)
+
+        def paired_iid(
+            shuffled: bool,
+            dollar_delta=dollar_delta,
+            dollar_forward=dollar_forward,
+            calendar_delta=calendar_delta,
+            calendar_forward=calendar_forward,
+            rng=rng,
+        ) -> np.ndarray:
+            values = []
+            for feature, forward in (
+                (dollar_delta, dollar_forward),
+                (calendar_delta, calendar_forward),
+            ):
+                series = feature
+                if shuffled:
+                    series = feature[rng.permutation(feature.size)]
+                values.append(abs(rank_predictive_power(series, forward)))
+            return np.asarray([values[0] - values[1]], dtype=np.float64)
+
+        observed = paired_iid(shuffled=False)
+        draws = 200
+        null = np.empty((draws, 1), dtype=np.float64)
+        for draw in range(draws):
+            null[draw] = paired_iid(shuffled=True)
+
+        p_values.append(combine_scales(observed, null).p_value)
+
+    ks_p = scipy_stats.kstest(p_values, "uniform").pvalue
+    assert ks_p < 0.01, f"expected the iid shuffle to be caught, but KS p={ks_p:.4f}"
+
+
 def test_null_draws_are_reproducible_from_the_seed():
+    # factors=[3, 12], not [1]: at factor=1, target_count == n forces the dollar
+    # and calendar clocks into an identical one-bar-per-bucket partition, so
+    # observed and every null draw are identically [0.] regardless of which
+    # bootstrap indices were drawn -- the test would pass even if the seed were
+    # silently ignored. [3, 12] forces real merging on the dollar side, so the
+    # null draws genuinely depend on which indices `seed` produced.
     returns, quote_volume = _synthetic_random_walk(3_000, seed=2)
-    solution = solve_bucket_size(quote_volume, 3_000)
-    edges = {1: bucket_edges(quote_volume, solution.target_value)}
+    factors = [3, 12]
+    edges = {}
+    for factor in factors:
+        target_count = len(returns) // factor
+        solution = solve_bucket_size(quote_volume, target_count)
+        edges[factor] = bucket_edges(quote_volume, solution.target_value)
     kwargs = dict(
         returns_5m=returns,
         quote_volume=quote_volume,
         edges_by_scale=edges,
-        calendar_factors=[1],
+        calendar_factors=factors,
         measure="rank_autocorrelation",
         draws=20,
         mean_block=24.0,

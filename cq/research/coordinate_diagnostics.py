@@ -342,6 +342,12 @@ def paired_null_draws(
     and reused across every draw.
     """
     returns = np.asarray(returns_5m, dtype=np.float64)
+    quote_volume = np.asarray(quote_volume, dtype=np.float64)
+    if quote_volume.size != returns.size:
+        raise ValueError(
+            f"quote_volume has {quote_volume.size} bars but returns_5m has "
+            f"{returns.size}: turnover and returns must be aligned bar-for-bar"
+        )
     n = returns.size
     rng = np.random.default_rng(seed)
 
