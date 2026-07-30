@@ -139,10 +139,27 @@ def aggregate_by_edges(frame: pd.DataFrame, edges: np.ndarray) -> pd.DataFrame:
     bucket is held constant, that duration is where the information about
     activity went — and it is a variable no prior study in this repository has
     carried.
+
+    `edges` must be strictly increasing with a first element >= 1: they are
+    right-exclusive end indices consumed by `np.add.reduceat`, and reduceat
+    does not validate monotonicity. Given a non-increasing index it silently
+    returns `a[i]` instead of a sum for the offending segment, so a malformed
+    `edges` array would otherwise produce wrong-but-plausible bars (and
+    negative `bars`/`duration_ms`) instead of raising.
     """
     ends = np.asarray(edges, dtype=np.int64)
     if ends.size == 0:
         return pd.DataFrame(columns=_COLUMNS, index=frame.index[:0])
+
+    if ends[0] < 1:
+        raise ValueError(f"edges[0] must be >= 1, got {int(ends[0])}")
+    non_increasing = np.where(np.diff(ends) <= 0)[0]
+    if non_increasing.size > 0:
+        first = int(non_increasing[0])
+        raise ValueError(
+            f"edges must be strictly increasing: edges[{first}]={int(ends[first])} "
+            f">= edges[{first + 1}]={int(ends[first + 1])}"
+        )
 
     starts = np.concatenate(([0], ends[:-1]))
 

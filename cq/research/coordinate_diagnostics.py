@@ -184,6 +184,17 @@ def select_block_length(returns: np.ndarray, max_lag: int = 288) -> int:
 
     Pre-registered as a rule rather than a number so it cannot be retuned after
     seeing the result. The 12-bar rounding is one hour of 5m bars.
+
+    Two defensive short circuits both return 12 (one hour) directly, without
+    scanning any lag, because the ACF the rule is built on is not meaningful in
+    either case:
+    - `returns.size < 100` after dropping non-finite values: too few
+      observations for any lag's autocorrelation estimate to be trustworthy.
+    - the mean-centred series has zero sum of squares (a constant series,
+      e.g. all zeros): the ACF denominator would be zero, so the band test is
+      undefined rather than merely small.
+    These are floors, not measurements -- they exist so the function returns a
+    usable block length instead of dividing by zero or trusting noise.
     """
     r = np.asarray(returns, dtype=np.float64)
     r = r[np.isfinite(r)]
@@ -257,9 +268,15 @@ def evaluate_gates(
 ) -> GateReport:
     """Apply G1/G2/G3 exactly as pre-registered in the protocol.
 
-    G2 is deliberately not a research verdict. Aggregating by traded value is
-    known to reduce kurtosis; if it did not, the clock is mis-built and the run
-    says INVALID rather than pretending to have measured the market.
+    G2 is deliberately not a research verdict. It compares the two arms of the
+    paired comparison -- the dollar clock against the calendar clock -- on the
+    same underlying data, not aggregated kurtosis against unaggregated
+    kurtosis (equal-time aggregation under volatility clustering can *raise*
+    kurtosis, so that comparison would be the wrong one). A correctly built
+    dollar clock is expected to show lower kurtosis than the calendar clock on
+    most scales; if it does not, the clock is mis-built and the run says
+    INVALID rather than pretending to have measured the market. See
+    `excess_kurtosis` for the same point made about the underlying measure.
 
     When multiple measures share the winning p-value, the measure earliest in
     alphabetical order is chosen as the winner.

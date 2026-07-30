@@ -224,3 +224,42 @@ def test_aggregate_by_edges_on_empty_edges_returns_empty_frame():
         "duration_ms",
         "bars",
     ]
+
+
+def test_bucket_edges_rejects_non_positive_target():
+    with pytest.raises(ValueError, match="target must be positive"):
+        bucket_edges(np.array([1.0, 2.0, 3.0]), 0.0)
+    with pytest.raises(ValueError, match="target must be positive"):
+        bucket_edges(np.array([1.0, 2.0, 3.0]), -5.0)
+
+
+def test_solve_bucket_size_rejects_non_positive_target_count():
+    with pytest.raises(ValueError, match="target_count must be at least 1"):
+        solve_bucket_size(np.array([1.0, 2.0, 3.0]), target_count=0)
+
+
+def test_aggregate_by_edges_rejects_edges_with_non_positive_first_element():
+    """`edges[0]` is the right-exclusive end of the first bucket; it must be >= 1."""
+    with pytest.raises(ValueError, match=r"edges\[0\] must be >= 1, got 0"):
+        aggregate_by_edges(_frame(4), np.array([0, 2]))
+
+
+def test_aggregate_by_edges_rejects_non_increasing_edges():
+    """np.add.reduceat silently returns a[i] instead of summing on a bad index.
+
+    `np.add.reduceat(np.arange(10), [0, 5, 2])` -> `[10, 5, 44]`, no error. A
+    non-increasing `edges` array must be rejected up front instead of silently
+    producing wrong bars, negative `bars`, and negative `duration_ms`.
+    """
+    with pytest.raises(ValueError, match=r"edges\[1\]=5 >= edges\[2\]=2"):
+        aggregate_by_edges(_frame(10), np.array([2, 5, 2, 8]))
+
+
+def test_aggregate_by_edges_rejects_repeated_edges():
+    with pytest.raises(ValueError, match=r"edges\[0\]=3 >= edges\[1\]=3"):
+        aggregate_by_edges(_frame(6), np.array([3, 3, 6]))
+
+
+def test_aggregate_by_edges_rejects_negative_edges():
+    with pytest.raises(ValueError, match=r"edges\[0\] must be >= 1, got -1"):
+        aggregate_by_edges(_frame(6), np.array([-1, 3]))

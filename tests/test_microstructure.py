@@ -115,3 +115,22 @@ def test_spread_rejects_mismatched_lengths():
     low = np.array([4.0, 4.0])
     with pytest.raises(ValueError, match="same shape"):
         corwin_schultz_spread(high, low)
+
+
+def test_spread_does_not_collapse_to_zero_when_exp_alpha_would_overflow():
+    """The old `2(e^a - 1) / (1 + e^a)` form overflows exp() to inf for a huge
+    alpha, giving nan, which the trailing `isfinite` guard then zeroes out --
+    reading the widest possible spread as zero cost, the worst-case direction
+    for a cost gate. Two identical bars at the extremes of float64 (high =
+    DBL_MAX, low = 1.0) drive alpha to ~709.78, right at exp()'s overflow
+    threshold, and used to reproduce exactly that failure.
+    """
+    dbl_max = np.finfo(np.float64).max
+    high = np.array([dbl_max, dbl_max])
+    low = np.array([1.0, 1.0])
+    s = corwin_schultz_spread(high, low)
+    assert s.shape == (1,)
+    assert np.isfinite(s[0])
+    # 2*tanh(alpha/2) saturates towards its upper bound of 2.0 as alpha -> inf;
+    # the old formula would have given exactly 0.0 here.
+    assert s[0] == pytest.approx(2.0, abs=1e-6)

@@ -92,6 +92,10 @@ def corwin_schultz_spread(high: np.ndarray, low: np.ndarray) -> np.ndarray:
     gamma = np.log(hi2 / lo2) ** 2
 
     alpha = (np.sqrt(2.0 * beta) - np.sqrt(beta)) / _CS_K - np.sqrt(gamma / _CS_K)
-    exp_alpha = np.exp(alpha)
-    spread = 2.0 * (exp_alpha - 1.0) / (1.0 + exp_alpha)
+    # Algebraically 2(e^a - 1) / (1 + e^a) == tanh(a/2), but the exp(alpha) form
+    # overflows to inf for large alpha, making the ratio NaN and forcing the
+    # isfinite guard below to zero it out -- reading the widest spreads as
+    # zero cost, the worst possible direction for a cost gate. tanh has no
+    # such overflow branch, so it needs no special-casing.
+    spread = 2.0 * np.tanh(alpha / 2.0)
     return np.where(np.isfinite(spread), np.maximum(spread, 0.0), 0.0)
