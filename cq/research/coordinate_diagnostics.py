@@ -73,3 +73,52 @@ def rank_predictive_power(feature: np.ndarray, forward_returns: np.ndarray) -> f
         return float("nan")
     rho, _ = stats.spearmanr(x, y)
     return float(rho)
+
+
+def variance_ratio(returns: np.ndarray, q: int) -> float:
+    """Lo-MacKinlay variance ratio; 1 under a random walk.
+
+    Above 1 is trending, below 1 is reverting. Reported as corroboration only:
+    it is a second-moment statistic and therefore exposed to the fat tail the
+    rank measures are designed to survive.
+    """
+    if q < 2:
+        raise ValueError("q must be at least 2")
+    r = np.asarray(returns, dtype=np.float64)
+    r = r[np.isfinite(r)]
+    if r.size < 2 * q:
+        return float("nan")
+    single = float(np.var(r, ddof=1))
+    if single == 0.0:
+        return float("nan")
+    aggregated = np.convolve(r, np.ones(q), mode="valid")
+    return float(np.var(aggregated, ddof=1) / (q * single))
+
+
+def delta_r_squared(feature: np.ndarray, forward_returns: np.ndarray) -> float:
+    """R-squared of the univariate regression of forward return on the feature."""
+    x = np.asarray(feature, dtype=np.float64)
+    y = np.asarray(forward_returns, dtype=np.float64)
+    if x.size != y.size:
+        raise ValueError("feature and forward_returns must have the same length")
+    usable = np.isfinite(x) & np.isfinite(y)
+    if usable.sum() < 3:
+        return float("nan")
+    correlation = np.corrcoef(x[usable], y[usable])[0, 1]
+    if not np.isfinite(correlation):
+        return float("nan")
+    return float(correlation**2)
+
+
+def excess_kurtosis(returns: np.ndarray) -> float:
+    """Excess kurtosis; zero for a normal.
+
+    This is the sanity check, not a finding. Aggregating by traded value is
+    known to pull return distributions toward normality, so a dollar clock that
+    fails to reduce kurtosis indicates a broken clock, not an absent effect.
+    """
+    r = np.asarray(returns, dtype=np.float64)
+    r = r[np.isfinite(r)]
+    if r.size < 4:
+        return float("nan")
+    return float(stats.kurtosis(r, fisher=True, bias=False))
