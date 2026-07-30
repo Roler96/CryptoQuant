@@ -87,3 +87,31 @@ def test_spread_rises_with_injected_bid_ask_bounce():
     narrow = corwin_schultz_spread(mid * 1.0005, mid * 0.9995)
     wide = corwin_schultz_spread(mid * 1.005, mid * 0.995)
     assert np.median(wide) > np.median(narrow)
+
+
+def test_spread_rejects_non_positive_high():
+    high = np.array([5.0, 0.0, 5.0])
+    low = np.array([4.0, 4.0, 4.0])
+    with pytest.raises(ValueError, match="high must be strictly positive"):
+        corwin_schultz_spread(high, low)
+
+
+def test_spread_rejects_non_positive_low():
+    high = np.array([5.0, 5.0, 5.0])
+    low = np.array([4.0, -1.0, 4.0])
+    with pytest.raises(ValueError, match="low must be strictly positive"):
+        corwin_schultz_spread(high, low)
+
+
+def test_spread_rejects_high_below_low():
+    high = np.array([5.0, 3.0, 5.0])
+    low = np.array([4.0, 4.0, 4.0])
+    with pytest.raises(ValueError, match="high must be >= low"):
+        corwin_schultz_spread(high, low)
+
+
+def test_spread_rejects_mismatched_lengths():
+    high = np.array([5.0, 5.0, 5.0])
+    low = np.array([4.0, 4.0])
+    with pytest.raises(ValueError, match="same shape"):
+        corwin_schultz_spread(high, low)
