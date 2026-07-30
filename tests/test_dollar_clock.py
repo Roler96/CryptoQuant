@@ -1,7 +1,7 @@
 # tests/test_dollar_clock.py
 import numpy as np
 
-from cq.research.dollar_clock import bucket_edges
+from cq.research.dollar_clock import bucket_edges, solve_bucket_size
 
 
 def test_edges_close_on_first_bar_that_reaches_target():
@@ -44,3 +44,36 @@ def test_every_bucket_meets_or_exceeds_the_target():
     starts = np.concatenate(([0], edges[:-1]))
     sums = np.array([qv[a:b].sum() for a, b in zip(starts, edges, strict=True)])
     assert np.all(sums >= target)
+
+
+def test_solved_size_hits_the_requested_count_within_tolerance():
+    rng = np.random.default_rng(5)
+    qv = rng.lognormal(mean=9.0, sigma=1.5, size=50_000)
+    solution = solve_bucket_size(qv, target_count=5_000)
+    assert solution.converged
+    assert abs(solution.count - 5_000) <= max(1, int(0.001 * 5_000))
+
+
+def test_solution_is_deterministic():
+    rng = np.random.default_rng(5)
+    qv = rng.lognormal(mean=9.0, sigma=1.5, size=20_000)
+    first = solve_bucket_size(qv, target_count=2_000)
+    second = solve_bucket_size(qv, target_count=2_000)
+    assert first == second
+
+
+def test_naive_target_undershoots_the_count_which_is_why_solving_is_needed():
+    """Overshoot means total/N buckets fewer than N -- the bug this task fixes."""
+    rng = np.random.default_rng(9)
+    qv = rng.lognormal(mean=9.0, sigma=2.5, size=30_000)
+    naive_count = len(bucket_edges(qv, float(qv.sum()) / 3_000))
+    assert naive_count < 3_000
+    assert solve_bucket_size(qv, target_count=3_000).converged
+
+
+def test_impossible_target_reports_failure_rather_than_looping_forever():
+    qv = np.full(100, 1.0)
+    # 100 根 bar 无法切出 500 个桶
+    solution = solve_bucket_size(qv, target_count=500)
+    assert not solution.converged
+    assert solution.iterations <= 100
