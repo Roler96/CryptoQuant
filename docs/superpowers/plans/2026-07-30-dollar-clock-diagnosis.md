@@ -15,7 +15,7 @@
 - 收益一律 `r_t = log(C_t / C_{t-1})`（对数收益，跨尺度可加）
 - `δ = (C − VWAP) / (H − L)`，`VWAP = quote_volume / volume`；`H == L` 时 `δ = 0`
 - 方向命中率剔除 `r == 0` 的样本对，并报告剔除比例
-- 尺度集合固定 `{5m, 15m, 1h, 4h}`，对应 5m 聚合因子 `{1, 3, 12, 48}`
+- 尺度集合固定 `{15m, 1h, 4h, 12h}`，对应 5m 聚合因子 `{3, 12, 48, 144}`。**5m 尺度被排除且不得加回**：样本量匹配要求成交额桶数等于 bar 数，而每桶至少含一根 bar，于是每桶恰好一根，成交额时钟与日历时钟的划分逐位恒等，Δ 恒为 0、零分布零方差。这是数学必然，与数据无关
 - 主测度 3 个 → Šidák family α = 0.05 → 单测度阈值 **0.016952**
 - Bootstrap `B = 2000`，`seed = 0`，必须可复现
 - `V_s` 二分收敛容差 `|M_s − N_s| ≤ max(1, 0.001 · N_s)`，最多 100 次迭代
@@ -1487,7 +1487,7 @@ def _synthetic_random_walk(n: int, seed: int):
 @pytest.mark.timeout(600)
 def test_p_values_are_uniform_on_data_with_no_effect():
     """The meta-test. A miscalibrated null shows up here and nowhere else."""
-    factors = [1, 3, 12]
+    factors = [3, 12, 48]
     p_values = []
     for trial in range(40):
         returns, quote_volume = _synthetic_random_walk(12_000, seed=1000 + trial)
@@ -1875,7 +1875,7 @@ INST_ID = "DOGE-USDT"
 TIMEFRAME = "5m"
 EXPLORE_START = "2021-01-01"
 EXPLORE_END = "2025-06-01"
-SCALES = {"5m": 1, "15m": 3, "1h": 12, "4h": 48}
+SCALES = {"15m": 3, "1h": 12, "4h": 48, "12h": 144}
 PRIMARY_MEASURES = ("rank_autocorrelation", "hit_rate", "delta_power")
 DRAWS = 2000
 SEED = 0
