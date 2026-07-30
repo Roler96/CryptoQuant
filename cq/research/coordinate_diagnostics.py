@@ -113,9 +113,14 @@ def delta_r_squared(feature: np.ndarray, forward_returns: np.ndarray) -> float:
 def excess_kurtosis(returns: np.ndarray) -> float:
     """Excess kurtosis; zero for a normal.
 
-    This is the sanity check, not a finding. Aggregating by traded value is
-    known to pull return distributions toward normality, so a dollar clock that
-    fails to reduce kurtosis indicates a broken clock, not an absent effect.
+    Sanity check only, not a finding. The gate compares kurtosis of the same
+    data under two aggregation schemes: calendar time versus dollar time. Under
+    stochastic volatility with trading activity correlated to volatility (the
+    standard market microstructure assumption), calendar aggregation can
+    increase kurtosis; dollar-time aggregation adapts to activity intensity and
+    absorbs the heteroskedasticity. A dollar clock implementation is suspect if
+    its kurtosis exceeds calendar kurtosis, which would violate the subordination
+    property rather than refute the clock effect.
     """
     r = np.asarray(returns, dtype=np.float64)
     r = r[np.isfinite(r)]
