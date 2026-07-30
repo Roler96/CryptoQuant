@@ -1,19 +1,23 @@
 import numpy as np
 import pytest
+from scipy import stats as scipy_stats
 
 from cq.research.coordinate_diagnostics import (
     SIDAK_ALPHA,
     combine_scales,
+    delta_paired_null_draws,
     delta_r_squared,
     direction_hit_rate,
     evaluate_gates,
     excess_kurtosis,
+    paired_null_draws,
     rank_autocorrelation,
     rank_predictive_power,
     select_block_length,
     stationary_bootstrap_indices,
     variance_ratio,
 )
+from cq.research.dollar_clock import bucket_edges, solve_bucket_size
 
 
 def test_rank_autocorrelation_detects_a_planted_reversal():
@@ -328,3 +332,133 @@ def test_winning_measure_breaks_p_ties_alphabetically():
     assert report_1.winning_measure == "hit_rate"
     assert report_2.winning_measure == "hit_rate"
     assert report_1.winning_measure == report_2.winning_measure
+
+
+def _synthetic_random_walk(n: int, seed: int):
+    """A series with no exploitable structure and realistically skewed turnover."""
+    rng = np.random.default_rng(seed)
+    returns = rng.normal(0.0, 0.004, n)
+    quote_volume = rng.lognormal(mean=11.0, sigma=1.6, size=n + 1)
+    return returns, quote_volume
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_p_values_are_uniform_on_data_with_no_effect():
+    """The meta-test. A miscalibrated null shows up here and nowhere else."""
+    factors = [1, 3, 12]
+    p_values = []
+    for trial in range(40):
+        returns, quote_volume = _synthetic_random_walk(12_000, seed=1000 + trial)
+        edges = {}
+        for factor in factors:
+            target_count = len(returns) // factor
+            solution = solve_bucket_size(quote_volume, target_count)
+            edges[factor] = bucket_edges(quote_volume, solution.target_value)
+        observed, draws = paired_null_draws(
+            returns_5m=returns,
+            quote_volume=quote_volume,
+            edges_by_scale=edges,
+            calendar_factors=factors,
+            measure="rank_autocorrelation",
+            draws=200,
+            mean_block=24.0,
+            seed=trial,
+        )
+        p_values.append(combine_scales(observed, draws).p_value)
+
+    # 均匀分布的 KS 检验: p 值本身不应显著偏离 U(0,1)
+    ks_p = scipy_stats.kstest(p_values, "uniform").pvalue
+    assert ks_p > 0.01, f"null is miscalibrated: KS p={ks_p:.4f}"
+
+
+def test_null_draws_have_the_requested_shape():
+    returns, quote_volume = _synthetic_random_walk(3_000, seed=1)
+    solution = solve_bucket_size(quote_volume, 3_000)
+    edges = {1: bucket_edges(quote_volume, solution.target_value)}
+    observed, draws = paired_null_draws(
+        returns_5m=returns,
+        quote_volume=quote_volume,
+        edges_by_scale=edges,
+        calendar_factors=[1],
+        measure="rank_autocorrelation",
+        draws=50,
+        mean_block=24.0,
+        seed=0,
+    )
+    assert observed.shape == (1,)
+    assert draws.shape == (50, 1)
+
+
+def test_delta_null_leaves_forward_returns_and_turnover_untouched():
+    """spec D3: the delta null reshuffles delta only — nothing else may move."""
+    rng = np.random.default_rng(20)
+    dollar_delta = {1: rng.normal(0.0, 1.0, 4000)}
+    dollar_forward = {1: rng.normal(0.0, 1.0, 4000)}
+    calendar_delta = {1: rng.normal(0.0, 1.0, 4000)}
+    calendar_forward = {1: rng.normal(0.0, 1.0, 4000)}
+    before = dollar_forward[1].copy()
+    observed, draws = delta_paired_null_draws(
+        dollar_delta=dollar_delta,
+        dollar_forward=dollar_forward,
+        calendar_delta=calendar_delta,
+        calendar_forward=calendar_forward,
+        factors=[1],
+        draws=30,
+        mean_block=24.0,
+        seed=0,
+    )
+    np.testing.assert_array_equal(dollar_forward[1], before)
+    assert observed.shape == (1,)
+    assert draws.shape == (30, 1)
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_delta_null_p_values_are_uniform_when_delta_carries_nothing():
+    """Same meta-test, applied to the second null. An i.i.d. shuffle fails this."""
+    p_values = []
+    for trial in range(40):
+        rng = np.random.default_rng(500 + trial)
+
+        # delta 与 forward 各自有局部依赖, 但彼此无耦合 -> 真零效应
+        def ar1(n, phi, gen):
+            out = np.empty(n)
+            out[0] = gen.normal()
+            for i in range(1, n):
+                out[i] = phi * out[i - 1] + gen.normal()
+            return out
+
+        observed, draws = delta_paired_null_draws(
+            dollar_delta={1: ar1(3000, 0.5, rng)},
+            dollar_forward={1: ar1(3000, 0.5, rng)},
+            calendar_delta={1: ar1(3000, 0.5, rng)},
+            calendar_forward={1: ar1(3000, 0.5, rng)},
+            factors=[1],
+            draws=200,
+            mean_block=24.0,
+            seed=trial,
+        )
+        p_values.append(combine_scales(observed, draws).p_value)
+
+    ks_p = scipy_stats.kstest(p_values, "uniform").pvalue
+    assert ks_p > 0.01, f"delta null is miscalibrated: KS p={ks_p:.4f}"
+
+
+def test_null_draws_are_reproducible_from_the_seed():
+    returns, quote_volume = _synthetic_random_walk(3_000, seed=2)
+    solution = solve_bucket_size(quote_volume, 3_000)
+    edges = {1: bucket_edges(quote_volume, solution.target_value)}
+    kwargs = dict(
+        returns_5m=returns,
+        quote_volume=quote_volume,
+        edges_by_scale=edges,
+        calendar_factors=[1],
+        measure="rank_autocorrelation",
+        draws=20,
+        mean_block=24.0,
+        seed=42,
+    )
+    first = paired_null_draws(**kwargs)
+    second = paired_null_draws(**kwargs)
+    np.testing.assert_array_equal(first[1], second[1])

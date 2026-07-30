@@ -288,3 +288,119 @@ def evaluate_gates(
         winning_measure=winner,
         verdict=verdict,
     )
+
+
+def _aggregate_returns(returns: np.ndarray, ends: np.ndarray) -> np.ndarray:
+    """Sum 5m log returns inside each bucket. Additivity is why they are logs.
+
+    `ends` comes from `bucket_edges` run against the turnover series, which can
+    be one bar longer than the return series -- a return needs a price and its
+    predecessor, so n+1 bars of turnover yield only n returns. Any edge landing
+    past the end of `returns` is therefore an artifact of that extra bar, not a
+    real bucket boundary in return-space, and is dropped exactly the way
+    `bucket_edges` itself drops a trailing partial bucket.
+    """
+    if ends.size == 0:
+        return np.empty(0, dtype=np.float64)
+    usable_ends = ends[ends <= returns.size]
+    if usable_ends.size == 0:
+        return np.empty(0, dtype=np.float64)
+    starts = np.concatenate(([0], usable_ends[:-1]))
+    return np.add.reduceat(returns, starts)
+
+
+def _measure(name: str, aggregated: np.ndarray) -> float:
+    if name == "rank_autocorrelation":
+        return rank_autocorrelation(aggregated, lag=1)
+    if name == "hit_rate":
+        return direction_hit_rate(aggregated).rate
+    raise ValueError(f"unknown measure {name!r}")
+
+
+def paired_null_draws(
+    returns_5m: np.ndarray,
+    quote_volume: np.ndarray,
+    edges_by_scale: dict[int, np.ndarray],
+    calendar_factors: list[int],
+    measure: str,
+    draws: int,
+    mean_block: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Observed paired differences and their null distribution.
+
+    The null resamples the 5m return series in stationary blocks while leaving
+    turnover untouched. Both clocks therefore keep exactly the partition they
+    had; the only thing broken is the coupling between when returns happened and
+    how much traded. That is precisely the hypothesis "the clock change bought
+    nothing", and nothing else about the data is disturbed.
+
+    Because turnover is frozen, `edges_by_scale` is computed once by the caller
+    and reused across every draw.
+    """
+    returns = np.asarray(returns_5m, dtype=np.float64)
+    n = returns.size
+    rng = np.random.default_rng(seed)
+
+    def deltas(series: np.ndarray) -> np.ndarray:
+        out = []
+        for factor in calendar_factors:
+            usable = (n // factor) * factor
+            calendar_ends = np.arange(factor, usable + 1, factor, dtype=np.int64)
+            dollar = _measure(measure, _aggregate_returns(series, edges_by_scale[factor]))
+            calendar = _measure(measure, _aggregate_returns(series[:usable], calendar_ends))
+            out.append(dollar - calendar)
+        return np.asarray(out, dtype=np.float64)
+
+    observed = deltas(returns)
+    null = np.empty((draws, len(calendar_factors)), dtype=np.float64)
+    for draw in range(draws):
+        indices = stationary_bootstrap_indices(n, mean_block, rng)
+        null[draw] = deltas(returns[indices])
+    return observed, null
+
+
+def delta_paired_null_draws(
+    dollar_delta: dict[int, np.ndarray],
+    dollar_forward: dict[int, np.ndarray],
+    calendar_delta: dict[int, np.ndarray],
+    calendar_forward: dict[int, np.ndarray],
+    factors: list[int],
+    draws: int,
+    mean_block: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Observed and null paired differences for delta's predictive power.
+
+    The second null of the protocol: only the delta series is reshuffled, in
+    stationary blocks. Returns and turnover are left exactly as they were, so
+    both clocks keep their partitions and their price paths — the single thing
+    broken is the coupling between the volume centroid and what happens next.
+
+    Shuffling the whole bar instead would move `close` (returns change) and
+    `quote_volume` (the buckets no longer match the data), and an i.i.d. shuffle
+    would strip the local dependence the block bootstrap exists to preserve —
+    narrowing the null and manufacturing significance.
+    """
+    rng = np.random.default_rng(seed)
+
+    def paired(shuffled: bool) -> np.ndarray:
+        out = []
+        for factor in factors:
+            values = []
+            for feature, forward in (
+                (dollar_delta[factor], dollar_forward[factor]),
+                (calendar_delta[factor], calendar_forward[factor]),
+            ):
+                series = feature
+                if shuffled:
+                    series = feature[stationary_bootstrap_indices(feature.size, mean_block, rng)]
+                values.append(abs(rank_predictive_power(series, forward)))
+            out.append(values[0] - values[1])
+        return np.asarray(out, dtype=np.float64)
+
+    observed = paired(shuffled=False)
+    null = np.empty((draws, len(factors)), dtype=np.float64)
+    for draw in range(draws):
+        null[draw] = paired(shuffled=True)
+    return observed, null
