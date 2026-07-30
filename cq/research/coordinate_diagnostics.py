@@ -127,3 +127,55 @@ def excess_kurtosis(returns: np.ndarray) -> float:
     if r.size < 4:
         return float("nan")
     return float(stats.kurtosis(r, fisher=True, bias=False))
+
+
+def stationary_bootstrap_indices(
+    n: int,
+    mean_block: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Politis-Romano stationary bootstrap: geometric blocks, wrapping at the end.
+
+    Blocks are what keep the null honest. Resampling observation by observation
+    would destroy the series' own short-range dependence along with the coupling
+    under test, and the resulting null would be far too easy to beat.
+    """
+    if n < 1:
+        raise ValueError("n must be at least 1")
+    if mean_block <= 0.0:
+        raise ValueError("mean_block must be positive")
+
+    restart_probability = 1.0 / mean_block
+    indices = np.empty(n, dtype=np.int64)
+    current = int(rng.integers(n))
+    restarts = rng.random(n) < restart_probability
+    for position in range(n):
+        if position > 0:
+            current = int(rng.integers(n)) if restarts[position] else (current + 1) % n
+        indices[position] = current
+    return indices
+
+
+def select_block_length(returns: np.ndarray, max_lag: int = 288) -> int:
+    """First lag whose |ACF| falls inside the +-2/sqrt(n) band, rounded up to an hour.
+
+    Pre-registered as a rule rather than a number so it cannot be retuned after
+    seeing the result. The 12-bar rounding is one hour of 5m bars.
+    """
+    r = np.asarray(returns, dtype=np.float64)
+    r = r[np.isfinite(r)]
+    n = r.size
+    if n < 100:
+        return 12
+    centred = r - r.mean()
+    denominator = float(np.dot(centred, centred))
+    if denominator == 0.0:
+        return 12
+    band = 2.0 / np.sqrt(n)
+    chosen = max_lag
+    for lag in range(1, min(max_lag, n - 1) + 1):
+        acf = float(np.dot(centred[:-lag], centred[lag:]) / denominator)
+        if abs(acf) < band:
+            chosen = lag
+            break
+    return max(12, int(np.ceil(chosen / 12.0)) * 12)

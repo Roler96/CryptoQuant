@@ -7,6 +7,8 @@ from cq.research.coordinate_diagnostics import (
     excess_kurtosis,
     rank_autocorrelation,
     rank_predictive_power,
+    select_block_length,
+    stationary_bootstrap_indices,
     variance_ratio,
 )
 
@@ -125,3 +127,46 @@ def test_excess_kurtosis_is_zero_for_normal_and_large_for_a_fat_tail():
     rng = np.random.default_rng(10)
     assert excess_kurtosis(rng.normal(0.0, 1.0, 200_000)) == pytest.approx(0.0, abs=0.1)
     assert excess_kurtosis(rng.standard_t(df=3, size=200_000)) > 2.0
+
+
+def test_bootstrap_indices_have_the_right_shape_and_range():
+    rng = np.random.default_rng(0)
+    idx = stationary_bootstrap_indices(1000, mean_block=24.0, rng=rng)
+    assert idx.shape == (1000,)
+    assert idx.min() >= 0 and idx.max() < 1000
+
+
+def test_bootstrap_is_reproducible_from_the_seed():
+    a = stationary_bootstrap_indices(500, 12.0, np.random.default_rng(3))
+    b = stationary_bootstrap_indices(500, 12.0, np.random.default_rng(3))
+    np.testing.assert_array_equal(a, b)
+
+
+def test_bootstrap_preserves_local_dependence():
+    """Blocks must survive resampling, or the null destroys the wrong thing."""
+    rng = np.random.default_rng(5)
+    n = 20_000
+    series = np.cumsum(rng.normal(0.0, 1.0, n))  # 强自相关
+    idx = stationary_bootstrap_indices(n, mean_block=200.0, rng=rng)
+    resampled = series[idx]
+    # 平均块长 200 时,绝大多数相邻位置仍是原序列的相邻位置
+    contiguous = float(np.mean(np.diff(idx) == 1))
+    assert contiguous > 0.9
+    assert np.isfinite(resampled).all()
+
+
+def test_block_length_is_longer_for_more_persistent_series():
+    rng = np.random.default_rng(6)
+    iid = rng.normal(0.0, 1.0, 20_000)
+    persistent = np.empty(20_000)
+    persistent[0] = 0.0
+    for i in range(1, 20_000):
+        persistent[i] = 0.95 * persistent[i - 1] + rng.normal(0.0, 1.0)
+    assert select_block_length(persistent) > select_block_length(iid)
+
+
+def test_block_length_is_a_multiple_of_twelve_and_at_least_twelve():
+    rng = np.random.default_rng(7)
+    length = select_block_length(rng.normal(0.0, 1.0, 10_000))
+    assert length >= 12
+    assert length % 12 == 0
