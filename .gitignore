@@ -114,3 +114,4 @@ temp/
 !.agents/*.md
 /research/data_cache
 !reports/research/doge_dollar_clock_diagnose.json
+!reports/research/doge_dollar_clock_posthoc.json
