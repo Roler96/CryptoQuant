@@ -87,7 +87,7 @@ def solve_bucket_size(
             target_value=low,
             count=reachable,
             iterations=0,
-            converged=False,
+            converged=abs(reachable - target_count) <= tolerance,
         )
 
     best = (low, reachable)
@@ -96,6 +96,8 @@ def solve_bucket_size(
     for _ in range(1, max_iter + 1):
         used += 1
         mid = 0.5 * (low + high)
+        if mid in (low, high):
+            break
         count = len(bucket_edges(qv, mid))
         if abs(count - target_count) < abs(best[1] - target_count):
             best = (mid, count)
@@ -106,8 +108,6 @@ def solve_bucket_size(
             low = mid  # too many buckets: they are too small
         else:
             high = mid
-        if high - low < 1.0e-12:
-            break
 
     return BucketSolution(
         target_value=best[0],

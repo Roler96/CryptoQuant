@@ -98,3 +98,38 @@ def test_unreachable_target_exits_immediately_without_burning_iterations():
     solution = solve_bucket_size(qv, target_count=500)
     assert not solution.converged
     assert solution.iterations == 0
+
+
+def test_early_exit_respects_tolerance_boundary():
+    """Early exit when reachable < target_count should still apply tolerance rule.
+
+    The early exit occurs when low bound (theoretical maximum bucket count) is
+    reached. If the shortfall is within tolerance, the solution is convergent
+    even with zero iterations.
+    """
+    qv = np.full(999, 1.0)
+    # tolerance = max(1, int(0.001 * 1000)) = 1
+    # reachable = 999, diff = 1, must be converged
+    solution = solve_bucket_size(qv, target_count=1000)
+    assert solution.converged
+    assert solution.count == 999
+    assert solution.iterations == 0
+
+
+def test_bisection_terminates_when_floating_point_precision_exhausted():
+    """Bisection exits early when mid can no longer change due to floating point.
+
+    With uniform bar values and a target falling between reachable bucket counts,
+    the interval inevitably shrinks until mid == low or mid == high. The early
+    termination check `if mid == low or mid == high` prevents pointless
+    recomputation of bucket_edges when the bracket is exhausted.
+    """
+    # Construct data where bucket count is highly quantized: large uniform bars
+    # so many bucket sizes give identical bucket counts. Request a target
+    # between two reachable counts.
+    qv = np.full(120_000, 1.0)
+    # low bound gives 120000 buckets, high bound gives 1 bucket.
+    # Request 60000 buckets: will likely not be exactly reachable.
+    # Bisection must terminate via mid in (low, high), not hit max_iter.
+    solution = solve_bucket_size(qv, target_count=60_000)
+    assert solution.iterations < 100  # proves early exit fired
