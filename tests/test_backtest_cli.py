@@ -173,6 +173,59 @@ def test_json_report_and_trade_ledger_are_written(tmp_path, capsys):
     assert execution_times == sorted(execution_times)
 
 
+def test_equity_curve_is_persisted_per_segment_and_portfolio(tmp_path, capsys):
+    db = tmp_path / "cq.db"
+    output_dir = tmp_path / "reports"
+    closes = [10, 10, 10, 10, 10, 11, 12, 13, 20, 19, 18, 17, 5, 6, 6, 6]
+    _store_closes(db, "DOGE-USDT", closes)
+
+    exit_code = main(
+        [
+            "backtest",
+            "donchian",
+            "--db",
+            str(db),
+            "--inst",
+            "DOGE-USDT",
+            "--lookback",
+            "3",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    assert exit_code == 0
+    capsys.readouterr()
+
+    artifact_dir = next(output_dir.iterdir())
+    summary = json.loads((artifact_dir / "summary.json").read_text())
+    assert "equity" not in summary
+    assert summary["ledgers"]["equity"]["file"] == "equity.csv"
+
+    with (artifact_dir / "equity.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert {"segment", "portfolio", "sequence", "ts", "ts_iso", "equity"} <= set(rows[0])
+    assert {row["segment"] for row in rows} == {"historical", "recent", "full"}
+    assert {row["portfolio"] for row in rows} == {"strategy", "benchmark"}
+
+    expected_rows = sum(
+        summary["segments"][segment]["metrics"]["bars"]
+        + summary["segments"][segment]["benchmark"]["metrics"]["bars"]
+        for segment in ("historical", "recent", "full")
+    )
+    assert len(rows) == expected_rows
+    assert summary["ledgers"]["equity"]["rows"] == expected_rows
+
+    historical_strategy_rows = [
+        row
+        for row in rows
+        if row["segment"] == "historical" and row["portfolio"] == "strategy"
+    ]
+    assert len(historical_strategy_rows) == summary["segments"]["historical"]["metrics"]["bars"]
+    sequences = sorted(int(row["sequence"]) for row in historical_strategy_rows)
+    assert sequences == list(range(1, len(historical_strategy_rows) + 1))
+
+
 def test_spot_rejects_swap_only_arguments(tmp_path, capsys):
     exit_code = main(
         [

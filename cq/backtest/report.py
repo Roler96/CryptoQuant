@@ -147,10 +147,12 @@ def build_payload(
         "segments": {},
         "transactions": [],
         "account_events": [],
+        "equity": [],
     }
     segment_payloads: dict[str, Any] = {}
     transactions: list[dict[str, Any]] = []
     account_events: list[dict[str, Any]] = []
+    equity_points: list[dict[str, Any]] = []
     for segment, benchmark in segments:
         result = segment.result
         metric = performance(segment)
@@ -227,6 +229,17 @@ def build_payload(
                 }
                 row["time_iso"] = utc_iso(event.ts)
                 account_events.append(row)
+            for sequence, (ts, value) in enumerate(zip(run.timestamps, run.equity), start=1):
+                equity_points.append(
+                    {
+                        "segment": segment.name,
+                        "portfolio": portfolio,
+                        "sequence": sequence,
+                        "ts": ts,
+                        "ts_iso": utc_iso(ts),
+                        "equity": value,
+                    }
+                )
     transactions.sort(
         key=lambda row: (
             row["execution_time"],
@@ -243,9 +256,18 @@ def build_payload(
             row["sequence"],
         )
     )
+    equity_points.sort(
+        key=lambda row: (
+            row["ts"],
+            row["segment"],
+            row["portfolio"],
+            row["sequence"],
+        )
+    )
     payload["segments"] = segment_payloads
     payload["transactions"] = transactions
     payload["account_events"] = account_events
+    payload["equity"] = equity_points
     return payload
 
 
@@ -445,6 +467,13 @@ def write_bundle(payload: dict[str, Any], artifact_dir: Path) -> None:
             ],
         ),
     )
+    _atomic_write(
+        artifact_dir / "equity.csv",
+        _csv_text(
+            payload["equity"],
+            ["segment", "portfolio", "sequence", "ts", "ts_iso", "equity"],
+        ),
+    )
 
 
 def summary_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -452,7 +481,7 @@ def summary_payload(payload: dict[str, Any]) -> dict[str, Any]:
     summary = {
         key: value
         for key, value in payload.items()
-        if key not in ("transactions", "account_events")
+        if key not in ("transactions", "account_events", "equity")
     }
     summary["ledgers"] = {
         "transactions": {
@@ -462,6 +491,10 @@ def summary_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "account_events": {
             "file": "account_events.csv",
             "rows": len(payload["account_events"]),
+        },
+        "equity": {
+            "file": "equity.csv",
+            "rows": len(payload["equity"]),
         },
     }
     return summary
