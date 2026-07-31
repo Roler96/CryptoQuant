@@ -187,7 +187,7 @@ git commit -m "feat(research): rebuild explore-window and fingerprint primitives
 
 **Interfaces:**
 - Consumes: `cq.research.split.explore_window()`, `cq.research.split.data_fingerprint()`; `cq.data.store.Store.load_ohlcv(inst_id, timeframe, start_ms, end_ms) -> pd.DataFrame` (existing).
-- Produces: `load_explore_bars(store) -> tuple[pd.DataFrame, int]` (filtered frame, dropped-bar count); `log_returns(frame) -> np.ndarray`. Used by Task 4 and Task 10.
+- Produces: `load_explore_bars(store) -> tuple[pd.DataFrame, int]` (filtered frame, dropped-bar count); `log_returns(frame) -> np.ndarray`. Used by Task 4 and Task 11.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -462,10 +462,25 @@ git commit -m "feat(research): windowing and the feature/label alignment contrac
 
 ---
 
-### Task 5: Alignment sanity check on a synthetic monotonic series (protocol §7.3)
+### Task 5: Alignment sanity check on a synthetic reversal series (protocol §7.3, first half)
 
-This is the protocol's required regression test — a synthetic series where the "expected"
-model behavior is analytically known, not just "runs on real data and looks plausible."
+This is the first half of the protocol's required regression test — verifying only the pure
+windowing/alignment contract (`label 索引 = feature 索引 + 1`) on a synthetic series where the
+"expected" alignment is known by construction, not just "runs on real data and looks plausible."
+No model is trained or evaluated in this task. The protocol's other requirement in the same
+section — that the actual model-selection path can learn an analytically known direction on a
+monotonically increasing synthetic series — is covered separately by Task 9, once Task 7
+(`models.py`) and Task 8 (`stats.py`) exist to exercise.
+
+Note: the brief's originally-proposed series construction (pairwise `base`/`-base` alternation)
+turned out not to satisfy "r_{t+1} = -r_t for every t" — it only holds within each pair, not
+between pairs (verified during Task 5's review). Any universal lag-1-reversal series is
+necessarily a constant-magnitude, period-2 alternation (a one-parameter recurrence with no room
+for varying magnitude), so the implementation uses that instead. To avoid a blind spot where an
+"off-by-two" label misalignment would be indistinguishable from correct under a constant-magnitude
+series, the assertion is restricted to positions where the invariant provably holds and the series
+uses independently-random per-pair magnitudes (not a single repeated constant) — see the code
+below.
 
 **Files:**
 - Create: `tests/test_bar_sequence_alignment_sanity.py`
@@ -486,10 +501,12 @@ from cq.research.bar_sequence.features import build_windows
 
 
 def test_perfect_lag1_reversal_is_recoverable_from_the_windows():
-    # A synthetic series where r_{t+1} = -r_t exactly. If the windowing and
-    # alignment contract are correct, sign_window's last column (the most
-    # recent return, r_k) must be perfectly anti-correlated with label
-    # (r_{k+1}). Any off-by-one in the indexing breaks this trivial relationship.
+    # A synthetic series where r_{t+1} = -r_t holds at every even t (pair
+    # boundary), built from independently-random per-pair magnitudes -- not
+    # a single repeated constant -- so a mis-indexed label (e.g. an
+    # off-by-two, not just off-by-one) produces a magnitude mismatch that
+    # assert_allclose catches, rather than being silently indistinguishable
+    # from correct.
     rng = np.random.default_rng(0)
     base = rng.normal(size=200)
     returns = np.empty(400)
@@ -498,12 +515,18 @@ def test_perfect_lag1_reversal_is_recoverable_from_the_windows():
 
     k, sign_w, ret_w, label = build_windows(returns, N=3)
 
-    last_col_sign = sign_w[:, -1]
-    label_sign = np.sign(label)
+    # The r_{t+1} = -r_t invariant only holds where t is even (pair
+    # boundary); between pairs (odd t) it does not, by construction --
+    # restrict the assertion to the positions where it provably holds.
+    even_mask = (k % 2 == 0)
+    assert even_mask.any()
+
+    last_col_sign = sign_w[even_mask, -1]
+    label_sign = np.sign(label[even_mask])
     assert np.all(last_col_sign == -label_sign)
 
-    last_col_ret = ret_w[:, -1]
-    np.testing.assert_allclose(last_col_ret, -label)
+    last_col_ret = ret_w[even_mask, -1]
+    np.testing.assert_allclose(last_col_ret, -label[even_mask])
 ```
 
 - [ ] **Step 2: Run the test**
@@ -529,7 +552,7 @@ git commit -m "test(research): alignment sanity check on a synthetic reversal se
 
 **Interfaces:**
 - Consumes: `k` array and decision timestamps derived from a filtered frame's index (Task 3/4).
-- Produces: `FOLDS: tuple[Fold, ...]` (5 frozen calendar boundaries); `fold_masks(decision_ts, fold) -> tuple[np.ndarray, np.ndarray]` (train_mask, test_mask over the `k` array); `assert_no_embargo_violation(decision_ts, fold)`. Used by Task 10.
+- Produces: `FOLDS: tuple[Fold, ...]` (5 frozen calendar boundaries); `fold_masks(decision_ts, fold) -> tuple[np.ndarray, np.ndarray]` (train_mask, test_mask over the `k` array); `assert_no_embargo_violation(decision_ts, fold)`. Used by Task 11.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -679,7 +702,7 @@ git commit -m "feat(research): frozen calendar-anchored walk-forward folds"
 
 **Interfaces:**
 - Consumes: `cq.research.bar_sequence.features.build_windows`, `standardize`; `scipy.stats.spearmanr`.
-- Produces: `select_fold_models(returns, decision_ts_ms, fold, feature_set) -> FoldFit` where `FoldFit` carries the chosen `N`, fitted logistic + GBM models, and their test-fold predictions/labels. Used by Task 8 (stats) and Task 10 (runner).
+- Produces: `select_fold_models(returns, decision_ts_ms, fold, feature_set) -> FoldFit` where `FoldFit` carries the chosen `N`, fitted logistic + GBM models, and their test-fold predictions/labels. Used by Task 8 (stats) and Task 11 (runner).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -905,7 +928,7 @@ git commit -m "feat(research): nested walk-forward model selection (logistic + G
 
 **Interfaces:**
 - Consumes: per-fold `(label, pred)` arrays (from Task 7's `FoldFit`).
-- Produces: `rank_ic(pred, label) -> float`; `block_length(n_test) -> int`; `block_bootstrap_p(fold_labels, fold_preds, B=2000, seed=0) -> float`; `SIDAK_ALPHA`; `evaluate_gates(fold_ics, linear_fold_ics, p_value, cost_floor=0.0726) -> Verdict`. Used by Task 10.
+- Produces: `rank_ic(pred, label) -> float`; `block_length(n_test) -> int`; `block_bootstrap_p(fold_labels, fold_preds, B=2000, seed=0) -> float`; `SIDAK_ALPHA`; `evaluate_gates(fold_ics, linear_fold_ics, p_value, cost_floor=0.0726) -> Verdict`. Used by Task 11.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1016,8 +1039,8 @@ class Verdict(enum.Enum):
     REAL_BUT_SUBTHRESHOLD = "REAL-BUT-SUBTHRESHOLD"
     LINEAR_ONLY = "LINEAR-ONLY"
     CLOSED = "CLOSED"
-    INVALID = "INVALID"  # set by the runner (Task 10) on a shuffle-label leakage hit,
-    # never returned by evaluate_gates itself -- see Task 10 Step 3.
+    INVALID = "INVALID"  # set by the runner (Task 11) on a shuffle-label leakage hit,
+    # never returned by evaluate_gates itself -- see Task 11 Step 3.
 
 
 def rank_ic(pred: np.ndarray, label: np.ndarray) -> float:
@@ -1101,7 +1124,96 @@ git commit -m "feat(research): rank-IC, block-bootstrap null, and the G1-G4 gate
 
 ---
 
-### Task 9: `cq/research/bar_sequence/sanity.py` — shuffle-label leakage check
+### Task 9: Model-learns-known-direction sanity check on a monotonic synthetic series (protocol §7.3, second half)
+
+**Why this task exists:** Task 5 covers only the first half of protocol §7.3 — the pure windowing/
+alignment contract (`label 索引 = feature 索引 + 1`) on a synthetic series where that relationship
+is known by construction. The protocol's actual text (§7 item 3) asks for a second, distinct
+check: "构造一个收益率单调递增的合成序列，验证 ... 且模型能在此退化例子上学到解析已知的方向"
+— a monotonically increasing synthetic return series, verifying the *actual model-selection path*
+(Task 7's `select_fold_models`) can learn the analytically known direction on a noise-free case,
+not just that indices line up. This was missing from the original 12-task plan (discovered during
+Task 5's review) and is inserted here, after Task 7 (`models.py`) and Task 8 (`stats.py`, for
+`rank_ic`) both exist, since it exercises both directly rather than reimplementing a bespoke model.
+
+**Files:**
+- Create: `tests/test_bar_sequence_direction_sanity.py`
+
+**Interfaces:**
+- Consumes: `cq.research.bar_sequence.folds.Fold` (Task 6), `cq.research.bar_sequence.models.select_fold_models` (Task 7), `cq.research.bar_sequence.stats.rank_ic` (Task 8).
+
+- [ ] **Step 1: Write the test**
+
+```python
+# tests/test_bar_sequence_direction_sanity.py
+"""Protocol §7.3, second half: a synthetic monotonically increasing return
+series where the "correct" model behavior is analytically known by
+construction -- the actual model-selection path (Task 7's
+select_fold_models) must learn it, not just an alignment index. This
+complements Task 5's pure windowing/alignment check, which does not train
+or evaluate any model."""
+
+import numpy as np
+
+from cq.research.bar_sequence.folds import Fold
+from cq.research.bar_sequence.models import select_fold_models
+from cq.research.bar_sequence.stats import rank_ic
+
+
+def test_model_recovers_the_known_direction_on_a_monotonic_series():
+    # A strictly increasing, noise-free return series: consecutive returns
+    # differ by a constant step, so r_{i+1} is a deterministic, monotonic
+    # function of the recent window -- any competent model fit through the
+    # real select_fold_models path must recover it with high rank-IC. If
+    # this fails, the bug is in feature construction or model selection
+    # (Task 7), not in this test.
+    n = 400
+    returns = np.linspace(-0.01, 0.01, n)
+
+    fold = Fold(0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000)
+    decision_ts_ms = fold.train_start_ms + np.arange(1, n + 1) * 300_000
+
+    fit = select_fold_models(returns, decision_ts_ms, fold, "ret")
+
+    gbm_ic = rank_ic(fit.gbm_pred, fit.test_label)
+    logistic_ic = rank_ic(fit.logistic_pred, fit.test_label)
+
+    assert gbm_ic > 0.8, f"GBM should recover the known monotonic direction, got IC={gbm_ic}"
+    assert logistic_ic > 0.8, f"Logistic baseline should recover it too, got IC={logistic_ic}"
+```
+
+This test uses the same synthetic `Fold`/`decision_ts_ms` construction already proven to work in
+Task 7's own tests (`tests/test_bar_sequence_models.py`) — same shapes, same train/test split
+sizing — so it should run without needing new plumbing.
+
+The IC threshold (`0.8`) is a sanity-check tuning parameter, not a frozen protocol number (unlike
+the fingerprint/G4 constants elsewhere in this plan). If the assertions fail on first run:
+- Do NOT weaken the assertion below 0.8 or delete it to make the test pass — a failure here means
+  the model-selection path cannot recover a trivial, noise-free, monotonic relationship, which is
+  exactly the defect this test exists to catch.
+- Do investigate whether the test-fold's decision points landed in a degenerate slice of the
+  series (e.g. entirely on one side of the sequence's zero-crossing, where the local relationship
+  might be harder to distinguish from a constant) and adjust `n`, the fold boundaries, or the
+  synthetic series' shape (still monotonic) until the assertions hold at a threshold `>= 0.8` for
+  both models.
+- Report the actual achieved `gbm_ic`/`logistic_ic` values and whatever adjustment was needed.
+
+- [ ] **Step 2: Run the test**
+
+Run: `pytest tests/test_bar_sequence_direction_sanity.py -v`
+Expected: PASS, with both `gbm_ic` and `logistic_ic` comfortably above `0.8` (ideally close to
+`1.0`, since the relationship is deterministic and noise-free).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/test_bar_sequence_direction_sanity.py
+git commit -m "test(research): model-learns-known-direction sanity check (protocol §7.3)"
+```
+
+---
+
+### Task 10: `cq/research/bar_sequence/sanity.py` — shuffle-label leakage check
 
 **Files:**
 - Create: `cq/research/bar_sequence/sanity.py`
@@ -1109,7 +1221,7 @@ git commit -m "feat(research): rank-IC, block-bootstrap null, and the G1-G4 gate
 
 **Interfaces:**
 - Consumes: `cq.research.bar_sequence.models.select_fold_models` shape of logic (reimplemented here against shuffled labels), `cq.research.bar_sequence.stats.rank_ic`.
-- Produces: `shuffle_label_ic(returns, decision_ts_ms, fold, feature_set, seed) -> float`. Used by Task 10.
+- Produces: `shuffle_label_ic(returns, decision_ts_ms, fold, feature_set, seed) -> float`. Used by Task 11.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1132,7 +1244,7 @@ def test_shuffle_label_predictions_collapse_towards_zero_on_unrelated_data():
     ic = rank_ic(pred, label)
     assert abs(ic) < 0.3  # loose bound: a trained-on-noise model must not show strong OOS IC
 
-    # The leakage check the runner actually applies (Task 10): the shuffle-trained
+    # The leakage check the runner actually applies (Task 11): the shuffle-trained
     # IC must not clear the same block-bootstrap null used for G1.
     p = block_bootstrap_p([label], [pred], B=200, seed=0)
     assert p > 0.05
@@ -1177,7 +1289,7 @@ def shuffle_label_predictions(
 ) -> tuple[np.ndarray, np.ndarray]:
     """(pred, label) on the REAL test fold, from a model trained on shuffled labels.
 
-    Returns predictions rather than a bare IC so the caller (Task 10's runner)
+    Returns predictions rather than a bare IC so the caller (Task 11's runner)
     can run the same block-bootstrap null used for G1 against this pair,
     instead of eyeballing a magnitude threshold.
     """
@@ -1223,7 +1335,7 @@ git commit -m "feat(research): shuffle-label leakage sanity check"
 
 ---
 
-### Task 10: `cq/research/bar_sequence/runner.py` — orchestration and JSON report
+### Task 11: `cq/research/bar_sequence/runner.py` — orchestration and JSON report
 
 **Files:**
 - Create: `cq/research/bar_sequence/runner.py`
@@ -1231,7 +1343,7 @@ git commit -m "feat(research): shuffle-label leakage sanity check"
 
 **Interfaces:**
 - Consumes: everything from Tasks 2-9.
-- Produces: `run_study(store) -> dict` (the full JSON-serializable report). Used by Task 11 (CLI).
+- Produces: `run_study(store) -> dict` (the full JSON-serializable report). Used by Task 12 (CLI).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1448,7 +1560,7 @@ git commit -m "feat(research): end-to-end bar-sequence-GBM study orchestration"
 
 ---
 
-### Task 11: CLI wiring — `cq research bar-sequence-gbm run`
+### Task 12: CLI wiring — `cq research bar-sequence-gbm run`
 
 **Files:**
 - Create: `cq/research/commands.py`
@@ -1589,7 +1701,7 @@ git commit -m "feat(research): wire bar-sequence-gbm into the cq CLI"
 
 ---
 
-### Task 12: Full regression pass
+### Task 13: Full regression pass
 
 **Files:** none (verification only)
 
@@ -1625,8 +1737,8 @@ Expected: no errors. Fix anything flagged before considering this plan done.
 
 ## After this plan
 
-This plan only builds the measurement apparatus and proves it runs end to end (Task 10's test
-uses synthetic data; Task 12 only re-checks the fingerprint, not the actual verdict). It
+This plan only builds the measurement apparatus and proves it runs end to end (Task 11's test
+uses synthetic data; Task 13 only re-checks the fingerprint, not the actual verdict). It
 deliberately stops short of:
 
 - **Running the study for real** (`cq research bar-sequence-gbm run`) against the full
