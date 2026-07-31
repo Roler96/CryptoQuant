@@ -110,6 +110,7 @@ temp/
 .codebuddy/
 .omo/*
 .claude/*
+.superpowers/*
 .agents/*
 !.agents/*.md
 /research/data_cache
