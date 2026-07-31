@@ -376,17 +376,21 @@ def _marker_values(equity: list[float], trades: list[dict[str, Any]]) -> list[fl
     return values
 
 
-def _render_trade_rows(trades: list[dict[str, Any]], side: str) -> str:
+def _render_trade_rows(trades: list[tuple[str, dict[str, Any]]]) -> str:
     return "".join(
         f"<tr><td>{utc_iso(trade['ts'])}</td><td>{side}</td>"
         f"<td>{_price(trade['price'])}</td><td>{trade['quantity']:.8g}</td>"
         f"<td>{trade['fee']:.6g}</td><td>{_escape(trade['reason'])}</td></tr>"
-        for trade in trades
+        for side, trade in trades
     )
 
 
 def _render_segment_section(name: str, s: SegmentSeries) -> str:
-    trade_rows = _render_trade_rows(s.buy_trades, "buy") + _render_trade_rows(s.sell_trades, "sell")
+    chronological_trades = sorted(
+        [("buy", trade) for trade in s.buy_trades] + [("sell", trade) for trade in s.sell_trades],
+        key=lambda pair: pair[1]["ts"],
+    )
+    trade_rows = _render_trade_rows(chronological_trades)
     trades_table = (
         "<table class=\"trades\"><thead><tr>"
         "<th>Time</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th><th>Reason</th>"
