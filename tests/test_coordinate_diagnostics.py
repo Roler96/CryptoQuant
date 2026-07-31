@@ -13,6 +13,7 @@ from cq.research.coordinate_diagnostics import (
     excess_kurtosis,
     paired_null_draws,
     rank_autocorrelation,
+    rank_partial,
     rank_predictive_power,
     select_block_length,
     stationary_bootstrap_indices,
@@ -129,6 +130,50 @@ def test_delta_r_squared_recovers_a_planted_linear_link():
     y = 0.5 * x + rng.normal(0.0, 1.0, 20_000)
     # 信噪比 0.25/1.25 = 0.2
     assert delta_r_squared(x, y) == pytest.approx(0.2, abs=0.02)
+
+
+def test_rank_partial_strips_a_control_induced_spurious_correlation():
+    """x and y are both driven by control and otherwise independent noise --
+    the raw correlation between x and y should be substantial, but once
+    control is partialled out it must collapse toward zero."""
+    rng = np.random.default_rng(20)
+    n = 8000
+    control = rng.normal(0.0, 1.0, n)
+    x = control + rng.normal(0.0, 0.05, n)
+    y = control + rng.normal(0.0, 0.05, n)
+    raw = float(scipy_stats.spearmanr(x, y).statistic)
+    partial = rank_partial(x, y, control)
+    assert raw > 0.9
+    assert abs(partial) < 0.05
+
+
+def test_rank_partial_preserves_a_genuine_increment():
+    """x predicts y over and above control -- the partial correlation must
+    stay large even though control also carries some of the same signal."""
+    rng = np.random.default_rng(21)
+    n = 8000
+    control = rng.normal(0.0, 1.0, n)
+    x = rng.normal(0.0, 1.0, n)
+    y = 0.05 * control + 0.6 * x + rng.normal(0.0, 0.2, n)
+    partial = rank_partial(x, y, control)
+    assert partial > 0.5
+
+
+def test_rank_partial_rejects_mismatched_lengths():
+    with pytest.raises(ValueError, match="same length"):
+        rank_partial(np.zeros(5), np.zeros(5), np.zeros(4))
+
+
+def test_rank_partial_is_nan_not_zero_on_a_constant_series():
+    """A constant input carries no variation to partial out -- the absence of
+    a residual is not the same claim as a measured independence, so this must
+    be NaN rather than a 0 that would read as 'checked and found nothing'."""
+    rng = np.random.default_rng(22)
+    n = 500
+    constant = np.full(n, 3.0)
+    y = rng.normal(0.0, 1.0, n)
+    control = rng.normal(0.0, 1.0, n)
+    assert np.isnan(rank_partial(constant, y, control))
 
 
 def test_excess_kurtosis_is_zero_for_normal_and_large_for_a_fat_tail():

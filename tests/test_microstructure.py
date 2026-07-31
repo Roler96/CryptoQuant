@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from cq.research.microstructure import centroid_delta, corwin_schultz_spread, log_returns, vwap
+from cq.research.microstructure import (
+    centroid_delta,
+    corwin_schultz_spread,
+    log_returns,
+    vwap,
+    vwap_position,
+)
 
 
 def test_log_returns_are_additive_across_aggregation():
@@ -56,6 +62,50 @@ def test_centroid_delta_stays_in_unit_interval():
     quote_volume = rng.uniform(low, high) * volume
     d = centroid_delta(high, low, close, quote_volume, volume)
     assert np.all(d >= -1.0) and np.all(d <= 1.0)
+
+
+def test_vwap_position_hand_computed():
+    # H=10, L=0, VWAP=200/50=4  ->  v = (4-0)/(10-0) = 0.4
+    v = vwap_position(
+        high=np.array([10.0]),
+        low=np.array([0.0]),
+        quote_volume=np.array([200.0]),
+        volume=np.array([50.0]),
+    )
+    assert v[0] == pytest.approx(0.4)
+
+
+def test_vwap_position_is_nan_when_high_equals_low():
+    v = vwap_position(
+        high=np.array([5.0]),
+        low=np.array([5.0]),
+        quote_volume=np.array([100.0]),
+        volume=np.array([20.0]),
+    )
+    assert np.isnan(v[0])
+
+
+def test_vwap_position_is_nan_on_zero_volume():
+    v = vwap_position(
+        high=np.array([10.0]),
+        low=np.array([0.0]),
+        quote_volume=np.array([0.0]),
+        volume=np.array([0.0]),
+    )
+    assert np.isnan(v[0])
+
+
+def test_vwap_position_stays_in_unit_interval_when_defined():
+    rng = np.random.default_rng(0)
+    n = 500
+    low = rng.uniform(1.0, 2.0, n)
+    high = low + rng.uniform(0.01, 0.5, n)
+    volume = rng.uniform(1.0, 100.0, n)
+    # VWAP must land inside [L, H] to be a legitimate traded average price.
+    quote_volume = rng.uniform(low, high) * volume
+    v = vwap_position(high, low, quote_volume, volume)
+    assert np.all(np.isfinite(v))
+    assert np.all(v >= 0.0) and np.all(v <= 1.0)
 
 
 def test_spread_is_zero_when_price_never_moves():

@@ -39,6 +39,7 @@ from scipy import stats
 from cq.data.store import DEFAULT_DB_PATH, Store
 from cq.research.coordinate_diagnostics import (
     rank_autocorrelation,
+    rank_partial,
     rank_predictive_power,
     stationary_bootstrap_indices,
 )
@@ -62,30 +63,6 @@ DRAWS = 2000
 SEED = 0
 BLOCK = 12.0
 DEFAULT_OUT = Path("reports/research/doge_dollar_clock_duration.json")
-
-
-def _ranks(values: np.ndarray) -> np.ndarray:
-    return stats.rankdata(values)
-
-
-def rank_partial(x: np.ndarray, y: np.ndarray, control: np.ndarray) -> float:
-    """Spearman correlation of x and y after removing what `control` explains.
-
-    Both variables are ranked, then linearly detrended against the ranked
-    control, and the residuals correlated. Without this, "duration predicts
-    volatility" is close to a restatement of "turnover arrived fast because
-    the market was busy".
-    """
-    rx, ry, rc = _ranks(x), _ranks(y), _ranks(control)
-    ones = np.ones_like(rc)
-    design = np.column_stack([ones, rc])
-    coef_x, *_ = np.linalg.lstsq(design, rx, rcond=None)
-    coef_y, *_ = np.linalg.lstsq(design, ry, rcond=None)
-    res_x = rx - design @ coef_x
-    res_y = ry - design @ coef_y
-    if res_x.std() == 0 or res_y.std() == 0:
-        return float("nan")
-    return float(np.corrcoef(res_x, res_y)[0, 1])
 
 
 def _null_p(

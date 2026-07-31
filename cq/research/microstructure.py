@@ -49,6 +49,34 @@ def centroid_delta(
     return out
 
 
+def vwap_position(
+    high: np.ndarray,
+    low: np.ndarray,
+    quote_volume: np.ndarray,
+    volume: np.ndarray,
+) -> np.ndarray:
+    """(VWAP - L) / (H - L): where the bar's volume-weighted centroid sits in its range.
+
+    `H == L` (no range) or zero volume (nothing traded) leaves this
+    undefined, and it is reported as `np.nan` there -- deliberately unlike
+    `centroid_delta`, which returns 0 for its own undefined case. `delta`'s 0
+    is meant to flow straight into further arithmetic as a neutral value; the
+    VWAP-position protocol instead requires undefined bars to be *dropped*
+    from the statistics that consume this (see `VWAP_POSITION_PROTOCOL`
+    Sec. 1), and a silent 0 would be indistinguishable from a genuine
+    bottom-of-range reading, hiding exactly the bars the protocol wants
+    excluded. NaN forces every caller to make that exclusion explicit.
+    """
+    hi = np.asarray(high, dtype=np.float64)
+    lo = np.asarray(low, dtype=np.float64)
+    centre = vwap(quote_volume, volume)
+    span = hi - lo
+    usable = (span > 0) & np.isfinite(centre)
+    out = np.full_like(hi, np.nan)
+    np.divide(centre - lo, span, out=out, where=usable)
+    return out
+
+
 _CS_K = 3.0 - 2.0 * np.sqrt(2.0)
 
 

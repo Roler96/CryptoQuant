@@ -98,6 +98,57 @@ def rank_predictive_power(feature: np.ndarray, forward_returns: np.ndarray) -> f
     return float(rho)
 
 
+def _ranks(values: np.ndarray) -> np.ndarray:
+    return stats.rankdata(values)
+
+
+def rank_partial(x: np.ndarray, y: np.ndarray, control: np.ndarray) -> float:
+    """Spearman correlation of x and y after removing what `control` explains.
+
+    Both variables are ranked, then linearly detrended against the ranked
+    control, and the residuals correlated. Without this, "x predicts y" can be
+    close to a restatement of "control drives both x and y".
+
+    Returns NaN, not 0, when either residual series is degenerate (zero
+    variance after detrending against the control) -- e.g. when `x` or `y` is
+    constant. A constant input leaves nothing for the control to have
+    explained, so "no residual variance" is an absence of a measurement, not
+    a measured independence, and must not be conflated with the 0 that a
+    genuinely uncorrelated residual pair would produce. Contrast this with
+    `centroid_delta`, which returns 0 for its own undefined case (flat or
+    empty bars) because that value is meant to flow into further arithmetic
+    as a neutral input; `rank_partial`'s callers instead need to detect and
+    drop undefined observations, which a silent 0 would hide.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    control = np.asarray(control, dtype=np.float64)
+    if not (x.size == y.size == control.size):
+        raise ValueError(
+            f"x, y, and control must have the same length, got {x.size}, {y.size}, {control.size}"
+        )
+    rx, ry, rc = _ranks(x), _ranks(y), _ranks(control)
+    # A constant x or y ranks to a constant array, which the regression below
+    # fits exactly -- but only in exact arithmetic. In floating point the
+    # residual is a tiny nonzero noise floor, not a clean 0, so the
+    # post-regression `== 0` check below would miss it and correlate two
+    # near-zero noise vectors into an arbitrary-looking number. Checking the
+    # ranked input directly, before that noise has a chance to appear, is
+    # exact: rankdata assigns bit-identical tied ranks to every element of a
+    # constant array.
+    if rx.std() == 0 or ry.std() == 0:
+        return float("nan")
+    ones = np.ones_like(rc)
+    design = np.column_stack([ones, rc])
+    coef_x, *_ = np.linalg.lstsq(design, rx, rcond=None)
+    coef_y, *_ = np.linalg.lstsq(design, ry, rcond=None)
+    res_x = rx - design @ coef_x
+    res_y = ry - design @ coef_y
+    if res_x.std() == 0 or res_y.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(res_x, res_y)[0, 1])
+
+
 def variance_ratio(returns: np.ndarray, q: int) -> float:
     """Lo-MacKinlay variance ratio; 1 under a random walk.
 
