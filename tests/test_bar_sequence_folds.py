@@ -38,18 +38,20 @@ def test_fold_masks_split_decision_points_by_timestamp():
     fold = FOLDS[0]
     decision_ts = np.array(
         [
+            fold.train_start_ms,  # first train ms, included
             fold.train_end_ms - 1,  # last train ms, included
             fold.train_end_ms,  # inside the embargo gap, excluded from both
             fold.test_start_ms,  # first test ms, included
+            fold.test_end_ms - 1,  # last test ms, included
             fold.test_end_ms,  # exclusive end, excluded
         ]
     )
     train_mask, test_mask = fold_masks(decision_ts, fold)
-    np.testing.assert_array_equal(train_mask, [True, False, False, False])
-    np.testing.assert_array_equal(test_mask, [False, False, True, False])
+    np.testing.assert_array_equal(train_mask, [True, True, False, False, False, False])
+    np.testing.assert_array_equal(test_mask, [False, False, False, True, True, False])
 
 
-def test_assert_no_embargo_violation_catches_a_leaking_train_set(monkeypatch):
+def test_assert_no_embargo_violation_catches_a_leaking_train_set():
     fold = FOLDS[0]
     leaking_ts = np.array([fold.train_end_ms])  # inside the embargo gap
     with pytest.raises(AssertionError):
