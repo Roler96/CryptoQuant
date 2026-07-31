@@ -22,10 +22,10 @@ def build_windows(
     ending at k[j], in chronological order. label[j] = returns[k[j] + 1].
     """
     M0 = len(returns)
-    if N < 1 or N > M0 - 2:
+    if N < 1 or N > M0 - 1:
         raise ValueError(
             f"N={N} leaves no valid decision points for {M0} returns "
-            f"(need N <= len(returns) - 2)"
+            f"(need N <= len(returns) - 1)"
         )
 
     windows = sliding_window_view(returns, N)  # windows[j] = returns[j:j+N]
