@@ -683,7 +683,8 @@ def assert_no_embargo_violation(decision_ts_ms: np.ndarray, fold: Fold) -> None:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_bar_sequence_folds.py -v`
-Expected: PASS (4 tests)
+Expected: PASS (3 tests — the plan text previously said 4, a pre-existing doc typo; the test
+file above defines exactly 3 test functions)
 
 - [ ] **Step 5: Commit**
 
