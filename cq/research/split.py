@@ -16,7 +16,6 @@ import pandas as pd
 
 EXPLORE_START = int(datetime(2021, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 FORWARD_FREEZE = int(datetime(2025, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
-VALIDATE_END = int(datetime(2027, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def explore_window() -> tuple[int, int]:
