@@ -105,7 +105,8 @@ def build_chart_series(bundle: RunBundle) -> dict[str, SegmentSeries]:
         strategy_points = _equity_points(bundle.equity, segment_name, "strategy")
         benchmark_points = _equity_points(bundle.equity, segment_name, "benchmark")
         if len(strategy_points) != len(benchmark_points) or any(
-            left[0] != right[0] for left, right in zip(strategy_points, benchmark_points)
+            left[0] != right[0]
+            for left, right in zip(strategy_points, benchmark_points, strict=True)
         ):
             raise RunBundleError(
                 f"{bundle.run_dir}: strategy/benchmark equity timestamps diverge "

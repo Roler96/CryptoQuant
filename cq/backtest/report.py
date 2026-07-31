@@ -229,7 +229,9 @@ def build_payload(
                 }
                 row["time_iso"] = utc_iso(event.ts)
                 account_events.append(row)
-            for sequence, (ts, value) in enumerate(zip(run.timestamps, run.equity), start=1):
+            for sequence, (ts, value) in enumerate(
+                zip(run.timestamps, run.equity, strict=True), start=1
+            ):
                 equity_points.append(
                     {
                         "segment": segment.name,

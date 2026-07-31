@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 from collections.abc import Sequence
 
 import pytest
 
-from cq.backtest.render import RunBundleError, load_bundle
+from cq.backtest.render import (
+    SEGMENT_NAMES,
+    RunBundleError,
+    _render_header,
+    _render_metrics_table,
+    build_chart_series,
+    load_bundle,
+    render_html,
+    write_report,
+)
 from cq.cli import main
 from cq.core.clock import HOUR_MS
 from cq.data.store import Store
@@ -74,7 +86,7 @@ def test_load_bundle_rejects_a_run_dir_missing_equity_csv(tmp_path, capsys):
     run_dir = _build_run_dir(tmp_path, capsys)
     (run_dir / "equity.csv").unlink()
 
-    with pytest.raises(RunBundleError, match="equity.csv"):
+    with pytest.raises(RunBundleError, match=re.escape("equity.csv")):
         load_bundle(run_dir)
 
 
@@ -82,11 +94,8 @@ def test_load_bundle_rejects_a_run_dir_missing_summary_json(tmp_path, capsys):
     run_dir = _build_run_dir(tmp_path, capsys)
     (run_dir / "summary.json").unlink()
 
-    with pytest.raises(RunBundleError, match="summary.json"):
+    with pytest.raises(RunBundleError, match=re.escape("summary.json")):
         load_bundle(run_dir)
-
-
-from cq.backtest.render import SEGMENT_NAMES, build_chart_series, load_bundle
 
 
 def test_build_chart_series_covers_all_three_segments(tmp_path, capsys):
@@ -134,9 +143,6 @@ def test_build_chart_series_places_filled_trades_on_the_strategy_curve(tmp_path,
             assert series[segment].timestamps[trade["index"]] == trade["ts"]
 
 
-from cq.backtest.render import _render_header, _render_metrics_table
-
-
 def test_render_header_includes_strategy_and_instrument(tmp_path, capsys):
     bundle = load_bundle(_build_run_dir(tmp_path, capsys))
 
@@ -159,13 +165,6 @@ def test_render_metrics_table_has_six_data_columns_per_row(tmp_path, capsys):
     assert "Sharpe ratio" in table
     assert "Historical strategy" in table
     assert "B&amp;H" in table
-
-
-import re
-import shutil
-import subprocess
-
-from cq.backtest.render import render_html, write_report
 
 
 def test_render_html_embeds_escaped_json_data_block(tmp_path, capsys):
