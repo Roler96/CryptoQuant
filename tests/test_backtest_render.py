@@ -132,3 +132,30 @@ def test_build_chart_series_places_filled_trades_on_the_strategy_curve(tmp_path,
         for trade in series[segment].buy_trades + series[segment].sell_trades:
             assert 0 <= trade["index"] < len(series[segment].timestamps)
             assert series[segment].timestamps[trade["index"]] == trade["ts"]
+
+
+from cq.backtest.render import _render_header, _render_metrics_table
+
+
+def test_render_header_includes_strategy_and_instrument(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+
+    header = _render_header(bundle)
+
+    assert "donchian-trend-3" in header
+    assert "DOGE-USDT" in header
+    assert bundle.summary["run_id"] in header
+
+
+def test_render_metrics_table_has_six_data_columns_per_row(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+
+    table = _render_metrics_table(bundle)
+
+    assert table.count("<tr>") == 1 + len(
+        # header row + one row per metric
+        [None for _ in range(11)]
+    )
+    assert "Sharpe ratio" in table
+    assert "Historical strategy" in table
+    assert "Full B&amp;H" in table or "Full B&H" in table

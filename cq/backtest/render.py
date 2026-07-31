@@ -5,8 +5,11 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass
+from html import escape as _escape
 from pathlib import Path
 from typing import Any
+
+from cq.backtest.report import _integer, _money, _number, _percent, _price, utc_iso
 
 _REQUIRED_FILES = ("summary.json", "trades.csv", "account_events.csv", "equity.csv")
 
@@ -27,6 +30,29 @@ class RunBundle:
 
 
 SEGMENT_NAMES = ("historical", "recent", "full")
+
+_METRIC_ROWS = (
+    ("Evaluation bars", "bars", _integer),
+    ("Warmup bars", "warmup_bars", _integer),
+    ("Fills", "fills", _integer),
+    ("Rejected", "rejected", _integer),
+    ("Initial equity", "initial_equity", _money),
+    ("Final equity", "final_equity", _money),
+    ("Total return", "total_return", _percent),
+    ("Annualized return", "annualized_return", _percent),
+    ("Max drawdown", "max_drawdown", _percent),
+    ("Annualized volatility", "annualized_volatility", _percent),
+    ("Sharpe ratio", "sharpe_ratio", _number),
+)
+
+_METRIC_COLUMNS = (
+    ("historical", False, "Historical strategy"),
+    ("historical", True, "Historical B&H"),
+    ("recent", False, "Recent strategy"),
+    ("recent", True, "Recent B&H"),
+    ("full", False, "Full strategy"),
+    ("full", True, "Full B&H"),
+)
 
 
 @dataclass(frozen=True)
@@ -171,3 +197,39 @@ def _segment_account_events(
         for row in rows
         if row["segment"] == segment and row["portfolio"] == "strategy"
     ]
+
+
+def _render_header(bundle: RunBundle) -> str:
+    config = bundle.summary["config"]
+    split = bundle.summary["split"]
+    return f"""<header>
+<h1>{_escape(config['strategy'])}</h1>
+<p>{_escape(config['inst_id'])} ({_escape(config['market_type'])}) | {_escape(config['timeframe'])}</p>
+<p>{_escape(config['data_start'])} &rarr; {_escape(config['data_end'])} | split {split['ratio']:.4f} at {_escape(split['boundary_time'])}</p>
+<p>run: {_escape(bundle.summary['run_id'])} | costs: {_escape(config['costs'])} | funding: {_escape(config['funding'])}</p>
+</header>
+"""
+
+
+def _metrics_for(segments: dict[str, Any], segment: str, benchmark: bool) -> dict[str, Any]:
+    node = segments[segment]
+    return node["benchmark"]["metrics"] if benchmark else node["metrics"]
+
+
+def _render_metrics_table(bundle: RunBundle) -> str:
+    segments = bundle.summary["segments"]
+    header_cells = "".join(
+        f"<th>{_escape(label)}</th>" for label in ("Metric", *(label for _, _, label in _METRIC_COLUMNS))
+    )
+    body_rows = []
+    for label, key, formatter in _METRIC_ROWS:
+        cells = "".join(
+            f"<td>{formatter(_metrics_for(segments, segment, benchmark)[key])}</td>"
+            for segment, benchmark, _ in _METRIC_COLUMNS
+        )
+        body_rows.append(f"<tr><td>{_escape(label)}</td>{cells}</tr>")
+    return f"""<table class="metrics">
+<thead><tr>{header_cells}</tr></thead>
+<tbody>{''.join(body_rows)}</tbody>
+</table>
+"""
