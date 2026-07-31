@@ -110,19 +110,34 @@ def select_fold_models(
     train_mask, test_mask = fold_masks(decision_ts_for_k, fold)
     assert_no_embargo_violation(decision_ts_for_k[train_mask], fold)
 
-    ret_z = standardize(ret_window, train_mask)
-    X = _features_for(feature_set, sign_window, ret_z)
     y = (label > 0).astype(int)
 
+    # C selection uses inner-train-only standardization, matching the GBM
+    # grid search above -- the inner validation rows must not contribute to
+    # the statistics used to standardize their own features, even though
+    # this leakage would only be within the training window (never into
+    # the outer test fold).
+    train_positions = np.flatnonzero(train_mask)
+    inner_train_pos, inner_val_pos = _inner_split(train_positions)
+    train_rows_for_std = np.zeros(len(k), dtype=bool)
+    train_rows_for_std[inner_train_pos] = True
+    ret_z_inner = standardize(ret_window, train_rows_for_std)
+    X_inner = _features_for(feature_set, sign_window, ret_z_inner)
+
     for C in LOGISTIC_C_GRID:
-        train_positions = np.flatnonzero(train_mask)
-        inner_train_pos, inner_val_pos = _inner_split(train_positions)
         lr = LogisticRegression(C=C, max_iter=1000)
-        lr.fit(X[inner_train_pos], y[inner_train_pos])
-        pred = lr.predict_proba(X[inner_val_pos])[:, 1]
+        lr.fit(X_inner[inner_train_pos], y[inner_train_pos])
+        pred = lr.predict_proba(X_inner[inner_val_pos])[:, 1]
         ic = _rank_ic(pred, label[inner_val_pos])
         if best_logistic is None or ic > best_logistic[0]:
             best_logistic = (ic, C)
+
+    # The final fit (both models) uses the full training window's
+    # statistics, per protocol §3's F_ret definition ("μ_train/σ_train 仅用
+    # 该折训练窗内的 r 计算") -- this is the fold-level standardization the
+    # protocol specifies, not a further inner split.
+    ret_z = standardize(ret_window, train_mask)
+    X = _features_for(feature_set, sign_window, ret_z)
 
     final_logistic = LogisticRegression(C=best_logistic[1], max_iter=1000)
     final_logistic.fit(X[train_mask], y[train_mask])
