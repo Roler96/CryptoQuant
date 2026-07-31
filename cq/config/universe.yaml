@@ -1,17 +1,36 @@
 # Instruments the platform tracks. OKX-native instrument ids.
 #
-# Scope is deliberately narrow (BTC / ETH / DOGE, spot + swap). Adding an
-# instrument is a config change, never a code change.
+# Scope: top-10 mainstream coins by market cap, spot + swap, plus any
+# ad-hoc additions. Adding an instrument is a config change, never a code
+# change.
 
 spot:
   - BTC-USDT
   - ETH-USDT
   - DOGE-USDT
+  - SOL-USDT
+  - XRP-USDT
+  - BNB-USDT
+  - ADA-USDT
+  - AVAX-USDT
+  - LINK-USDT
+  - DOT-USDT
+  - TRX-USDT
+  - ASTER-USDT
 
 swap:
   - BTC-USDT-SWAP
   - ETH-USDT-SWAP
   - DOGE-USDT-SWAP
+  - SOL-USDT-SWAP
+  - XRP-USDT-SWAP
+  - BNB-USDT-SWAP
+  - ADA-USDT-SWAP
+  - AVAX-USDT-SWAP
+  - LINK-USDT-SWAP
+  - DOT-USDT-SWAP
+  - TRX-USDT-SWAP
+  - ASTER-USDT-SWAP
 
 # Currencies for the open-interest endpoint, which is keyed by currency
 # rather than by instrument.
@@ -19,3 +38,12 @@ open_interest_currencies:
   - BTC
   - ETH
   - DOGE
+  - SOL
+  - XRP
+  - BNB
+  - ADA
+  - AVAX
+  - LINK
+  - DOT
+  - TRX
+  - ASTER
