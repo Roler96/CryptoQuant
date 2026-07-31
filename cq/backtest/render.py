@@ -198,6 +198,7 @@ def _segment_trades(
             "reason": row["reason"],
             "position_before": float(row["position_before"]),
             "position_after": float(row["position_after"]),
+            "equity_after": float(row["equity_after"]),
         }
         (buys if row["side"] == "buy" else sells).append(marker)
     return buys, sells
@@ -415,7 +416,8 @@ def _render_trade_rows(trades: list[tuple[str, dict[str, Any]]]) -> str:
     return "".join(
         f"<tr><td>{utc_iso(trade['ts'])}</td><td>{side}</td>"
         f"<td>{_price(trade['price'])}</td><td>{trade['quantity']:.8g}</td>"
-        f"<td>{trade['fee']:.6g}</td><td>{_format_duration(duration)}</td>"
+        f"<td>{trade['fee']:.6g}</td><td>{_money(trade['equity_after'])}</td>"
+        f"<td>{_format_duration(duration)}</td>"
         f"<td>{_escape(trade['reason'])}</td></tr>"
         for (side, trade), duration in zip(trades, durations, strict=True)
     )
@@ -430,7 +432,7 @@ def _render_segment_section(name: str, s: SegmentSeries) -> str:
     trades_table = (
         "<table class=\"trades\"><thead><tr>"
         "<th>Time</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th>"
-        "<th>Holding</th><th>Reason</th>"
+        "<th>Account Value</th><th>Holding</th><th>Reason</th>"
         f"</tr></thead><tbody>{trade_rows}</tbody></table>"
         if trade_rows
         else "<p>No filled trades in this segment.</p>"
