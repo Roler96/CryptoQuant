@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from html import escape as _escape
 from pathlib import Path
 from typing import Any
 
-from cq.backtest.report import _integer, _money, _number, _percent
+from cq.backtest.report import _integer, _money, _number, _percent, _price, utc_iso
 
 _REQUIRED_FILES = ("summary.json", "trades.csv", "account_events.csv", "equity.csv")
+_VENDOR_DIR = Path(__file__).parent / "vendor" / "uplot-1.6.31"
 
 
 class RunBundleError(Exception):
@@ -244,3 +247,206 @@ def _render_metrics_table(bundle: RunBundle) -> str:
 <tbody>{''.join(body_rows)}</tbody>
 </table>
 """
+
+
+_PAGE_CSS = """
+body {
+  font-family: system-ui, sans-serif; margin: 0 auto; max-width: 1100px;
+  padding: 24px; color: #1b1f23;
+}
+header p { margin: 2px 0; color: #444; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.9em; }
+table th, table td { border: 1px solid #d0d7de; padding: 4px 8px; text-align: right; }
+table th:first-child, table td:first-child { text-align: left; }
+.chart { margin: 12px 0; }
+section { margin-top: 32px; border-top: 1px solid #d0d7de; padding-top: 12px; }
+"""
+
+_GLUE_JS = """
+(function () {
+  "use strict";
+  var payload = JSON.parse(document.getElementById("report-data").textContent);
+  var palette = { strategy: "#4C9AFF", benchmark: "#97A0AF", buy: "#36B37E", sell: "#FF5630" };
+
+  Object.keys(payload.segments).forEach(function (name) {
+    renderEquityChart(name, payload.segments[name]);
+    renderDrawdownChart(name, payload.segments[name]);
+  });
+
+  function renderEquityChart(name, segment) {
+    var container = document.getElementById("equity-chart-" + name);
+    if (!container) return;
+    var opts = {
+      width: container.clientWidth || 900,
+      height: 320,
+      title: "Equity",
+      scales: { x: { time: true } },
+      series: [
+        {},
+        { label: "Strategy", stroke: palette.strategy, width: 2 },
+        { label: "Benchmark", stroke: palette.benchmark, width: 1.5, dash: [4, 3] },
+        { label: "Buys", stroke: "transparent",
+          points: { show: true, size: 7, fill: palette.buy, stroke: palette.buy },
+          paths: function () { return null; } },
+        { label: "Sells", stroke: "transparent",
+          points: { show: true, size: 7, fill: palette.sell, stroke: palette.sell },
+          paths: function () { return null; } },
+      ],
+      legend: { show: true },
+    };
+    var data = [
+      segment.timestamps, segment.strategy_equity, segment.benchmark_equity,
+      segment.buy_markers, segment.sell_markers,
+    ];
+    new uPlot(opts, data, container);
+  }
+
+  function renderDrawdownChart(name, segment) {
+    var container = document.getElementById("drawdown-chart-" + name);
+    if (!container) return;
+    var opts = {
+      width: container.clientWidth || 900,
+      height: 200,
+      title: "Drawdown",
+      scales: { x: { time: true } },
+      axes: [
+        {},
+        { values: function (u, vals) {
+            return vals.map(function (v) { return (v * 100).toFixed(1) + "%"; });
+          } },
+      ],
+      series: [
+        {},
+        { label: "Strategy", stroke: "#DE350B", width: 1.5 },
+        { label: "Benchmark", stroke: palette.benchmark, width: 1, dash: [4, 3] },
+      ],
+      legend: { show: true },
+    };
+    var data = [segment.timestamps, segment.strategy_drawdown, segment.benchmark_drawdown];
+    new uPlot(opts, data, container);
+  }
+})();
+"""
+
+_VENDOR_CACHE: dict[str, str] = {}
+
+
+def _read_vendor(name: str) -> str:
+    if name not in _VENDOR_CACHE:
+        _VENDOR_CACHE[name] = (_VENDOR_DIR / name).read_text(encoding="utf-8")
+    return _VENDOR_CACHE[name]
+
+
+def _chart_payload(bundle: RunBundle, series: dict[str, SegmentSeries]) -> dict[str, Any]:
+    return {
+        "run_id": bundle.summary["run_id"],
+        "segments": {
+            name: {
+                "timestamps": [ts / 1000 for ts in s.timestamps],
+                "strategy_equity": s.strategy_equity,
+                "benchmark_equity": s.benchmark_equity,
+                "strategy_drawdown": s.strategy_drawdown,
+                "benchmark_drawdown": s.benchmark_drawdown,
+                "buy_markers": _marker_values(s.strategy_equity, s.buy_trades),
+                "sell_markers": _marker_values(s.strategy_equity, s.sell_trades),
+            }
+            for name, s in series.items()
+        },
+    }
+
+
+def _marker_values(equity: list[float], trades: list[dict[str, Any]]) -> list[float | None]:
+    values: list[float | None] = [None] * len(equity)
+    for trade in trades:
+        values[trade["index"]] = equity[trade["index"]]
+    return values
+
+
+def _render_trade_rows(trades: list[dict[str, Any]], side: str) -> str:
+    return "".join(
+        f"<tr><td>{utc_iso(trade['ts'])}</td><td>{side}</td>"
+        f"<td>{_price(trade['price'])}</td><td>{trade['quantity']:.8g}</td>"
+        f"<td>{trade['fee']:.6g}</td><td>{_escape(trade['reason'])}</td></tr>"
+        for trade in trades
+    )
+
+
+def _render_segment_section(name: str, s: SegmentSeries) -> str:
+    trade_rows = _render_trade_rows(s.buy_trades, "buy") + _render_trade_rows(s.sell_trades, "sell")
+    trades_table = (
+        "<table class=\"trades\"><thead><tr>"
+        "<th>Time</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th><th>Reason</th>"
+        f"</tr></thead><tbody>{trade_rows}</tbody></table>"
+        if trade_rows
+        else "<p>No filled trades in this segment.</p>"
+    )
+    event_rows = "".join(
+        f"<tr><td>{utc_iso(event['ts'])}</td><td>{_escape(event['event_type'])}</td>"
+        f"<td>{event['amount']:.6g}</td><td>{_money(event['equity_after'])}</td></tr>"
+        for event in s.account_events
+    )
+    events_table = (
+        "<table class=\"events\"><thead><tr>"
+        "<th>Time</th><th>Type</th><th>Amount</th><th>Equity after</th>"
+        f"</tr></thead><tbody>{event_rows}</tbody></table>"
+        if event_rows
+        else "<p>No account events in this segment.</p>"
+    )
+    return f"""<section>
+<h2>{_escape(name.capitalize())}</h2>
+<div id="equity-chart-{name}" class="chart"></div>
+<div id="drawdown-chart-{name}" class="chart"></div>
+<h3>Trades</h3>
+{trades_table}
+<h3>Account events</h3>
+{events_table}
+</section>
+"""
+
+
+def render_html(bundle: RunBundle, series: dict[str, SegmentSeries]) -> str:
+    """Build the single self-contained report.html document."""
+    data_json = json.dumps(
+        _chart_payload(bundle, series), ensure_ascii=False, allow_nan=False
+    ).replace("</", "<\\/")
+    sections = "\n".join(_render_segment_section(name, series[name]) for name in SEGMENT_NAMES)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{_escape(bundle.summary['run_id'])}</title>
+<style>{_read_vendor('uPlot.min.css')}</style>
+<style>{_PAGE_CSS}</style>
+</head>
+<body>
+{_render_header(bundle)}
+{_render_metrics_table(bundle)}
+{sections}
+<script id="report-data" type="application/json">{data_json}</script>
+<!--
+{_read_vendor('LICENSE')}
+-->
+<script>{_read_vendor('uPlot.iife.min.js')}</script>
+<script>{_GLUE_JS}</script>
+</body>
+</html>
+"""
+
+
+def write_report(run_dir: Path) -> Path:
+    """Load, shape, and render a run bundle's report.html; overwrite is fine."""
+    bundle = load_bundle(run_dir)
+    series = build_chart_series(bundle)
+    html = render_html(bundle, series)
+    report_path = run_dir / "report.html"
+    _write_text_atomic(report_path, html)
+    return report_path
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as handle:
+        handle.write(text)
+        temporary = Path(handle.name)
+    os.replace(temporary, path)

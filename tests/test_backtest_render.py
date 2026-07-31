@@ -159,3 +159,71 @@ def test_render_metrics_table_has_six_data_columns_per_row(tmp_path, capsys):
     assert "Sharpe ratio" in table
     assert "Historical strategy" in table
     assert "B&amp;H" in table
+
+
+import re
+import shutil
+import subprocess
+
+from cq.backtest.render import render_html, write_report
+
+
+def test_render_html_embeds_escaped_json_data_block(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+    series = build_chart_series(bundle)
+
+    html = render_html(bundle, series)
+
+    assert "<title>" in html
+    assert bundle.summary["run_id"] in html
+    assert "uPlot" in html
+    assert "MIT License" in html
+    match = re.search(
+        r'<script id="report-data" type="application/json">(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None
+    data = json.loads(match.group(1))
+    assert set(data["segments"]) == set(SEGMENT_NAMES)
+    historical = data["segments"]["historical"]
+    assert len(historical["timestamps"]) == len(series["historical"].timestamps)
+
+
+def test_render_html_glue_script_is_syntactically_valid_javascript(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+    series = build_chart_series(bundle)
+
+    html = render_html(bundle, series)
+
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
+    glue_scripts = [s for s in scripts if "uPlot(" in s and "var uPlot" not in s]
+    assert glue_scripts
+    # `node --check /dev/stdin` fails on some Linux setups (this box included):
+    # readFileSync resolves the piped fd's realpath to a bogus "pipe:[N]"
+    # string and then tries to open *that* -- ENOENT, unrelated to JS syntax.
+    # Writing the extracted glue script to a real file sidesteps that and
+    # checks the exact same thing: does node accept this script's syntax.
+    node = shutil.which("node")
+    assert node is not None, "node must be on PATH to check the glue script"
+    script_path = tmp_path / "glue.js"
+    script_path.write_text(glue_scripts[0], encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - `node` is resolved via shutil.which above
+        [node, "--check", str(script_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_write_report_writes_and_overwrites_report_html(tmp_path, capsys):
+    run_dir = _build_run_dir(tmp_path, capsys)
+
+    first_path = write_report(run_dir)
+    assert first_path == run_dir / "report.html"
+    assert first_path.exists()
+    first_size = first_path.stat().st_size
+
+    second_path = write_report(run_dir)
+    assert second_path == first_path
+    assert second_path.stat().st_size == first_size
