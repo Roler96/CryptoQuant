@@ -277,6 +277,13 @@ table th, table td { border: 1px solid #d0d7de; padding: 4px 8px; text-align: ri
 table th:first-child, table td:first-child { text-align: left; }
 .chart { margin: 12px 0; }
 section { margin-top: 32px; border-top: 1px solid #d0d7de; padding-top: 12px; }
+[hidden] { display: none !important; }
+.segment-tabs { display: flex; gap: 8px; margin: 16px 0 0; }
+.segment-tabs button {
+  padding: 6px 14px; border: 1px solid #d0d7de; border-radius: 6px;
+  background: #f6f8fa; color: #1b1f23; font: inherit; cursor: pointer;
+}
+.segment-tabs button.active { background: #4C9AFF; border-color: #4C9AFF; color: #fff; }
 """
 
 _GLUE_JS = """
@@ -288,6 +295,18 @@ _GLUE_JS = """
   Object.keys(payload.segments).forEach(function (name) {
     renderEquityChart(name, payload.segments[name]);
     renderDrawdownChart(name, payload.segments[name]);
+  });
+
+  var tabs = document.querySelectorAll(".segment-tabs button");
+  var panels = document.querySelectorAll(".segment-panel");
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      var target = tab.getAttribute("data-segment");
+      tabs.forEach(function (t) { t.classList.toggle("active", t === tab); });
+      panels.forEach(function (p) {
+        p.hidden = p.getAttribute("data-segment") !== target;
+      });
+    });
   });
 
   function renderEquityChart(name, segment) {
@@ -423,6 +442,17 @@ def _render_trade_rows(trades: list[tuple[str, dict[str, Any]]]) -> str:
     )
 
 
+def _render_segment_tabs() -> str:
+    buttons = []
+    for name in SEGMENT_NAMES:
+        active_class = ' class="active"' if name == SEGMENT_NAMES[0] else ""
+        buttons.append(
+            f'<button type="button" data-segment="{name}"{active_class}>'
+            f"{_escape(name.capitalize())}</button>"
+        )
+    return f'<nav class="segment-tabs">{"".join(buttons)}</nav>'
+
+
 def _render_segment_section(name: str, s: SegmentSeries) -> str:
     chronological_trades = sorted(
         [("buy", trade) for trade in s.buy_trades] + [("sell", trade) for trade in s.sell_trades],
@@ -449,7 +479,8 @@ def _render_segment_section(name: str, s: SegmentSeries) -> str:
         if event_rows
         else "<p>No account events in this segment.</p>"
     )
-    return f"""<section>
+    hidden_attr = "" if name == SEGMENT_NAMES[0] else " hidden"
+    return f"""<section class="segment-panel" data-segment="{name}"{hidden_attr}>
 <h2>{_escape(name.capitalize())}</h2>
 <div id="equity-chart-{name}" class="chart"></div>
 <div id="drawdown-chart-{name}" class="chart"></div>
@@ -478,6 +509,7 @@ def render_html(bundle: RunBundle, series: dict[str, SegmentSeries]) -> str:
 <body>
 {_render_header(bundle)}
 {_render_metrics_table(bundle)}
+{_render_segment_tabs()}
 {sections}
 <script id="report-data" type="application/json">{data_json}</script>
 <!--
