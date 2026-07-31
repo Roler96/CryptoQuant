@@ -84,3 +84,51 @@ def test_load_bundle_rejects_a_run_dir_missing_summary_json(tmp_path, capsys):
 
     with pytest.raises(RunBundleError, match="summary.json"):
         load_bundle(run_dir)
+
+
+from cq.backtest.render import SEGMENT_NAMES, build_chart_series, load_bundle
+
+
+def test_build_chart_series_covers_all_three_segments(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+
+    series = build_chart_series(bundle)
+
+    assert set(series) == set(SEGMENT_NAMES)
+    historical = series["historical"]
+    assert len(historical.timestamps) == bundle.summary["segments"]["historical"]["metrics"]["bars"]
+    assert len(historical.strategy_equity) == len(historical.timestamps)
+    assert len(historical.benchmark_equity) == len(historical.timestamps)
+    assert len(historical.strategy_drawdown) == len(historical.timestamps)
+    assert historical.timestamps == sorted(historical.timestamps)
+
+
+def test_build_chart_series_drawdown_matches_reported_max_drawdown(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+
+    series = build_chart_series(bundle)
+
+    for segment in SEGMENT_NAMES:
+        reported = bundle.summary["segments"][segment]["metrics"]["max_drawdown"]
+        computed = min(series[segment].strategy_drawdown, default=0.0)
+        assert computed == pytest.approx(reported)
+
+
+def test_build_chart_series_places_filled_trades_on_the_strategy_curve(tmp_path, capsys):
+    bundle = load_bundle(_build_run_dir(tmp_path, capsys))
+
+    series = build_chart_series(bundle)
+
+    filled_by_segment = {}
+    for row in bundle.trades:
+        if row["portfolio"] != "strategy" or row["status"] != "filled":
+            continue
+        filled_by_segment.setdefault(row["segment"], 0)
+        filled_by_segment[row["segment"]] += 1
+
+    for segment, count in filled_by_segment.items():
+        markers = len(series[segment].buy_trades) + len(series[segment].sell_trades)
+        assert markers == count
+        for trade in series[segment].buy_trades + series[segment].sell_trades:
+            assert 0 <= trade["index"] < len(series[segment].timestamps)
+            assert series[segment].timestamps[trade["index"]] == trade["ts"]
