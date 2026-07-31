@@ -196,6 +196,8 @@ def _segment_trades(
             "quantity": quantity,
             "fee": float(row["fee"]),
             "reason": row["reason"],
+            "position_before": float(row["position_before"]),
+            "position_after": float(row["position_after"]),
         }
         (buys if row["side"] == "buy" else sells).append(marker)
     return buys, sells
@@ -376,12 +378,46 @@ def _marker_values(equity: list[float], trades: list[dict[str, Any]]) -> list[fl
     return values
 
 
+def _holding_durations(trades: list[tuple[str, dict[str, Any]]]) -> list[int | None]:
+    """Milliseconds from the trade that opened a position to the one that flattens it.
+
+    None for every trade except the one that brings position back to exactly
+    zero -- that row reports how long the position it closes was held.
+    """
+    entry_ts: int | None = None
+    durations: list[int | None] = []
+    for _side, trade in trades:
+        if entry_ts is None and trade["position_before"] == 0 and trade["position_after"] != 0:
+            entry_ts = trade["ts"]
+        if entry_ts is not None and trade["position_after"] == 0 and trade["position_before"] != 0:
+            durations.append(trade["ts"] - entry_ts)
+            entry_ts = None
+        else:
+            durations.append(None)
+    return durations
+
+
+def _format_duration(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    minutes = ms // 60_000
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
 def _render_trade_rows(trades: list[tuple[str, dict[str, Any]]]) -> str:
+    durations = _holding_durations(trades)
     return "".join(
         f"<tr><td>{utc_iso(trade['ts'])}</td><td>{side}</td>"
         f"<td>{_price(trade['price'])}</td><td>{trade['quantity']:.8g}</td>"
-        f"<td>{trade['fee']:.6g}</td><td>{_escape(trade['reason'])}</td></tr>"
-        for side, trade in trades
+        f"<td>{trade['fee']:.6g}</td><td>{_format_duration(duration)}</td>"
+        f"<td>{_escape(trade['reason'])}</td></tr>"
+        for (side, trade), duration in zip(trades, durations, strict=True)
     )
 
 
@@ -393,7 +429,8 @@ def _render_segment_section(name: str, s: SegmentSeries) -> str:
     trade_rows = _render_trade_rows(chronological_trades)
     trades_table = (
         "<table class=\"trades\"><thead><tr>"
-        "<th>Time</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th><th>Reason</th>"
+        "<th>Time</th><th>Side</th><th>Price</th><th>Qty</th><th>Fee</th>"
+        "<th>Holding</th><th>Reason</th>"
         f"</tr></thead><tbody>{trade_rows}</tbody></table>"
         if trade_rows
         else "<p>No filled trades in this segment.</p>"
