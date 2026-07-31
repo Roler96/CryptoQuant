@@ -1,0 +1,157 @@
+{
+  "bars": 464256,
+  "bars_aligned": 464255,
+  "clocks": {
+    "calendar": {
+      "combined_p": 0.021989005497251374,
+      "combined_statistic": -4.532494517850447,
+      "scales": {
+        "12h": {
+          "M": -0.007641151090897227,
+          "c_predictive_power": -0.008117087388065922,
+          "drop_fraction": 0.0,
+          "n": 3222,
+          "p_value": 0.6691654172913544
+        },
+        "15m": {
+          "M": -0.017299111145598973,
+          "c_predictive_power": -0.03363108420166177,
+          "drop_fraction": 0.00042649434571895295,
+          "n": 154684,
+          "p_value": 0.0004997501249375312
+        },
+        "1h": {
+          "M": 0.006744146981695413,
+          "c_predictive_power": -0.056420961894648965,
+          "drop_fraction": 0.00025849144393319534,
+          "n": 38676,
+          "p_value": 0.1934032983508246
+        },
+        "4h": {
+          "M": 0.013624058432960946,
+          "c_predictive_power": -0.06802160040014142,
+          "drop_fraction": 0.00010341261633917131,
+          "n": 9669,
+          "p_value": 0.1839080459770115
+        }
+      },
+      "sign_agreement": 2
+    },
+    "dollar": {
+      "combined_p": 0.5752123938030984,
+      "combined_statistic": 1.1158809849476556,
+      "scales": {
+        "12h": {
+          "M": 0.008054579893905789,
+          "c_predictive_power": -0.021464848211402987,
+          "drop_fraction": 0.0,
+          "n": 3222,
+          "p_value": 0.6511744127936032
+        },
+        "15m": {
+          "M": -0.0020126297589761984,
+          "c_predictive_power": -0.010605286182019993,
+          "drop_fraction": 0.0,
+          "n": 154750,
+          "p_value": 0.4222888555722139
+        },
+        "1h": {
+          "M": 0.00030081469650023335,
+          "c_predictive_power": -0.005563255384519745,
+          "drop_fraction": 0.0,
+          "n": 38686,
+          "p_value": 0.9485257371314343
+        },
+        "4h": {
+          "M": 0.014221716147555111,
+          "c_predictive_power": -0.0009486876111712991,
+          "drop_fraction": 0.0,
+          "n": 9670,
+          "p_value": 0.16041979010494753
+        }
+      },
+      "sign_agreement": 3
+    }
+  },
+  "discriminant": {
+    "calendar_significant": true,
+    "classification": "SPREAD_BOUNCE_ARTEFACT",
+    "dollar_significant": false,
+    "same_sign": false
+  },
+  "fidelity": {
+    "12h": {
+      "buckets": 3223,
+      "calendar_bars": 3223,
+      "converged": true,
+      "target_value": 71626905.76804376
+    },
+    "15m": {
+      "buckets": 154751,
+      "calendar_bars": 154751,
+      "converged": true,
+      "target_value": 528877.5870352874
+    },
+    "1h": {
+      "buckets": 38687,
+      "calendar_bars": 38687,
+      "converged": true,
+      "target_value": 4397782.1652277
+    },
+    "4h": {
+      "buckets": 9671,
+      "calendar_bars": 9671,
+      "converged": true,
+      "target_value": 22286576.61361448
+    }
+  },
+  "fingerprints": {
+    "ohlcv": "12b8ca59c15fc519"
+  },
+  "gates": {
+    "g1_significance": false,
+    "g2_sign_consistency": true,
+    "g3_discriminant_sign_match": true,
+    "g4_effect_size": true,
+    "g4_scales_passed": 2
+  },
+  "label": "doge-vwap-position-v1",
+  "sanity": {
+    "all_passed": true,
+    "corr_v_c_calendar_5m": {
+      "expected": 0.137,
+      "passed": true,
+      "tolerance": 0.02,
+      "value": 0.13738082317013617
+    },
+    "fingerprint_ok": true,
+    "spread_bounce_signature": {
+      "calendar_stronger_scales": 3,
+      "passed": true,
+      "required": 3
+    }
+  },
+  "verdict": "CLOSED",
+  "versions": {
+    "block": 12.0,
+    "draws": 2000,
+    "scales": {
+      "12h": 144,
+      "15m": 3,
+      "1h": 12,
+      "4h": 48
+    },
+    "seed": 0,
+    "significance_alpha": 0.05,
+    "tradeable_lower_bound": {
+      "12h": 0.0067,
+      "15m": 0.0433,
+      "1h": 0.0228,
+      "4h": 0.0114
+    }
+  },
+  "window": {
+    "end": "2025-06-01",
+    "start": "2021-01-01"
+  }
+}

@@ -116,3 +116,4 @@ temp/
 !reports/research/doge_dollar_clock_diagnose.json
 !reports/research/doge_dollar_clock_posthoc.json
 !reports/research/doge_dollar_clock_duration.json
+!reports/research/doge_vwap_position.json
