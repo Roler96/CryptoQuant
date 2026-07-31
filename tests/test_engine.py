@@ -79,6 +79,24 @@ def test_decision_on_a_bar_fills_at_the_next_bar_open():
     assert fill.price == 20.0, "filled at bar 1's open, not bar 0's close"
 
 
+def test_initial_intent_can_build_a_benchmark_position_at_the_first_open():
+    series = make_series(closes=[10, 12], opens=[10, 20])
+
+    result = run_backtest(
+        Scripted([1.0, 1.0]),
+        series,
+        SPOT,
+        1000.0,
+        costs=FREE,
+        initial_intent=Intent(target=1.0, reason="buy-and-hold"),
+    )
+
+    assert len(result.fills) == 1
+    assert result.fills[0].ts == DAY0
+    assert result.fills[0].price == 10.0
+    assert result.transactions[0].signal_time is None
+
+
 def test_a_strategy_never_sees_a_bar_before_it_closes():
     series = make_series(closes=[10, 11, 12, 13])
     strategy = Scripted([0.0, 0.0, 0.0, 0.0])
@@ -94,6 +112,25 @@ def test_warmup_bars_are_not_traded():
     assert strategy.seen == [2, 3, 4], "no decisions before the warmup completes"
     # First decision on bar 2 fills on bar 3.
     assert result.fills[0].ts == DAY0 + 3 * HOUR_MS
+
+
+def test_evaluation_start_primes_strategy_but_only_scores_and_trades_evaluation():
+    series = make_series(closes=[10, 10, 10, 10, 10])
+    strategy = Scripted([0.0, 0.0, 1.0, 1.0, 1.0])
+
+    result = run_backtest(
+        strategy,
+        series,
+        SPOT,
+        1000.0,
+        costs=FREE,
+        evaluation_start_ms=DAY0 + 3 * HOUR_MS,
+    )
+
+    assert result.timestamps == [DAY0 + 3 * HOUR_MS, DAY0 + 4 * HOUR_MS]
+    assert result.bars == 2
+    assert result.fills[0].ts == DAY0 + 3 * HOUR_MS
+    assert result.transactions[0].signal_time == DAY0 + 3 * HOUR_MS
 
 
 # ---- target differencing ----------------------------------------------
@@ -231,6 +268,40 @@ def test_slippage_and_fees_are_charged_on_both_sides():
     assert result.total_return < 0, "a flat market must lose exactly the costs"
 
 
+def test_transaction_ledger_captures_sizing_costs_and_account_transition():
+    series = make_series(closes=[10, 10], opens=[10, 10])
+    costs = CostModel(fee_bps=10.0, slippage_bps=5.0)
+
+    result = run_backtest(Scripted([1.0, 1.0]), series, SPOT, 1000.0, costs=costs)
+
+    record = result.transactions[0]
+    assert record.status == "filled"
+    assert record.signal_time == DAY0 + HOUR_MS
+    assert record.execution_time == DAY0 + HOUR_MS
+    assert record.requested_quantity > 0
+    assert record.filled_quantity == result.fills[0].quantity
+    assert record.reference_price == 10.0
+    assert record.execution_price == pytest.approx(10.005)
+    assert record.cash_after < record.cash_before
+    assert record.position_after > record.position_before
+    assert record.fee == result.fills[0].fee
+    assert record.slippage_cost > 0
+    assert record.account_change < 0
+
+
+def test_rejected_order_is_present_in_transaction_ledger():
+    series = make_series(closes=[10, 10], volumes=[100, 0])
+
+    result = run_backtest(Scripted([1.0, 1.0]), series, SPOT, 1000.0, costs=FREE)
+
+    record = result.transactions[0]
+    assert record.status == "rejected"
+    assert record.rejection_reason == "zero-volume bar: no trade was possible"
+    assert record.filled_quantity == 0.0
+    assert record.cash_after == record.cash_before
+    assert record.position_after == record.position_before
+
+
 # ---- funding -----------------------------------------------------------
 
 
@@ -245,6 +316,10 @@ def test_swap_funding_accrues_over_a_hold():
     assert len(result.funding_payments) == 3
     assert result.portfolio.funding_paid > 0
     assert result.total_return < 0, "funding must show up as drag on a flat market"
+    assert len(result.account_events) == len(result.funding_payments)
+    event = result.account_events[0]
+    assert event.event_type == "funding"
+    assert event.cash_after == pytest.approx(event.cash_before - event.amount)
 
 
 def test_funding_off_leaves_the_result_untouched():

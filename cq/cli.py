@@ -22,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     data_sub = data.add_subparsers(dest="data_command", required=True)
     _register_data_commands(data_sub)
 
+    backtest = subparsers.add_parser("backtest", help="run strategies on stored data")
+    backtest_sub = backtest.add_subparsers(dest="backtest_strategy", required=True)
+    _register_backtest_commands(backtest_sub)
+
     paper = subparsers.add_parser("paper", help="paper (demo) trading against OKX")
     paper_sub = paper.add_subparsers(dest="paper_command", required=True)
     _register_paper_commands(paper_sub)
@@ -31,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _register_data_commands(subparsers: argparse._SubParsersAction) -> None:
     from cq.data import commands
+
+    commands.register(subparsers)
+
+
+def _register_backtest_commands(subparsers: argparse._SubParsersAction) -> None:
+    from cq.backtest import commands
 
     commands.register(subparsers)
 
