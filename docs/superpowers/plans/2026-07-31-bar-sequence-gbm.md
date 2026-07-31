@@ -12,7 +12,7 @@
 
 - Every threshold, boundary, and formula below is copied verbatim from `docs/research/doge-5m/BAR_SEQUENCE_GBM_PROTOCOL_2026-07-31.md`. If a task's code disagrees with the protocol, the protocol wins — stop and flag it, do not silently pick one.
 - `EXPLORE_START = 2021-01-01T00:00:00Z`, `FORWARD_FREEZE = 2025-06-01T00:00:00Z` (ms epoch). The validate window `2025-06-01 → 2027-06-01` must never be read by any code this plan adds.
-- Frozen raw fingerprint (pre-filter): `3122d7bd0c97aeda`. Frozen degenerate-bar drop count: `520`. Frozen post-filter bar count: `463640`.
+- Frozen raw fingerprint (pre-filter): `85cc617af4d57689` (re-frozen 2026-07-31 after Task 3 found the store had gained 96 legitimate bars via a concurrent OHLCV backfill since the protocol doc's original freeze — see the protocol doc's §1 note and memory `ohlcv-concurrent-backfill-2026-07-23`; the original frozen fingerprint was `3122d7bd0c97aeda`). Frozen raw bar count: `464256`. Frozen degenerate-bar drop count: `520` (unchanged). Frozen post-filter bar count: `463736`.
 - G4 cost-wall floor: `0.0726`. Šidák per-test alpha: `1 - (1 - 0.05) ** (1/3)` (family size 3, for the three feature sets).
 - Lookback grid `N ∈ {10, 20, 40}`. Logistic `C ∈ {0.01, 0.1, 1.0}`. GBM `max_depth ∈ {2,3,4}`, `min_samples_leaf ∈ {500,1000}`, `learning_rate=0.05` fixed, `max_iter=500`, `n_iter_no_change=30`.
 - Follow existing repo conventions: flat `tests/test_*.py` (not nested by package), `Store(tmp_path / "test.db")` fixture pattern, `commands.register(subparsers)` CLI wiring per subsystem.
@@ -267,8 +267,8 @@ from cq.research.split import data_fingerprint, explore_window
 
 INST_ID = "DOGE-USDT"
 TIMEFRAME = "5m"
-EXPECTED_RAW_FINGERPRINT = "3122d7bd0c97aeda"
-EXPECTED_RAW_BAR_COUNT = 464_160
+EXPECTED_RAW_FINGERPRINT = "85cc617af4d57689"
+EXPECTED_RAW_BAR_COUNT = 464_256
 EXPECTED_DEGENERATE_DROP_COUNT = 520
 
 
@@ -323,7 +323,7 @@ with Store() as store:
     print('bars:', len(frame), 'dropped:', dropped)
 "
 ```
-Expected: `bars: 463640 dropped: 520` (matches the frozen protocol numbers exactly — if it
+Expected: `bars: 463736 dropped: 520` (matches the frozen protocol numbers exactly — if it
 doesn't, STOP and reconcile with the protocol document before continuing; do not adjust the
 constants to match a different result).
 
@@ -1611,7 +1611,7 @@ with Store() as store:
     print('bars:', len(frame), 'dropped:', dropped)
 "
 ```
-Expected: `bars: 463640 dropped: 520` — unchanged from Task 3 Step 5. If this now differs, the
+Expected: `bars: 463736 dropped: 520` — unchanged from Task 3 Step 5. If this now differs, the
 underlying `data/cq.db` changed between when this plan was written and now (e.g. a backfill
 ran); stop and re-freeze the protocol's numbers rather than proceeding on stale ones.
 
