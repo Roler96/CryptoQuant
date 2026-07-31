@@ -14,7 +14,6 @@ from cq.engine.funding import AssumedFunding, NoFunding
 from cq.engine.loop import run_backtest
 from cq.engine.portfolio import Portfolio
 from cq.engine.sim import SimBroker
-from cq.strategy.donchian import DonchianTrend
 
 DAY0 = 1_609_459_200_000
 SPOT = MarketSpec("DOGE-USDT", "spot")
@@ -496,10 +495,27 @@ def test_buying_without_the_cash_to_pay_for_it_raises():
 
 
 def test_a_reused_strategy_starts_each_run_flat():
-    # DonchianTrend remembers its target, and instances get reused across
+    # Real strategies remember their target, and instances get reused across
     # splits and parameter sweeps. Without a reset, run two opens holding run
     # one's position and prints an entry no breakout ever triggered.
-    strategy = DonchianTrend(entry_lookback=3, exit_lookback=2)
+    class Sticky:
+        """Goes long once and stays long — enough to carry state across runs."""
+
+        name = "sticky"
+        warmup_bars = 1
+
+        def __init__(self):
+            self._target = 0.0
+
+        def reset(self) -> None:
+            self._target = 0.0
+
+        def on_bar(self, ctx):
+            if self._target == 0.0 and float(ctx.close(1)[-1]) > 15.0:
+                self._target = 1.0
+            return Intent(target=self._target)
+
+    strategy = Sticky()
 
     breakout = make_series(closes=[10, 10, 10, 10, 20, 20], opens=[10, 10, 10, 10, 20, 20])
     first = run_backtest(strategy, breakout, SPOT, 1000.0, costs=FREE)

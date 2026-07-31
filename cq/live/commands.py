@@ -38,7 +38,6 @@ from cq.live.recovery import (
     reconcile_restart,
 )
 from cq.live.session import PaperEvent, run_paper
-from cq.strategy.doge_constant_mix import DogeConstantMix, DogeConstantMixConfig
 
 DEFAULT_INSTRUMENT = "DOGE-USDT"
 PAPER_LOG_DIR = Path("logs/paper")
@@ -72,21 +71,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     run.add_argument("--tf", default=BASE_TIMEFRAME, help="bar timeframe, e.g. 1m or 1h")
     run.add_argument(
-        "--strategy",
-        default="probe",
-        choices=("probe", "constant-mix"),
-        help="probe (plumbing) or constant-mix",
-    )
-    run.add_argument(
-        "--weight", type=float, default=0.02, help="target weight (probe default 0.02)"
+        "--weight", type=float, default=0.02, help="probe target weight"
     )
     run.add_argument("--period", type=int, default=1, help="probe flip cadence in bars")
-    run.add_argument(
-        "--band",
-        type=float,
-        default=0.10,
-        help="constant-mix no-trade band: weight drift before rebalancing",
-    )
     run.add_argument(
         "--sizing",
         choices=tuple(mode.value for mode in Sizing),
@@ -175,13 +162,10 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """Run a strategy against live closed bars, trading on OKX demo by default."""
+    """Run the heartbeat probe against live closed bars, trading on OKX demo by default."""
     inst, tf = args.inst, args.tf
     swap = is_swap(inst)
     sizing = Sizing(args.sizing)
-    if args.strategy == "constant-mix" and sizing is not Sizing.REBALANCE:
-        print("constant-mix requires --sizing rebalance")
-        return 1
     if not swap and (args.leverage != 1.0 or args.margin_mode != "cross"):
         print("--leverage and --margin-mode only apply to swap instruments")
         return 1
@@ -205,15 +189,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     except (TradeError, ValueError) as exc:
         print(f"refusing unsupported paper market/account configuration: {exc}")
         return 1
-    strategy: Strategy
-    if args.strategy == "constant-mix":
-        # The live path re-sizes every bar, so it is REBALANCE by construction:
-        # the band is the broker's dust fraction, exactly as in the backtest.
-        strategy = DogeConstantMix(DogeConstantMixConfig(weight=args.weight, band=args.band))
-        dust = args.band
-    else:
-        strategy = HeartbeatProbe(weight=args.weight, period=args.period)
-        dust = DEFAULT_DUST_FRACTION
+    strategy: Strategy = HeartbeatProbe(weight=args.weight, period=args.period)
+    dust = DEFAULT_DUST_FRACTION
     broker = LiveBroker(
         client=trade,
         spec=spec,

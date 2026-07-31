@@ -3,8 +3,8 @@
 `HeartbeatProbe` holds no market opinion. It flips a small target on and off on
 a fixed cadence so a paper session produces a steady stream of round trips —
 the point is to prove that feed → decision → order → reconcile works, before any
-vetted strategy exists to run. It is kept out of `cq.strategy` on purpose, so it
-can never be mistaken for a research candidate.
+vetted strategy exists to run. It lives here rather than alongside real
+strategies on purpose, so it can never be mistaken for a research candidate.
 """
 
 from __future__ import annotations
