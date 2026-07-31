@@ -158,4 +158,4 @@ def test_render_metrics_table_has_six_data_columns_per_row(tmp_path, capsys):
     )
     assert "Sharpe ratio" in table
     assert "Historical strategy" in table
-    assert "Full B&amp;H" in table or "Full B&H" in table
+    assert "B&amp;H" in table

@@ -9,7 +9,7 @@ from html import escape as _escape
 from pathlib import Path
 from typing import Any
 
-from cq.backtest.report import _integer, _money, _number, _percent, _price, utc_iso
+from cq.backtest.report import _integer, _money, _number, _percent
 
 _REQUIRED_FILES = ("summary.json", "trades.csv", "account_events.csv", "equity.csv")
 
@@ -202,11 +202,21 @@ def _segment_account_events(
 def _render_header(bundle: RunBundle) -> str:
     config = bundle.summary["config"]
     split = bundle.summary["split"]
+    strategy = _escape(config['strategy'])
+    inst_id = _escape(config['inst_id'])
+    market_type = _escape(config['market_type'])
+    timeframe = _escape(config['timeframe'])
+    data_start = _escape(config['data_start'])
+    data_end = _escape(config['data_end'])
+    boundary_time = _escape(split['boundary_time'])
+    run_id = _escape(bundle.summary['run_id'])
+    costs = _escape(config['costs'])
+    funding = _escape(config['funding'])
     return f"""<header>
-<h1>{_escape(config['strategy'])}</h1>
-<p>{_escape(config['inst_id'])} ({_escape(config['market_type'])}) | {_escape(config['timeframe'])}</p>
-<p>{_escape(config['data_start'])} &rarr; {_escape(config['data_end'])} | split {split['ratio']:.4f} at {_escape(split['boundary_time'])}</p>
-<p>run: {_escape(bundle.summary['run_id'])} | costs: {_escape(config['costs'])} | funding: {_escape(config['funding'])}</p>
+<h1>{strategy}</h1>
+<p>{inst_id} ({market_type}) | {timeframe}</p>
+<p>{data_start} &rarr; {data_end} | split {split['ratio']:.4f} at {boundary_time}</p>
+<p>run: {run_id} | costs: {costs} | funding: {funding}</p>
 </header>
 """
 
@@ -218,8 +228,9 @@ def _metrics_for(segments: dict[str, Any], segment: str, benchmark: bool) -> dic
 
 def _render_metrics_table(bundle: RunBundle) -> str:
     segments = bundle.summary["segments"]
+    labels = ("Metric", *(label for _, _, label in _METRIC_COLUMNS))
     header_cells = "".join(
-        f"<th>{_escape(label)}</th>" for label in ("Metric", *(label for _, _, label in _METRIC_COLUMNS))
+        f"<th>{_escape(label)}</th>" for label in labels
     )
     body_rows = []
     for label, key, formatter in _METRIC_ROWS:
