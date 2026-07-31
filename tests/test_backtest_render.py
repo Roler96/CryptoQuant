@@ -227,3 +227,27 @@ def test_write_report_writes_and_overwrites_report_html(tmp_path, capsys):
     second_path = write_report(run_dir)
     assert second_path == first_path
     assert second_path.stat().st_size == first_size
+
+
+def test_cli_render_writes_report_html(tmp_path, capsys):
+    run_dir = _build_run_dir(tmp_path, capsys)
+
+    exit_code = main(["backtest", "render", str(run_dir)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert str(run_dir / "report.html") in output
+    assert (run_dir / "report.html").exists()
+
+
+def test_cli_render_reports_a_missing_equity_csv_without_a_traceback(tmp_path, capsys):
+    run_dir = _build_run_dir(tmp_path, capsys)
+    (run_dir / "equity.csv").unlink()
+
+    exit_code = main(["backtest", "render", str(run_dir)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "equity.csv" in output
+    assert "re-run the backtest" in output
+    assert "Traceback" not in output

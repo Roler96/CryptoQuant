@@ -10,6 +10,7 @@ from typing import cast
 
 from cq.backtest.benchmark import BuyAndHold
 from cq.backtest.registry import REGISTRY
+from cq.backtest.render import RunBundleError, write_report
 from cq.backtest.report import (
     SegmentResult,
     build_payload,
@@ -45,12 +46,20 @@ FUNDING_CHOICES = ("off", "actual", "assumed")
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
-    """Attach one ``cq backtest`` subcommand per registered strategy."""
+    """Attach one ``cq backtest`` subcommand per registered strategy, plus ``render``."""
     for name, entry in REGISTRY.items():
         parser = subparsers.add_parser(name, help=f"run the {name} strategy")
         _add_common_arguments(parser)
         entry.add_arguments(parser)
         parser.set_defaults(handler=cmd_run, strategy_name=name)
+
+    render_parser = subparsers.add_parser(
+        "render", help="render an HTML report for an existing run directory"
+    )
+    render_parser.add_argument(
+        "run_dir", help="a directory previously written by `cq backtest <strategy>`"
+    )
+    render_parser.set_defaults(handler=cmd_render)
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -319,6 +328,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     else:
         print(render_text(payload, show_trades=args.show_trades))
+    return 0
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    """Render an HTML report for a run directory produced by a prior backtest."""
+    try:
+        report_path = write_report(Path(args.run_dir))
+    except RunBundleError as exc:
+        print(exc)
+        return 1
+    print(f"Report written to {report_path}")
     return 0
 
 
