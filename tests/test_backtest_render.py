@@ -162,6 +162,7 @@ def test_render_metrics_table_has_six_data_columns_per_row(tmp_path, capsys):
         # header row + one row per metric
         [None for _ in range(11)]
     )
+    assert table.count("<th>") == 7  # "Metric" header + 6 data columns
     assert "Sharpe ratio" in table
     assert "Historical strategy" in table
     assert "B&amp;H" in table

@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import tempfile
 from dataclasses import dataclass
 from html import escape as _escape
 from pathlib import Path
 from typing import Any
 
-from cq.backtest.report import _integer, _money, _number, _percent, _price, utc_iso
+from cq.backtest.report import (
+    _atomic_write,
+    _integer,
+    _money,
+    _number,
+    _percent,
+    _price,
+    utc_iso,
+)
 
 _REQUIRED_FILES = ("summary.json", "trades.csv", "account_events.csv", "equity.csv")
 _VENDOR_DIR = Path(__file__).parent / "vendor" / "uplot-1.6.31"
 
 
 class RunBundleError(Exception):
-    """A run directory is missing a file `render()` needs, or its files disagree."""
+    """A run directory is missing a file `write_report`/`render_html` needs, or files disagree."""
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,8 @@ class SegmentSeries:
 
 def load_bundle(run_dir: Path) -> RunBundle:
     """Read a run directory's four files; refuse a partial or pre-equity.csv bundle."""
+    if not run_dir.is_dir():
+        raise RunBundleError(f"{run_dir} is not a directory")
     missing = [name for name in _REQUIRED_FILES if not (run_dir / name).exists()]
     if missing:
         hint = (
@@ -83,7 +91,12 @@ def load_bundle(run_dir: Path) -> RunBundle:
             else ""
         )
         raise RunBundleError(f"{run_dir} is missing {', '.join(missing)}.{hint}")
-    summary = json.loads((run_dir / "summary.json").read_text())
+    try:
+        summary = json.loads((run_dir / "summary.json").read_text())
+    except json.JSONDecodeError as exc:
+        raise RunBundleError(
+            f"{run_dir / 'summary.json'} is not valid JSON: {exc}"
+        ) from exc
     return RunBundle(
         run_dir=run_dir,
         summary=summary,
@@ -440,14 +453,5 @@ def write_report(run_dir: Path) -> Path:
     series = build_chart_series(bundle)
     html = render_html(bundle, series)
     report_path = run_dir / "report.html"
-    _write_text_atomic(report_path, html)
+    _atomic_write(report_path, html)
     return report_path
-
-
-def _write_text_atomic(path: Path, text: str) -> None:
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False
-    ) as handle:
-        handle.write(text)
-        temporary = Path(handle.name)
-    os.replace(temporary, path)

@@ -531,8 +531,12 @@ def _atomic_write(path: Path, text: str) -> None:
         dir=path.parent,
         delete=False,
     ) as handle:
-        handle.write(text)
         temporary = Path(handle.name)
+        try:
+            handle.write(text)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
     os.replace(temporary, path)
 
 
