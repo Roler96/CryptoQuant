@@ -381,6 +381,7 @@ def sync_ohlcv_concurrent(
     timeframe: str = BASE_TIMEFRAME,
     concurrency: int = 8,
     max_pages: int = 10_000,
+    on_progress: Callable[[int, int, int], None] | None = None,
 ) -> tuple[list[SyncResult], dict[str, str]]:
     """Backfill several instruments at once, fetching in parallel.
 
@@ -388,6 +389,12 @@ def sync_ohlcv_concurrent(
     only from this thread, so its single-connection contract holds. Workers
     fetch and buffer a window, and this thread upserts each returned buffer as
     the window lands — the network is the bottleneck, so a lone writer keeps up.
+
+    `on_progress`, if given, is called on this thread after each window lands
+    (success or failure) with (windows done, windows total, cumulative new
+    rows written) — windows rather than instruments, because one instrument's
+    history can be dozens of windows and a caller watching only instrument
+    counts would see nothing move for most of a backfill.
 
     Returns the per-instrument outcomes and a map of instrument to error for any
     whose windows failed. A failed instrument is left un-finished, so a later
@@ -436,6 +443,9 @@ def sync_ohlcv_concurrent(
         finally:
             clients.put(client)
 
+    total_tasks = len(tasks)
+    tasks_done = 0
+    total_new = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(run_window, task): task for task in tasks}
         for future in as_completed(futures):
@@ -447,10 +457,14 @@ def sync_ohlcv_concurrent(
             except Exception as exc:  # noqa: BLE001 - reported per instrument
                 errors[inst_id] = f"{type(exc).__name__}: {exc}"
                 state.complete = False
+                tasks_done += 1
+                if on_progress is not None:
+                    on_progress(tasks_done, total_tasks, total_new)
                 continue
             written = store.upsert_ohlcv(buffer)  # main-thread write
             state.seen += written.seen
             state.new += written.new
+            total_new += written.new
             state.pages += summary.pages
             state.skipped += summary.skipped_unclosed
             if summary.oldest_ts is not None:
@@ -459,6 +473,9 @@ def sync_ohlcv_concurrent(
                 state.newest = _merge_max(state.newest, summary.newest_ts)
             if not summary.complete:
                 state.complete = False
+            tasks_done += 1
+            if on_progress is not None:
+                on_progress(tasks_done, total_tasks, total_new)
 
     results: list[SyncResult] = []
     for inst_id, state in progress.items():

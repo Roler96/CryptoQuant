@@ -392,6 +392,70 @@ def test_concurrent_backfill_isolates_a_failing_instrument(store):
     assert incremental_start(store, "BROKEN", "1h", default_start_ms=START) == START
 
 
+def test_concurrent_backfill_reports_progress_per_window(store):
+    # Progress is windows-done/total, not instruments-done/total, so a caller
+    # watching it sees movement throughout a single big instrument's backfill.
+    rows = [candle(START + i * HOUR_MS) for i in range(MULTI_WINDOW_BARS)]
+    updates: list[tuple[int, int, int]] = []
+
+    results, errors = sync_ohlcv_concurrent(
+        lambda: FakeCandles(rows),
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START)],
+        now_ms=_now_after(rows),
+        concurrency=6,
+        on_progress=lambda done, total, new_rows: updates.append((done, total, new_rows)),
+    )
+
+    assert errors == {}
+    assert updates  # at least one window landed
+    dones = [done for done, _total, _new in updates]
+    totals = {total for _done, total, _new in updates}
+    # Every update agrees on the total window count, and `done` counts up by
+    # one to that total with no update skipped or repeated.
+    assert len(totals) == 1
+    assert dones == list(range(1, len(updates) + 1))
+    (total,) = totals
+    assert dones[-1] == total
+    # The final cumulative tally matches what actually landed in the store.
+    (result,) = results
+    assert updates[-1][2] == result.result.new == MULTI_WINDOW_BARS
+
+
+def test_concurrent_backfill_reports_progress_through_a_failing_window(store):
+    # A window that raises must still advance the counter — otherwise a caller
+    # rendering a progress bar would stall forever on a partial failure.
+    good = [candle(START + i * HOUR_MS) for i in range(150)]
+
+    def factory():
+        class Selective(FakeCandles):
+            def __init__(self):
+                super().__init__([])
+
+            def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
+                if inst_id == "BROKEN":
+                    raise RuntimeError("connection reset")
+                self.rows = sorted(good, key=lambda r: int(r[0]), reverse=True)
+                return super().history_candles(inst_id, bar, before_ts, limit)
+
+        return Selective()
+
+    updates: list[tuple[int, int, int]] = []
+    _, errors = sync_ohlcv_concurrent(
+        factory,
+        store,
+        [SyncJob("DOGE-USDT-SWAP", START), SyncJob("BROKEN", START)],
+        now_ms=_now_after(good),
+        concurrency=4,
+        on_progress=lambda done, total, new_rows: updates.append((done, total, new_rows)),
+    )
+
+    assert "BROKEN" in errors
+    (total,) = {total for _done, total, _new in updates}
+    assert total == 2
+    assert updates[-1][0] == total
+
+
 def test_concurrent_backfill_reaches_the_requested_start_across_windows(store):
     # A window that stops short would leave a hole between two others. Pin that
     # the union of windows spans [start, newest] with no gaps.

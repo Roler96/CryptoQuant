@@ -116,6 +116,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     now_ms = client_factory().milliseconds()
 
+    progress_shown = False
+
+    def report_progress(done: int, total: int, new_rows: int) -> None:
+        nonlocal progress_shown
+        progress_shown = True
+        pct = 100 * done / total
+        print(
+            f"\rsyncing {done:>5}/{total:<5} windows ({pct:5.1f}%)  {new_rows} new rows",
+            end="",
+            flush=True,
+        )
+
     with Store(args.db) as store:
         jobs = []
         for inst_id in instruments:
@@ -133,7 +145,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
             end_ms=end_ms,
             timeframe=BASE_TIMEFRAME,
             concurrency=concurrency,
+            on_progress=report_progress,
         )
+
+    if progress_shown:
+        print()
 
     by_inst = {result.inst_id: result for result in results}
     failed = bool(errors)
