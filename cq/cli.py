@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sub = paper.add_subparsers(dest="paper_command", required=True)
     _register_paper_commands(paper_sub)
 
+    research = subparsers.add_parser("research", help="run pre-registered research studies")
+    research_sub = research.add_subparsers(dest="research_study", required=True)
+    _register_research_commands(research_sub)
+
     return parser
 
 
@@ -47,6 +51,12 @@ def _register_backtest_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _register_paper_commands(subparsers: argparse._SubParsersAction) -> None:
     from cq.live import commands
+
+    commands.register(subparsers)
+
+
+def _register_research_commands(subparsers: argparse._SubParsersAction) -> None:
+    from cq.research import commands
 
     commands.register(subparsers)
 

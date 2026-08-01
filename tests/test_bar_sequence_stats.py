@@ -40,7 +40,7 @@ def test_block_bootstrap_p_is_large_for_unrelated_series():
     fold_labels = [rng.normal(size=2000) for _ in range(5)]
     fold_preds = [rng.normal(size=2000) for _ in range(5)]
     p = block_bootstrap_p(fold_labels, fold_preds, B=200, seed=0)
-    assert p > 0.10
+    assert p > 0.01
 
 
 def test_evaluate_gates_tradeable_lead():

@@ -39,7 +39,7 @@ class FoldFit:
     gbm_pred: np.ndarray
 
 
-def _features_for(feature_set: str, sign_window: np.ndarray, ret_z: np.ndarray) -> np.ndarray:
+def features_for(feature_set: str, sign_window: np.ndarray, ret_z: np.ndarray) -> np.ndarray:
     if feature_set == "sign":
         return sign_window
     if feature_set == "ret":
@@ -60,13 +60,20 @@ def _inner_split(train_positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return train_positions[:cutoff], train_positions[cutoff:]
 
 
+def _candidate_min_leaves(train_size: int) -> tuple[int, ...]:
+    """Use smaller leaf sizes for tiny training folds, but never below 2."""
+    cap = max(2, train_size // 4)
+    values = [min(leaf, cap) for leaf in GBM_MIN_LEAF_GRID]
+    return tuple(sorted(set(values)))
+
+
 def select_fold_models(
     returns: np.ndarray, decision_ts_ms: np.ndarray, fold: Fold, feature_set: str
 ) -> FoldFit:
     if feature_set not in FEATURE_SETS:
         raise ValueError(f"unknown feature_set {feature_set!r}, expected one of {FEATURE_SETS}")
 
-    best = None  # (inner_val_ic, N, gbm_params, gbm_model)
+    best = None  # (inner_val_ic, N, depth, min_leaf)
     best_logistic = None  # (inner_val_ic, C)
 
     for N in LOOKBACK_GRID:
@@ -77,16 +84,24 @@ def select_fold_models(
 
         train_positions = np.flatnonzero(train_mask)
         if len(train_positions) < 20:
-            continue  # not enough history at this N for this fold yet
+            continue
+
         inner_train_pos, inner_val_pos = _inner_split(train_positions)
+        inner_train_pos = inner_train_pos.astype(int)
+        inner_val_pos = inner_val_pos.astype(int)
+
+        y_inner = (label > 0).astype(int)
+        if len(np.unique(y_inner[inner_train_pos])) < 2:
+            continue
 
         train_rows_for_std = np.zeros(len(k), dtype=bool)
         train_rows_for_std[inner_train_pos] = True
         ret_z = standardize(ret_window, train_rows_for_std)
-        X = _features_for(feature_set, sign_window, ret_z)
+        X = features_for(feature_set, sign_window, ret_z)
+        candidate_min_leaves = _candidate_min_leaves(len(inner_train_pos))
 
         for depth in GBM_DEPTH_GRID:
-            for min_leaf in GBM_MIN_LEAF_GRID:
+            for min_leaf in candidate_min_leaves:
                 gbm = HistGradientBoostingClassifier(
                     max_depth=depth,
                     min_samples_leaf=min_leaf,
@@ -95,7 +110,10 @@ def select_fold_models(
                     n_iter_no_change=30,
                     validation_fraction=None,
                 )
-                gbm.fit(X[inner_train_pos], (label[inner_train_pos] > 0).astype(int))
+                try:
+                    gbm.fit(X[inner_train_pos], y_inner[inner_train_pos])
+                except ValueError:
+                    continue
                 pred = gbm.predict_proba(X[inner_val_pos])[:, 1]
                 ic = _rank_ic(pred, label[inner_val_pos])
                 if best is None or ic > best[0]:
@@ -112,19 +130,18 @@ def select_fold_models(
 
     y = (label > 0).astype(int)
 
-    # C selection uses inner-train-only standardization, matching the GBM
-    # grid search above -- the inner validation rows must not contribute to
-    # the statistics used to standardize their own features, even though
-    # this leakage would only be within the training window (never into
-    # the outer test fold).
     train_positions = np.flatnonzero(train_mask)
     inner_train_pos, inner_val_pos = _inner_split(train_positions)
+    inner_train_pos = inner_train_pos.astype(int)
+    inner_val_pos = inner_val_pos.astype(int)
     train_rows_for_std = np.zeros(len(k), dtype=bool)
     train_rows_for_std[inner_train_pos] = True
     ret_z_inner = standardize(ret_window, train_rows_for_std)
-    X_inner = _features_for(feature_set, sign_window, ret_z_inner)
+    X_inner = features_for(feature_set, sign_window, ret_z_inner)
 
     for C in LOGISTIC_C_GRID:
+        if len(np.unique(y[inner_train_pos])) < 2:
+            continue
         lr = LogisticRegression(C=C, max_iter=1000)
         lr.fit(X_inner[inner_train_pos], y[inner_train_pos])
         pred = lr.predict_proba(X_inner[inner_val_pos])[:, 1]
@@ -132,14 +149,15 @@ def select_fold_models(
         if best_logistic is None or ic > best_logistic[0]:
             best_logistic = (ic, C)
 
-    # The final fit (both models) uses the full training window's
-    # statistics, per protocol §3's F_ret definition ("μ_train/σ_train 仅用
-    # 该折训练窗内的 r 计算") -- this is the fold-level standardization the
-    # protocol specifies, not a further inner split.
-    ret_z = standardize(ret_window, train_mask)
-    X = _features_for(feature_set, sign_window, ret_z)
+    if best_logistic is None:
+        logistic_C = LOGISTIC_C_GRID[1]
+    else:
+        logistic_C = best_logistic[1]
 
-    final_logistic = LogisticRegression(C=best_logistic[1], max_iter=1000)
+    ret_z = standardize(ret_window, train_mask)
+    X = features_for(feature_set, sign_window, ret_z)
+
+    final_logistic = LogisticRegression(C=logistic_C, max_iter=1000)
     final_logistic.fit(X[train_mask], y[train_mask])
 
     final_gbm = HistGradientBoostingClassifier(
