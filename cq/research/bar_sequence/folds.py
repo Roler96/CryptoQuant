@@ -20,6 +20,26 @@ class Fold:
     test_start_ms: int
     test_end_ms: int
 
+    def __post_init__(self) -> None:
+        """Reject any fold whose windows are not a genuine forward split.
+
+        `fold_masks` selects train and test purely by timestamp range, so a
+        fold with `test_start_ms < train_end_ms` silently marks the same
+        decision points as both train and test -- and
+        `assert_no_embargo_violation`'s predicate is structurally empty in
+        exactly that case, so it cannot catch it. Enforcing the ordering at
+        construction time turns that defect into a loud error everywhere,
+        including in test fixtures.
+        """
+        if not (
+            self.train_start_ms < self.train_end_ms <= self.test_start_ms < self.test_end_ms
+        ):
+            raise ValueError(
+                "fold windows must satisfy train_start_ms < train_end_ms <= "
+                f"test_start_ms < test_end_ms, got train=[{self.train_start_ms}, "
+                f"{self.train_end_ms}) test=[{self.test_start_ms}, {self.test_end_ms})"
+            )
+
 
 def _ms(year: int, month: int, day: int) -> int:
     return int(datetime(year, month, day, tzinfo=UTC).timestamp() * 1000)
