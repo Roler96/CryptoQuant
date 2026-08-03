@@ -104,6 +104,7 @@ orders.json
 tmp/
 temp/
 *.tmp
+.worktrees/
 
 .opencode/*
 .sisyphus*
