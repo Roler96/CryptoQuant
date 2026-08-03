@@ -60,13 +60,6 @@ def _inner_split(train_positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return train_positions[:cutoff], train_positions[cutoff:]
 
 
-def _candidate_min_leaves(train_size: int) -> tuple[int, ...]:
-    """Use smaller leaf sizes for tiny training folds, but never below 2."""
-    cap = max(2, train_size // 4)
-    values = [min(leaf, cap) for leaf in GBM_MIN_LEAF_GRID]
-    return tuple(sorted(set(values)))
-
-
 def select_fold_models(
     returns: np.ndarray, decision_ts_ms: np.ndarray, fold: Fold, feature_set: str
 ) -> FoldFit:
@@ -98,10 +91,13 @@ def select_fold_models(
         train_rows_for_std[inner_train_pos] = True
         ret_z = standardize(ret_window, train_rows_for_std)
         X = features_for(feature_set, sign_window, ret_z)
-        candidate_min_leaves = _candidate_min_leaves(len(inner_train_pos))
 
+        # The min_samples_leaf grid is protocol-frozen: never substitute a
+        # smaller grid for small folds. The only precondition a fit needs is
+        # the two-class check above; anything else that fails here is a real
+        # defect and must surface rather than be skipped.
         for depth in GBM_DEPTH_GRID:
-            for min_leaf in candidate_min_leaves:
+            for min_leaf in GBM_MIN_LEAF_GRID:
                 gbm = HistGradientBoostingClassifier(
                     max_depth=depth,
                     min_samples_leaf=min_leaf,
@@ -110,10 +106,7 @@ def select_fold_models(
                     n_iter_no_change=30,
                     validation_fraction=None,  # type: ignore[arg-type]
                 )
-                try:
-                    gbm.fit(X[inner_train_pos], y_inner[inner_train_pos])
-                except ValueError:
-                    continue
+                gbm.fit(X[inner_train_pos], y_inner[inner_train_pos])
                 pred = gbm.predict_proba(X[inner_val_pos])[:, 1]
                 ic = _rank_ic(pred, label[inner_val_pos])
                 if best is None or ic > best[0]:
@@ -139,9 +132,18 @@ def select_fold_models(
     ret_z_inner = standardize(ret_window, train_rows_for_std)
     X_inner = features_for(feature_set, sign_window, ret_z_inner)
 
+    # Loop-invariant: inner_train_pos does not change across the C grid, so this
+    # is an early exit from the whole C-search, not a per-iteration skip. It is
+    # unreachable in practice -- the chosen N already passed the identical check
+    # in the selection loop above -- but a pre-registered study must fail loudly
+    # rather than silently fall back to an unrecorded C.
+    if len(np.unique(y[inner_train_pos])) < 2:
+        raise ValueError(
+            "the chosen lookback's inner-training labels are single-class, "
+            "so no logistic C can be selected for this fold"
+        )
+
     for C in LOGISTIC_C_GRID:
-        if len(np.unique(y[inner_train_pos])) < 2:
-            continue
         lr = LogisticRegression(C=C, max_iter=1000)
         lr.fit(X_inner[inner_train_pos], y[inner_train_pos])
         pred = lr.predict_proba(X_inner[inner_val_pos])[:, 1]
@@ -149,7 +151,9 @@ def select_fold_models(
         if best_logistic is None or ic > best_logistic[0]:
             best_logistic = (ic, C)
 
-    logistic_C = LOGISTIC_C_GRID[1] if best_logistic is None else best_logistic[1]
+    if best_logistic is None:
+        raise ValueError("no logistic C in the frozen grid produced a usable fit for this fold")
+    logistic_C = best_logistic[1]
 
     ret_z = standardize(ret_window, train_mask)
     X = features_for(feature_set, sign_window, ret_z)
