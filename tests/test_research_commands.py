@@ -16,6 +16,13 @@ def test_research_bar_sequence_gbm_run_is_registered():
     assert args.handler is not None
 
 
+def test_research_crdr_run_is_registered():
+    parser = build_parser()
+    args = parser.parse_args(["research", "crdr", "run", "--out", "does-not-matter.json"])
+
+    assert args.handler is not None
+
+
 def test_run_writes_the_report_json(tmp_path, monkeypatch):
     from cq.research import commands
 
@@ -42,3 +49,34 @@ def test_run_writes_the_report_json(tmp_path, monkeypatch):
     assert exit_code == 0
     written = json.loads(out_path.read_text())
     assert written["study_tag"] == "doge-bar-sequence-gbm-v1"
+
+
+def test_crdr_run_writes_the_report_json(tmp_path, monkeypatch):
+    from cq.research import commands
+
+    monkeypatch.setattr(
+        commands,
+        "run_crdr_study",
+        lambda store: {
+            "study_tag": "crypto-cross-sectional-residual-dispersion-reversion-v1",
+            "gates": {"verdict": "CLOSED"},
+        },
+    )
+    out_path = tmp_path / "crdr.json"
+
+    args = build_parser().parse_args(
+        [
+            "research",
+            "crdr",
+            "run",
+            "--out",
+            str(out_path),
+            "--db",
+            str(tmp_path / "cq.db"),
+        ]
+    )
+    exit_code = args.handler(args)
+
+    assert exit_code == 0
+    written = json.loads(out_path.read_text())
+    assert written["study_tag"] == "crypto-cross-sectional-residual-dispersion-reversion-v1"
