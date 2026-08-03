@@ -1109,22 +1109,33 @@ def evaluate_gates(
     p_value: float,
     cost_floor: float = COST_WALL_FLOOR,
 ) -> Verdict:
-    n_folds = len(gbm_fold_ics)
     g1 = p_value <= SIDAK_ALPHA
     sign = np.sign(gbm_fold_ics)
     dominant_sign = 1 if np.sum(sign > 0) >= np.sum(sign < 0) else -1
     g2 = np.mean(sign == dominant_sign) >= SIGN_CONSISTENCY_FRACTION
+    # G3 is "GBM 不劣于 linear" (not worse), so an exact per-fold tie is a pass: >=, not >.
     g3 = np.mean(np.array(gbm_fold_ics) >= np.array(linear_fold_ics)) >= SIGN_CONSISTENCY_FRACTION
     g4 = np.median(np.abs(gbm_fold_ics)) >= cost_floor
 
+    # G4 is checked BEFORE G3: the protocol §6 table leaves the "G3 fails AND G4 fails"
+    # cell undefined, and testing G3 first would return LINEAR-ONLY there, contradicting
+    # that row's own gloss (信号真实且过成本墙). Failing the cost wall is decisive.
     if not (g1 and g2):
         return Verdict.CLOSED
-    if not g3:
-        return Verdict.LINEAR_ONLY
     if not g4:
         return Verdict.REAL_BUT_SUBTHRESHOLD
+    if not g3:
+        return Verdict.LINEAR_ONLY
     return Verdict.TRADEABLE_LEAD
 ```
+
+> **Corrected 2026-08-03** (final whole-branch review, human-partner ruling): the shipped
+> code had drifted to a strict `>` in G3 and checked G3 before G4. Both are fixed above and
+> in `cq/research/bar_sequence/stats.py`; the reordering closes the undefined
+> G3-fail + G4-fail cell the original decision table left ambiguous, which now resolves to
+> REAL-BUT-SUBTHRESHOLD. `tests/test_bar_sequence_stats.py` gains
+> `test_evaluate_gates_g3_passes_on_an_exact_tie` and
+> `test_evaluate_gates_cost_wall_decides_when_g3_also_fails` to pin both halves.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1213,6 +1224,24 @@ the fingerprint/G4 constants elsewhere in this plan). If the assertions fail on 
   synthetic series' shape (still monotonic) until the assertions hold at a threshold `>= 0.8` for
   both models.
 - Report the actual achieved `gbm_ic`/`logistic_ic` values and whatever adjustment was needed.
+
+> **Outcome / correction, 2026-08-03** (final whole-branch review). The first shipped version
+> of this test used `Fold(0, 100 * 300_000 + 86_400_000, 55_000_000, 70_000_000)`, whose "test"
+> window (55M–70M) falls *inside* its train range (0–116.4M): `fold_masks` marked the same 50
+> decision points as both train and test, so the assertion was measuring in-sample fit.
+> `assert_no_embargo_violation` cannot catch that — its predicate
+> `(ts >= train_end) & (ts < test_end)` is structurally empty whenever `train_end > test_end`.
+> Fixed by (a) a `Fold.__post_init__` invariant requiring
+> `train_start_ms < train_end_ms <= test_start_ms < test_end_ms`, and (b) rebuilding the fixture
+> as `n = 4000` bars with every 5th block of 100 consecutive bars held out into a strictly later
+> decision-time window, plus a companion test asserting the train/test decision-timestamp sets
+> are disjoint. A *plain forward cut* cannot work here and is not a code defect: on a strictly
+> monotonic series every test feature value exceeds the training maximum, and
+> `HistGradientBoostingClassifier` assigns all such rows to the top bin — one constant
+> probability, test rank-IC exactly 0 — so a forward cut would measure extrapolation rather than
+> §7.3's "学到解析已知的方向". Achieved with the held-out-block fixture: **`gbm_ic = 0.9623`,
+> `logistic_ic = 1.0000`** (chosen `N = 10`, 799 held-out test rows), both comfortably above the
+> unweakened `0.8` threshold.
 
 - [ ] **Step 2: Run the test**
 

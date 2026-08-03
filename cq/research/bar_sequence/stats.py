@@ -81,13 +81,20 @@ def evaluate_gates(
     sign = np.sign(gbm_fold_ics)
     dominant_sign = 1 if np.sum(sign > 0) >= np.sum(sign < 0) else -1
     g2 = np.mean(sign == dominant_sign) >= SIGN_CONSISTENCY_FRACTION
-    g3 = np.mean(np.array(gbm_fold_ics) > np.array(linear_fold_ics)) >= SIGN_CONSISTENCY_FRACTION
+    # G3 is "GBM is not WORSE than the linear baseline" (protocol §6: 不劣于),
+    # so an exact per-fold tie counts as a pass -- hence >=, not >.
+    g3 = np.mean(np.array(gbm_fold_ics) >= np.array(linear_fold_ics)) >= SIGN_CONSISTENCY_FRACTION
     g4 = np.median(np.abs(gbm_fold_ics)) >= cost_floor
 
+    # G4 is checked BEFORE G3. The protocol's §6 decision table leaves the
+    # "G3 fails AND G4 fails" cell undefined; checking G3 first would return
+    # LINEAR-ONLY there, contradicting that row's own gloss (信号真实且过成本墙 --
+    # signal real AND clears the cost wall). Failing the cost wall is decisive
+    # regardless of the linear-vs-GBM comparison, so it is tested first.
     if not (g1 and g2):
         return Verdict.CLOSED
-    if not g3:
-        return Verdict.LINEAR_ONLY
     if not g4:
         return Verdict.REAL_BUT_SUBTHRESHOLD
+    if not g3:
+        return Verdict.LINEAR_ONLY
     return Verdict.TRADEABLE_LEAD

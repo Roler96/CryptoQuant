@@ -36,11 +36,17 @@ def test_block_bootstrap_p_is_small_for_a_strong_real_relationship():
 
 
 def test_block_bootstrap_p_is_large_for_unrelated_series():
-    rng = np.random.default_rng(1)
+    # Seed 3, not the default 0/1: with seed=1 the draw happens to land at
+    # p~=0.0149, *below* this study's own G1 threshold (SIDAK_ALPHA~=0.0169),
+    # so it pinned a false-positive-adjacent edge case rather than
+    # demonstrating that the null recognizes unrelated data. The
+    # implementation is well calibrated across seeds (mean p~=0.49); seed 3
+    # is simply a draw comfortably inside the bulk of that distribution.
+    rng = np.random.default_rng(3)
     fold_labels = [rng.normal(size=2000) for _ in range(5)]
     fold_preds = [rng.normal(size=2000) for _ in range(5)]
     p = block_bootstrap_p(fold_labels, fold_preds, B=200, seed=0)
-    assert p > 0.01
+    assert p > 0.10
 
 
 def test_evaluate_gates_tradeable_lead():
@@ -50,16 +56,40 @@ def test_evaluate_gates_tradeable_lead():
     assert verdict == Verdict.TRADEABLE_LEAD
 
 
-def test_evaluate_gates_linear_only_when_gbm_adds_nothing():
+def test_evaluate_gates_g3_passes_on_an_exact_tie():
+    # G3 is "GBM 不劣于 linear" (not worse), so an exact per-fold tie passes.
+    # G1/G2/G4 all pass here, so the only thing this can turn on is G3's
+    # comparator: `>` would return LINEAR-ONLY, `>=` returns TRADEABLE-LEAD.
     fold_ics = [0.08, 0.09, 0.08, 0.10, 0.09]
     linear_fold_ics = [0.08, 0.09, 0.08, 0.10, 0.09]  # GBM == baseline exactly
+    verdict = evaluate_gates(fold_ics, linear_fold_ics, p_value=0.001)
+    assert verdict == Verdict.TRADEABLE_LEAD
+
+
+def test_evaluate_gates_linear_only_when_gbm_adds_nothing():
+    # G1/G2/G4 pass; the linear baseline is measurably *better* on every fold,
+    # so G3 (GBM not worse on >=4/5 folds) genuinely fails.
+    fold_ics = [0.08, 0.09, 0.08, 0.10, 0.09]
+    linear_fold_ics = [0.09, 0.10, 0.09, 0.11, 0.10]
     verdict = evaluate_gates(fold_ics, linear_fold_ics, p_value=0.001)
     assert verdict == Verdict.LINEAR_ONLY
 
 
 def test_evaluate_gates_real_but_subthreshold():
+    # G1/G2/G3 pass (GBM beats the baseline on every fold); only G4 fails.
     fold_ics = [0.01, 0.02, 0.01, 0.02, 0.01]  # real, below the 0.0726 floor
     linear_fold_ics = [0.001, 0.001, 0.001, 0.001, 0.001]
+    verdict = evaluate_gates(fold_ics, linear_fold_ics, p_value=0.001)
+    assert verdict == Verdict.REAL_BUT_SUBTHRESHOLD
+
+
+def test_evaluate_gates_cost_wall_decides_when_g3_also_fails():
+    # The protocol's §6 table leaves the "G3 fails AND G4 fails" cell
+    # undefined. G4 is evaluated first, so failing the cost wall is decisive:
+    # a signal that does not clear the cost wall is not LINEAR-ONLY
+    # ("信号真实且过成本墙") regardless of the linear-vs-GBM comparison.
+    fold_ics = [0.01, 0.02, 0.01, 0.02, 0.01]  # below the 0.0726 floor -> G4 fails
+    linear_fold_ics = [0.05, 0.06, 0.05, 0.06, 0.05]  # linear better -> G3 fails
     verdict = evaluate_gates(fold_ics, linear_fold_ics, p_value=0.001)
     assert verdict == Verdict.REAL_BUT_SUBTHRESHOLD
 
