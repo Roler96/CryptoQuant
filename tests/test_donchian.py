@@ -5,6 +5,8 @@ case runs the strategy through the real `run_backtest` engine, not just
 against a bare `Context`.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
 import pytest
 
@@ -19,7 +21,7 @@ SPOT = MarketSpec("DOGE-USDT", "spot")
 FREE = CostModel(fee_bps=0.0, slippage_bps=0.0)
 
 
-def make_series(closes: list[float], timeframe: str = "1h") -> Series:
+def make_series(closes: Sequence[float], timeframe: str = "1h") -> Series:
     values = np.array(closes, dtype=float)
     n = len(values)
     return Series(
