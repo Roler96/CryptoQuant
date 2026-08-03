@@ -19,7 +19,7 @@ def store(tmp_path):
 
 def _rows(inst_id, ts_start_ms, closes, volumes):
     rows = []
-    for i, (c, v) in enumerate(zip(closes, volumes)):
+    for i, (c, v) in enumerate(zip(closes, volumes, strict=True)):
         ts = ts_start_ms + i * 300_000  # 5m bars
         o = h = low = c
         # 9-tuple: inst_id, timeframe, ts, open, high, low, close, volume, quote_volume

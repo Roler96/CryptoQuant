@@ -8,6 +8,8 @@ change and a filtering bug produce distinguishable failures.
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 
@@ -43,7 +45,7 @@ def load_explore_bars(store: Store) -> tuple[pd.DataFrame, int]:
             f"before continuing, not silently proceeding"
         )
 
-    filtered = raw[(raw["high"] > raw["low"]) & (raw["volume"] > 0)]
+    filtered = cast(pd.DataFrame, raw[(raw["high"] > raw["low"]) & (raw["volume"] > 0)])
     dropped = len(raw) - len(filtered)
     return filtered, dropped
 

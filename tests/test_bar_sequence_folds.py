@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
@@ -7,7 +7,7 @@ from cq.research.bar_sequence.folds import FOLDS, assert_no_embargo_violation, f
 
 
 def _ms(y, m, d):
-    return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(datetime(y, m, d, tzinfo=UTC).timestamp() * 1000)
 
 
 def test_five_folds_are_frozen_and_contiguous_test_windows():

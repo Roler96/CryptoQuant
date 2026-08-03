@@ -20,7 +20,9 @@ def _decision_ts_for(returns, N, fold, ms_per_bar=300_000):
 
 @pytest.mark.parametrize("feature_set", ["sign", "ret", "both"])
 def test_select_fold_models_returns_predictions_for_the_test_fold(feature_set):
-    fold = Fold(0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000)
+    fold = Fold(
+        0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000
+    )
     returns = _synthetic_returns(400)
     decision_ts_ms = fold.train_start_ms + np.arange(1, len(returns) + 1) * 300_000
 
@@ -33,7 +35,9 @@ def test_select_fold_models_returns_predictions_for_the_test_fold(feature_set):
 
 
 def test_select_fold_models_rejects_unknown_feature_set():
-    fold = Fold(0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000)
+    fold = Fold(
+        0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000
+    )
     returns = _synthetic_returns(400)
     decision_ts_ms = fold.train_start_ms + np.arange(1, len(returns) + 1) * 300_000
     with pytest.raises(ValueError):
@@ -58,7 +62,9 @@ def test_logistic_c_search_standardizes_on_inner_train_rows_only(monkeypatch):
     C-search and the final fit) -- this test fails against that code because
     it asserts a third, dedicated call exists.
     """
-    fold = Fold(0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000)
+    fold = Fold(
+        0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000
+    )
     returns = _synthetic_returns(400)
     decision_ts_ms = fold.train_start_ms + np.arange(1, len(returns) + 1) * 300_000
 

@@ -26,8 +26,8 @@ class Verdict(enum.Enum):
 
 
 def rank_ic(pred: np.ndarray, label: np.ndarray) -> float:
-    ic, _ = spearmanr(pred, label)
-    return 0.0 if np.isnan(ic) else float(ic)
+    ic = float(spearmanr(pred, label).statistic)  # type: ignore[attr-defined]
+    return 0.0 if np.isnan(ic) else ic
 
 
 def block_length(n_test: int) -> int:
@@ -54,13 +54,15 @@ def block_bootstrap_p(
     and the fold's own internal ordering are left alone), breaking only the
     pred-label coupling under test.
     """
-    observed = np.median([rank_ic(p, l) for p, l in zip(fold_preds, fold_labels)])
+    observed = np.median(
+        [rank_ic(p, lbl) for p, lbl in zip(fold_preds, fold_labels, strict=True)]
+    )
 
     rng = np.random.default_rng(seed)
     null_medians = np.empty(B)
     for b in range(B):
         ics = []
-        for label, pred in zip(fold_labels, fold_preds):
+        for label, pred in zip(fold_labels, fold_preds, strict=True):
             shuffled_label = _block_permute(label, block_length(len(label)), rng)
             ics.append(rank_ic(pred, shuffled_label))
         null_medians[b] = np.median(ics)
@@ -75,7 +77,6 @@ def evaluate_gates(
     p_value: float,
     cost_floor: float = COST_WALL_FLOOR,
 ) -> Verdict:
-    n_folds = len(gbm_fold_ics)
     g1 = p_value <= SIDAK_ALPHA
     sign = np.sign(gbm_fold_ics)
     dominant_sign = 1 if np.sum(sign > 0) >= np.sum(sign < 0) else -1

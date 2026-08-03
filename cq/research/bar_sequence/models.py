@@ -50,7 +50,7 @@ def features_for(feature_set: str, sign_window: np.ndarray, ret_z: np.ndarray) -
 
 
 def _rank_ic(pred: np.ndarray, label: np.ndarray) -> float:
-    ic, _ = spearmanr(pred, label)
+    ic = float(spearmanr(pred, label).statistic)  # type: ignore[attr-defined]
     return 0.0 if np.isnan(ic) else ic
 
 
@@ -108,7 +108,7 @@ def select_fold_models(
                     learning_rate=0.05,
                     max_iter=500,
                     n_iter_no_change=30,
-                    validation_fraction=None,
+                    validation_fraction=None,  # type: ignore[arg-type]
                 )
                 try:
                     gbm.fit(X[inner_train_pos], y_inner[inner_train_pos])
@@ -149,10 +149,7 @@ def select_fold_models(
         if best_logistic is None or ic > best_logistic[0]:
             best_logistic = (ic, C)
 
-    if best_logistic is None:
-        logistic_C = LOGISTIC_C_GRID[1]
-    else:
-        logistic_C = best_logistic[1]
+    logistic_C = LOGISTIC_C_GRID[1] if best_logistic is None else best_logistic[1]
 
     ret_z = standardize(ret_window, train_mask)
     X = features_for(feature_set, sign_window, ret_z)
@@ -166,7 +163,7 @@ def select_fold_models(
         learning_rate=0.05,
         max_iter=500,
         n_iter_no_change=30,
-        validation_fraction=None,
+        validation_fraction=None,  # type: ignore[arg-type]
     )
     final_gbm.fit(X[train_mask], y[train_mask])
 

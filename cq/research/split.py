@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
-EXPLORE_START = int(datetime(2021, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
-FORWARD_FREEZE = int(datetime(2025, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
+EXPLORE_START = int(datetime(2021, 1, 1, tzinfo=UTC).timestamp() * 1000)
+FORWARD_FREEZE = int(datetime(2025, 6, 1, tzinfo=UTC).timestamp() * 1000)
 
 
 def explore_window() -> tuple[int, int]:
@@ -33,7 +33,7 @@ def data_fingerprint(frame: pd.DataFrame) -> str:
     ts_ms = ordered.index.astype("int64") // 1_000_000
     digest = hashlib.sha256()
     for ts, o, h, low_, c in zip(
-        ts_ms, ordered["open"], ordered["high"], ordered["low"], ordered["close"]
+        ts_ms, ordered["open"], ordered["high"], ordered["low"], ordered["close"], strict=True
     ):
         digest.update(struct.pack("<qdddd", int(ts), float(o), float(h), float(low_), float(c)))
     return digest.hexdigest()[:16]

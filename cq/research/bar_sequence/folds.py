@@ -8,7 +8,7 @@ test_start_ms IS the embargo -- it is not applied again on top of these numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 
@@ -22,7 +22,7 @@ class Fold:
 
 
 def _ms(year: int, month: int, day: int) -> int:
-    return int(datetime(year, month, day, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(datetime(year, month, day, tzinfo=UTC).timestamp() * 1000)
 
 
 _TRAIN_START = _ms(2021, 1, 1)
@@ -47,7 +47,7 @@ def assert_no_embargo_violation(decision_ts_ms: np.ndarray, fold: Fold) -> None:
     """Raise if any timestamp claimed as training data falls in the embargo gap
     or inside the test window itself."""
     violating = (decision_ts_ms >= fold.train_end_ms) & (decision_ts_ms < fold.test_end_ms)
-    assert not violating.any(), (
+    assert not violating.any(), (  # noqa: S101 - the leakage guard itself, meant to raise
         f"{violating.sum()} decision points fall inside the embargo/test window "
         f"[{fold.train_end_ms}, {fold.test_end_ms}) but were passed as training data"
     )

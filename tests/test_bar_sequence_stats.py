@@ -23,7 +23,7 @@ def test_block_length_uses_cube_root_heuristic():
 
 
 def test_sidak_alpha_for_family_of_three():
-    assert SIDAK_ALPHA == pytest.approx(1 - (1 - 0.05) ** (1 / 3))
+    assert pytest.approx(1 - (1 - 0.05) ** (1 / 3)) == SIDAK_ALPHA
 
 
 def test_block_bootstrap_p_is_small_for_a_strong_real_relationship():

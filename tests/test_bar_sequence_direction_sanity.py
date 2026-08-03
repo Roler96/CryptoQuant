@@ -8,7 +8,9 @@ or evaluate any model."""
 import numpy as np
 import pytest
 
-pytest.importorskip("sklearn", reason="sklearn is required for direction-sanity model selection path")
+pytest.importorskip(
+    "sklearn", reason="sklearn is required for direction-sanity model selection path"
+)
 
 from cq.research.bar_sequence.folds import Fold
 from cq.research.bar_sequence.models import select_fold_models

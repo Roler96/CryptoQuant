@@ -14,7 +14,9 @@ from cq.research.bar_sequence.stats import block_bootstrap_p, rank_ic
 
 
 def _fold_and_returns(seed=0, n=400):
-    fold = Fold(0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000)
+    fold = Fold(
+        0, 100 * 300_000, 100 * 300_000 + 86_400_000, 100 * 300_000 + 86_400_000 + 50 * 300_000
+    )
     rng = np.random.default_rng(seed)
     returns = rng.normal(scale=0.001, size=n)
     decision_ts_ms = fold.train_start_ms + np.arange(1, n + 1) * 300_000
