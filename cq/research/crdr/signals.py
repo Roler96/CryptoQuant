@@ -58,7 +58,6 @@ def estimate_residuals(
     residualized: bool = True,
 ) -> ResidualSnapshot | None:
     """Estimate trailing returns after a non-overlapping causal beta window."""
-    checkpoint = pd.Timestamp(checkpoint)
     required_bars = config.beta_hours + config.signal_hours + 1
     bar_times = pd.date_range(
         checkpoint - pd.Timedelta(hours=required_bars),
@@ -128,7 +127,6 @@ def causal_threshold(
     """A linear quantile over prior calendar observations, excluding current."""
     if history.empty:
         return None
-    checkpoint = pd.Timestamp(checkpoint)
     lower = checkpoint - pd.Timedelta(days=days)
     prior = history.loc[(history.index >= lower) & (history.index < checkpoint)].dropna()
     if len(prior) < minimum:

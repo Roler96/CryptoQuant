@@ -67,7 +67,7 @@ def test_fingerprint_includes_volume() -> None:
 
 def test_panel_keeps_missing_and_degenerate_bars_invalid_without_filling() -> None:
     first = _frame()
-    second = _frame(offset=10.0).drop(_frame().index[1])
+    second = _frame(offset=10.0).iloc[[0, 2, 3]].copy()
     second.loc[second.index[1], "volume"] = 0.0
 
     panel = panel_from_frames({"A": first, "B": second})

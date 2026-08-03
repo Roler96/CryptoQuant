@@ -6,6 +6,7 @@ import hashlib
 import struct
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -88,11 +89,12 @@ class StudyPanel:
 def fingerprint_frame(frame: pd.DataFrame) -> str:
     """Hash raw ts/OHLCV rows in timestamp order before quality filtering."""
     digest = hashlib.sha256()
-    for ts, row in frame.sort_index().iterrows():
+    for ts_value, row in frame.sort_index().iterrows():
+        ts = cast(pd.Timestamp, ts_value)
         digest.update(
             struct.pack(
                 "<qddddd",
-                int(pd.Timestamp(ts).timestamp() * 1000),
+                int(ts.timestamp() * 1000),
                 float(row["open"]),
                 float(row["high"]),
                 float(row["low"]),
@@ -115,8 +117,10 @@ def panel_from_frames(frames: dict[str, pd.DataFrame]) -> StudyPanel:
             raise ValueError(f"{instrument}: empty OHLCV frame")
 
     ordered = {instrument: frame.sort_index() for instrument, frame in frames.items()}
-    start = min(frame.index.min() for frame in ordered.values())
-    end = max(frame.index.max() for frame in ordered.values())
+    starts = [cast(pd.Timestamp, frame.index[0]) for frame in ordered.values()]
+    ends = [cast(pd.Timestamp, frame.index[-1]) for frame in ordered.values()]
+    start = min(starts)
+    end = max(ends)
     index = pd.date_range(start, end, freq="1h", tz="UTC")
 
     opens: dict[str, pd.Series] = {}
@@ -136,8 +140,8 @@ def panel_from_frames(frames: dict[str, pd.DataFrame]) -> StudyPanel:
             numeric["volume"] > 0
         )
 
-        opens[instrument] = frame["open"].reindex(index)
-        closes[instrument] = frame["close"].reindex(index)
+        opens[instrument] = cast(pd.Series, frame["open"]).reindex(index)
+        closes[instrument] = cast(pd.Series, frame["close"]).reindex(index)
         validity[instrument] = good.reindex(index, fill_value=False)
         fingerprints[instrument] = fingerprint_frame(frame)
         raw_counts[instrument] = len(frame)

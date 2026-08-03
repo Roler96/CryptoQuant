@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -45,9 +46,13 @@ def _replace_closes(panel: StudyPanel, closes: pd.DataFrame) -> StudyPanel:
     return replace(panel, closes=closes)
 
 
+def _utc(value: str) -> pd.Timestamp:
+    return cast(pd.Timestamp, pd.Timestamp(value, tz="UTC"))
+
+
 def test_beta_window_excludes_current_six_hour_signal() -> None:
     panel = _panel()
-    checkpoint = pd.Timestamp("2021-05-01 00:00", tz="UTC")
+    checkpoint = _utc("2021-05-01 00:00")
     before = estimate_residuals(panel, checkpoint, SignalConfig())
     assert before is not None
     changed_closes = panel.closes.copy()
@@ -71,7 +76,7 @@ def test_estimated_betas_match_known_linear_exposures() -> None:
     panel = _panel(with_idiosyncratic_returns=False)
     snapshot = estimate_residuals(
         panel,
-        pd.Timestamp("2021-05-01 00:00", tz="UTC"),
+        _utc("2021-05-01 00:00"),
         SignalConfig(),
     )
 
@@ -87,7 +92,7 @@ def test_causal_threshold_excludes_current_observation() -> None:
 
     threshold = causal_threshold(
         history,
-        checkpoint=index[-1],
+        checkpoint=cast(pd.Timestamp, index[-1]),
         days=90,
         quantile=0.80,
         minimum=250,
@@ -141,7 +146,7 @@ def test_generated_events_use_frozen_checkpoints_and_execution_delay() -> None:
 
 def test_invalid_bar_in_beta_window_rejects_the_checkpoint() -> None:
     panel = _panel()
-    checkpoint = pd.Timestamp("2021-05-01 00:00", tz="UTC")
+    checkpoint = _utc("2021-05-01 00:00")
     valid = panel.valid.copy()
     valid.loc[checkpoint - pd.Timedelta(hours=100), TRADE_INSTRUMENTS[0]] = False
 
