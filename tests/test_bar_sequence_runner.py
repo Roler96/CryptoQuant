@@ -86,11 +86,23 @@ def test_run_study_shape_on_synthetic_data(store, monkeypatch):
     assert report["dropped_degenerate_bars"] == 0
     assert set(report["feature_sets"].keys()) == {"sign", "ret", "both"}
 
+    # Reproducibility record: the report must name the exact input snapshot.
+    import cq.research.bar_sequence.data as data_mod
+
+    frame, _ = data_mod.load_explore_bars(store)
+    assert report["data_fingerprint"] == data_mod.data_fingerprint(frame)
+    assert isinstance(report["data_fingerprint"], str)
+    assert len(report["data_fingerprint"]) == 16
+    assert report["filtered_bar_count"] == len(frame)
+
     for result in report["feature_sets"].values():
         assert result["verdict"] in {v.value for v in Verdict}
         assert isinstance(result["p_value"], float)
         assert len(result["fold_gbm_ic"]) == len(folds)
         assert len(result["fold_linear_ic"]) == len(folds)
+        # Per-fold selected lookback N, in fold order (reproducibility record).
+        assert len(result["fold_lookback_n"]) == len(folds)
+        assert all(n in (10, 20, 40) for n in result["fold_lookback_n"])
         assert "shuffle_label_ic" in result
         assert "shuffle_label_p_value" in result
 
