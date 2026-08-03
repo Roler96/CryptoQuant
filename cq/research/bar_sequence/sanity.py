@@ -51,6 +51,14 @@ def shuffle_label_predictions(
         learning_rate=0.05,
         max_iter=200,
         n_iter_no_change=30,
+        # Matches models.py's convention: without this, early stopping falls
+        # back to its default internal train/validation split, which draws
+        # from the unseeded global numpy RNG (random_state=None) -- making
+        # this "reproducible" seed=0 check non-reproducible across process
+        # launches. Root-caused 2026-08-03: identical seed=0 inputs produced
+        # different shuffle_label_ic/p across separate process runs until
+        # this was added; verified bit-identical afterward.
+        validation_fraction=None,  # type: ignore[arg-type]
     )
     model.fit(X[train_mask], y_train)
 
