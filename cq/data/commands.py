@@ -7,7 +7,7 @@ import datetime as dt
 
 import pandas as pd
 
-from cq.core.clock import BASE_TIMEFRAME, duration_ms
+from cq.core.clock import BASE_TIMEFRAME, TIMEFRAMES, duration_ms
 from cq.data.derivatives import archive_funding, archive_open_interest
 from cq.data.fetch import SyncJob, incremental_start, sync_ohlcv_concurrent
 from cq.data.okx import HISTORY_CANDLES_MAX_PER_SEC, OkxPublicClient, RateLimiter
@@ -30,6 +30,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     sync.add_argument("--end", default=None, help="UTC date, exclusive")
     sync.add_argument("--instruments", nargs="*", default=None, help="default: whole universe")
+    sync.add_argument(
+        "--timeframe",
+        default=BASE_TIMEFRAME,
+        choices=sorted(TIMEFRAMES, key=duration_ms),
+        help=f"bar timeframe (default: {BASE_TIMEFRAME})",
+    )
     sync.add_argument(
         "--full", action="store_true", help="re-walk history, ignoring what is stored"
     )
@@ -134,7 +140,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             if args.start or args.full:
                 start_ms = default_start
             else:
-                start_ms = incremental_start(store, inst_id, BASE_TIMEFRAME, default_start)
+                start_ms = incremental_start(store, inst_id, args.timeframe, default_start)
             jobs.append(SyncJob(inst_id=inst_id, start_ms=start_ms))
 
         results, errors = sync_ohlcv_concurrent(
@@ -143,7 +149,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             jobs,
             now_ms=now_ms,
             end_ms=end_ms,
-            timeframe=BASE_TIMEFRAME,
+            timeframe=args.timeframe,
             concurrency=concurrency,
             on_progress=report_progress,
         )
@@ -185,14 +191,12 @@ def cmd_quality(args: argparse.Namespace) -> int:
 
 
 def _frame_for(store: Store, inst_id: str, timeframe: str) -> pd.DataFrame:
-    """Stored bars at `timeframe`, derived from the base if not stored.
+    """Stored bars at `timeframe`, derived from the base if not stored directly.
 
-    Only 1h is ever fetched, so querying the `ohlcv` table for 4h returns
-    nothing at all — and an empty frame used to be reported as a clean series
-    with no data, which reads as "4h is fine" rather than "4h was never
-    checked".
+    Finer timeframes can be fetched explicitly, while coarser timeframes are
+    normally derived from the default base series.
     """
-    if timeframe == BASE_TIMEFRAME:
+    if timeframe in store.ohlcv_timeframes(inst_id):
         return store.load_ohlcv(inst_id, timeframe)
     return resample(store.load_ohlcv(inst_id, BASE_TIMEFRAME), timeframe)
 

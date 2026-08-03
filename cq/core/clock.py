@@ -30,8 +30,8 @@ TIMEFRAMES: dict[str, int] = {
     "1d": DAY_MS,
 }
 
-# The one granularity actually fetched and stored. Everything else is derived,
-# so no two timeframes can disagree about the same instant.
+# The default granularity fetched and stored. Other granularities can be synced
+# explicitly; coarser research timeframes are normally derived from this base.
 BASE_TIMEFRAME = "1h"
 
 # OKX spells timeframes differently from our canonical names.

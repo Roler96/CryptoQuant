@@ -7,6 +7,8 @@ import argparse
 
 import pytest
 
+from cq.cli import build_parser
+from cq.data import commands as data_commands
 from cq.data.commands import cmd_coverage, cmd_quality
 from cq.data.store import Store
 from cq.universe import DEFAULT_UNIVERSE_PATH, PACKAGED_UNIVERSE_PATH, load_universe
@@ -40,6 +42,52 @@ def quality_args(db, universe, timeframe="1h"):
 
 def coverage_args(db, universe):
     return argparse.Namespace(db=str(db), universe=str(universe))
+
+
+def test_sync_cli_accepts_a_5m_timeframe():
+    args = build_parser().parse_args(["data", "sync", "--timeframe", "5m"])
+
+    assert args.timeframe == "5m"
+
+
+def test_sync_uses_the_requested_timeframe_for_resume_and_fetch(
+    monkeypatch, tmp_path, universe_file
+):
+    observed = {}
+
+    class FakeClient:
+        def __init__(self, rate_limiter=None):
+            pass
+
+        def milliseconds(self):
+            return START
+
+    def fake_incremental_start(store, inst_id, timeframe, default_start_ms):
+        observed["resume_timeframe"] = timeframe
+        return default_start_ms
+
+    def fake_sync(client_factory, store, jobs, **kwargs):
+        observed["fetch_timeframe"] = kwargs["timeframe"]
+        return [], {"DOGE-USDT": "deliberate test failure"}
+
+    monkeypatch.setattr(data_commands, "OkxPublicClient", FakeClient)
+    monkeypatch.setattr(data_commands, "incremental_start", fake_incremental_start)
+    monkeypatch.setattr(data_commands, "sync_ohlcv_concurrent", fake_sync)
+    args = build_parser().parse_args(
+        [
+            "data",
+            "sync",
+            "--db",
+            str(tmp_path / "cq.db"),
+            "--universe",
+            str(universe_file),
+            "--timeframe",
+            "5m",
+        ]
+    )
+
+    assert data_commands.cmd_sync(args) == 1
+    assert observed == {"resume_timeframe": "5m", "fetch_timeframe": "5m"}
 
 
 def test_coverage_lists_every_stored_timeframe(tmp_path, universe_file, capsys):
@@ -80,9 +128,7 @@ def test_coverage_keeps_a_base_line_for_an_unsynced_instrument(tmp_path, univers
 
 
 def test_quality_on_a_higher_timeframe_resamples_the_stored_base(tmp_path, universe_file, capsys):
-    # Only 1h is ever fetched, so querying the table for 4h returns nothing —
-    # and an empty frame used to be reported as a clean series, which reads as
-    # "4h is fine" rather than "4h was never checked".
+    # A timeframe not fetched directly is derived from the default 1h base.
     db = tmp_path / "cq.db"
     with Store(db) as store:
         bars(store, 24)
@@ -91,6 +137,22 @@ def test_quality_on_a_higher_timeframe_resamples_the_stored_base(tmp_path, unive
 
     out = capsys.readouterr().out
     assert "6 bars" in out, out
+    assert code == 0
+
+
+def test_quality_checks_a_directly_synced_5m_series(tmp_path, universe_file, capsys):
+    db = tmp_path / "cq.db"
+    with Store(db) as store:
+        store.upsert_ohlcv(
+            [
+                ("DOGE-USDT", "5m", START + i * MIN5_MS, 1.0, 2.0, 0.5, 1.5, 100.0, 150.0)
+                for i in range(12)
+            ]
+        )
+
+    code = cmd_quality(quality_args(db, universe_file, timeframe="5m"))
+
+    assert "12 bars" in capsys.readouterr().out
     assert code == 0
 
 

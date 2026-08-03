@@ -1,7 +1,8 @@
 """Derive higher timeframes from the stored 1h base.
 
-Only one granularity is ever fetched, so two timeframes cannot disagree about
-the same instant. The cost is that aggregation has to be exact.
+Higher timeframes are normally derived rather than fetched, so they cannot
+disagree because one was revised on the exchange and the other was not. The
+cost is that aggregation has to be exact.
 
 Incomplete groups are dropped rather than aggregated. A 4h bar built from
 three hourly bars is not a 4h bar: its high and low are understated and its
