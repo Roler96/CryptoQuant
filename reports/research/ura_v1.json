@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "study": "doge-upper-range-acceptance-v1",
+  "protocol": "docs/research/doge-intraday/UPPER_RANGE_ACCEPTANCE_PROTOCOL_2026-08-10.md",
+  "executed_at": "2026-08-10T11:32:41.648343+00:00",
+  "status": "DISCOVERY_FAIL",
+  "holdout_accessed": false,
+  "calibration_gate": "NOT_PRESENT_CURRENT_BRANCH",
+  "data": {
+    "inst_id": "DOGE-USDT",
+    "timeframe": "1h",
+    "start_ms": 1609459200000,
+    "end_ms_exclusive": 1748736000000,
+    "bars": 38688,
+    "expected_bars": 38688,
+    "raw_sha256": "11459117bfa9dcd09d942e9f0b4dfaf29c5e8bbb92272147cbbf8ba7bb28427f",
+    "expected_sha256": "11459117bfa9dcd09d942e9f0b4dfaf29c5e8bbb92272147cbbf8ba7bb28427f",
+    "zero_volume_bars": 10
+  },
+  "config": {
+    "lookback_hours": 24,
+    "upper_boundary": 0.75,
+    "lower_boundary": 0.25,
+    "minimum_upper_share": 0.5,
+    "maximum_lower_share": 0.25,
+    "hold_hours": 24,
+    "target_weight": 0.25,
+    "evaluation_start_ms": 1609459200000,
+    "evaluation_end_ms": 1748736000000
+  },
+  "costs": {
+    "fee_bps_per_side": 10.0,
+    "slippage_bps_per_side": 5.0
+  },
+  "capacity": {
+    "continuous_episodes": 167,
+    "segment_episodes": {
+      "2021": 28,
+      "2022": 38,
+      "2023": 43,
+      "2024": 44,
+      "2025-partial": 14
+    },
+    "condition_funnel": {
+      "eligible_decisions": 38639,
+      "positive_known_volume": 38581,
+      "nonconstant_reference_range": 38581,
+      "minimum_upper_share": 2902,
+      "maximum_lower_share": 2567,
+      "current_upper_location": 699,
+      "raw_signals": 535,
+      "accepted_schedule": 167
+    }
+  },
+  "gates": {
+    "G0_integrity": "PASS",
+    "G1_capacity": "FAIL",
+    "G2_main_economics": "NOT_RUN",
+    "G3_stress_outliers": "NOT_RUN",
+    "G4_calendar": "NOT_RUN",
+    "G5_bootstrap": "NOT_RUN",
+    "G6_neighborhood": "NOT_RUN",
+    "G7_mechanism": "NOT_RUN",
+    "G8_matched_random": "NOT_RUN"
+  },
+  "main": null,
+  "buy_and_hold_25": null,
+  "calendar_main": "NOT_RUN",
+  "stress": "NOT_RUN",
+  "neighbors": "NOT_RUN",
+  "ablations": "NOT_RUN",
+  "bootstrap": "NOT_RUN",
+  "matched_random": "NOT_RUN"
+}

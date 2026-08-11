@@ -1,0 +1,476 @@
+{
+  "ablations": "NOT_RUN",
+  "bootstrap": "NOT_RUN",
+  "buy_and_hold_25": "NOT_RUN",
+  "calendar_main": "NOT_RUN",
+  "capacity": {
+    "condition_funnel": {
+      "accepted_schedule": 60,
+      "eligible_decisions": 37897,
+      "positive_impulse": 229,
+      "positive_sigma": 36166,
+      "positive_signal_window": 36166,
+      "share_level": 9653,
+      "share_migration": 2515
+    },
+    "continuous_episodes": 60,
+    "episode_schedule": [
+      {
+        "decision_time": 1615244400000,
+        "entry_time": 1615248000000,
+        "exit_time": 1615420800000
+      },
+      {
+        "decision_time": 1617282000000,
+        "entry_time": 1617285600000,
+        "exit_time": 1617458400000
+      },
+      {
+        "decision_time": 1617760800000,
+        "entry_time": 1617764400000,
+        "exit_time": 1617937200000
+      },
+      {
+        "decision_time": 1618102800000,
+        "entry_time": 1618106400000,
+        "exit_time": 1618279200000
+      },
+      {
+        "decision_time": 1618333200000,
+        "entry_time": 1618336800000,
+        "exit_time": 1618509600000
+      },
+      {
+        "decision_time": 1624424400000,
+        "entry_time": 1624428000000,
+        "exit_time": 1624600800000
+      },
+      {
+        "decision_time": 1626559200000,
+        "entry_time": 1626562800000,
+        "exit_time": 1626735600000
+      },
+      {
+        "decision_time": 1627261200000,
+        "entry_time": 1627264800000,
+        "exit_time": 1627437600000
+      },
+      {
+        "decision_time": 1628326800000,
+        "entry_time": 1628330400000,
+        "exit_time": 1628503200000
+      },
+      {
+        "decision_time": 1628848800000,
+        "entry_time": 1628852400000,
+        "exit_time": 1629025200000
+      },
+      {
+        "decision_time": 1629064800000,
+        "entry_time": 1629068400000,
+        "exit_time": 1629241200000
+      },
+      {
+        "decision_time": 1632351600000,
+        "entry_time": 1632355200000,
+        "exit_time": 1632528000000
+      },
+      {
+        "decision_time": 1633388400000,
+        "entry_time": 1633392000000,
+        "exit_time": 1633564800000
+      },
+      {
+        "decision_time": 1635404400000,
+        "entry_time": 1635408000000,
+        "exit_time": 1635580800000
+      },
+      {
+        "decision_time": 1637334000000,
+        "entry_time": 1637337600000,
+        "exit_time": 1637510400000
+      },
+      {
+        "decision_time": 1638432000000,
+        "entry_time": 1638435600000,
+        "exit_time": 1638608400000
+      },
+      {
+        "decision_time": 1638637200000,
+        "entry_time": 1638640800000,
+        "exit_time": 1638813600000
+      },
+      {
+        "decision_time": 1638831600000,
+        "entry_time": 1638835200000,
+        "exit_time": 1639008000000
+      },
+      {
+        "decision_time": 1643140800000,
+        "entry_time": 1643144400000,
+        "exit_time": 1643317200000
+      },
+      {
+        "decision_time": 1644199200000,
+        "entry_time": 1644202800000,
+        "exit_time": 1644375600000
+      },
+      {
+        "decision_time": 1646085600000,
+        "entry_time": 1646089200000,
+        "exit_time": 1646262000000
+      },
+      {
+        "decision_time": 1649016000000,
+        "entry_time": 1649019600000,
+        "exit_time": 1649192400000
+      },
+      {
+        "decision_time": 1660024800000,
+        "entry_time": 1660028400000,
+        "exit_time": 1660201200000
+      },
+      {
+        "decision_time": 1660456800000,
+        "entry_time": 1660460400000,
+        "exit_time": 1660633200000
+      },
+      {
+        "decision_time": 1666839600000,
+        "entry_time": 1666843200000,
+        "exit_time": 1667016000000
+      },
+      {
+        "decision_time": 1667095200000,
+        "entry_time": 1667098800000,
+        "exit_time": 1667271600000
+      },
+      {
+        "decision_time": 1668070800000,
+        "entry_time": 1668074400000,
+        "exit_time": 1668247200000
+      },
+      {
+        "decision_time": 1674284400000,
+        "entry_time": 1674288000000,
+        "exit_time": 1674460800000
+      },
+      {
+        "decision_time": 1678665600000,
+        "entry_time": 1678669200000,
+        "exit_time": 1678842000000
+      },
+      {
+        "decision_time": 1679119200000,
+        "entry_time": 1679122800000,
+        "exit_time": 1679295600000
+      },
+      {
+        "decision_time": 1688126400000,
+        "entry_time": 1688130000000,
+        "exit_time": 1688302800000
+      },
+      {
+        "decision_time": 1689303600000,
+        "entry_time": 1689307200000,
+        "exit_time": 1689480000000
+      },
+      {
+        "decision_time": 1690182000000,
+        "entry_time": 1690185600000,
+        "exit_time": 1690358400000
+      },
+      {
+        "decision_time": 1698015600000,
+        "entry_time": 1698019200000,
+        "exit_time": 1698192000000
+      },
+      {
+        "decision_time": 1698890400000,
+        "entry_time": 1698894000000,
+        "exit_time": 1699066800000
+      },
+      {
+        "decision_time": 1699185600000,
+        "entry_time": 1699189200000,
+        "exit_time": 1699362000000
+      },
+      {
+        "decision_time": 1699700400000,
+        "entry_time": 1699704000000,
+        "exit_time": 1699876800000
+      },
+      {
+        "decision_time": 1700215200000,
+        "entry_time": 1700218800000,
+        "exit_time": 1700391600000
+      },
+      {
+        "decision_time": 1701190800000,
+        "entry_time": 1701194400000,
+        "exit_time": 1701367200000
+      },
+      {
+        "decision_time": 1704740400000,
+        "entry_time": 1704744000000,
+        "exit_time": 1704916800000
+      },
+      {
+        "decision_time": 1704924000000,
+        "entry_time": 1704927600000,
+        "exit_time": 1705100400000
+      },
+      {
+        "decision_time": 1705795200000,
+        "entry_time": 1705798800000,
+        "exit_time": 1705971600000
+      },
+      {
+        "decision_time": 1708718400000,
+        "entry_time": 1708722000000,
+        "exit_time": 1708894800000
+      },
+      {
+        "decision_time": 1708999200000,
+        "entry_time": 1709002800000,
+        "exit_time": 1709175600000
+      },
+      {
+        "decision_time": 1709344800000,
+        "entry_time": 1709348400000,
+        "exit_time": 1709521200000
+      },
+      {
+        "decision_time": 1709708400000,
+        "entry_time": 1709712000000,
+        "exit_time": 1709884800000
+      },
+      {
+        "decision_time": 1710399600000,
+        "entry_time": 1710403200000,
+        "exit_time": 1710576000000
+      },
+      {
+        "decision_time": 1716253200000,
+        "entry_time": 1716256800000,
+        "exit_time": 1716429600000
+      },
+      {
+        "decision_time": 1718776800000,
+        "entry_time": 1718780400000,
+        "exit_time": 1718953200000
+      },
+      {
+        "decision_time": 1728914400000,
+        "entry_time": 1728918000000,
+        "exit_time": 1729090800000
+      },
+      {
+        "decision_time": 1730854800000,
+        "entry_time": 1730858400000,
+        "exit_time": 1731031200000
+      },
+      {
+        "decision_time": 1731214800000,
+        "entry_time": 1731218400000,
+        "exit_time": 1731391200000
+      },
+      {
+        "decision_time": 1731510000000,
+        "entry_time": 1731513600000,
+        "exit_time": 1731686400000
+      },
+      {
+        "decision_time": 1733371200000,
+        "entry_time": 1733374800000,
+        "exit_time": 1733547600000
+      },
+      {
+        "decision_time": 1734732000000,
+        "entry_time": 1734735600000,
+        "exit_time": 1734908400000
+      },
+      {
+        "decision_time": 1737457200000,
+        "entry_time": 1737460800000,
+        "exit_time": 1737633600000
+      },
+      {
+        "decision_time": 1740970800000,
+        "entry_time": 1740974400000,
+        "exit_time": 1741147200000
+      },
+      {
+        "decision_time": 1744246800000,
+        "entry_time": 1744250400000,
+        "exit_time": 1744423200000
+      },
+      {
+        "decision_time": 1746687600000,
+        "entry_time": 1746691200000,
+        "exit_time": 1746864000000
+      },
+      {
+        "decision_time": 1747040400000,
+        "entry_time": 1747044000000,
+        "exit_time": 1747216800000
+      }
+    ],
+    "segment_condition_funnels": {
+      "2021": {
+        "accepted_schedule": 18,
+        "eligible_decisions": 7969,
+        "positive_impulse": 70,
+        "positive_sigma": 7732,
+        "positive_signal_window": 7732,
+        "share_level": 2041,
+        "share_migration": 824
+      },
+      "2022": {
+        "accepted_schedule": 9,
+        "eligible_decisions": 8711,
+        "positive_impulse": 33,
+        "positive_sigma": 7690,
+        "positive_signal_window": 7690,
+        "share_level": 1729,
+        "share_migration": 413
+      },
+      "2023": {
+        "accepted_schedule": 12,
+        "eligible_decisions": 8711,
+        "positive_impulse": 43,
+        "positive_sigma": 8287,
+        "positive_signal_window": 8287,
+        "share_level": 2672,
+        "share_migration": 574
+      },
+      "2024": {
+        "accepted_schedule": 16,
+        "eligible_decisions": 8735,
+        "positive_impulse": 68,
+        "positive_sigma": 8735,
+        "positive_signal_window": 8735,
+        "share_level": 2424,
+        "share_migration": 518
+      },
+      "2025-partial": {
+        "accepted_schedule": 5,
+        "eligible_decisions": 3575,
+        "positive_impulse": 15,
+        "positive_sigma": 3575,
+        "positive_signal_window": 3575,
+        "share_level": 765,
+        "share_migration": 171
+      }
+    },
+    "segment_episodes": {
+      "2021": 18,
+      "2022": 9,
+      "2023": 12,
+      "2024": 16,
+      "2025-partial": 5
+    }
+  },
+  "concentration": "NOT_RUN",
+  "config": {
+    "evaluation_end_ms": 1748736000000,
+    "evaluation_start_ms": 1609459200000,
+    "history_hours": 720,
+    "hold_hours": 48,
+    "impulse_hours": 12,
+    "impulse_sigma": 1.5,
+    "minimum_share_migration": 0.03,
+    "share_quantile": 0.75,
+    "target_weight": 0.25,
+    "use_positive_impulse": true,
+    "use_share_level": true,
+    "use_share_migration": true
+  },
+  "costs": {
+    "fee_bps_per_side": 10.0,
+    "slippage_bps_per_side": 5.0
+  },
+  "data": {
+    "aux_fingerprints": [
+      [
+        "DOGE-USDT-QV",
+        "1h",
+        "ccef4e0544d1ab11"
+      ],
+      [
+        "DOGE-USDT-SWAP-QV",
+        "1h",
+        "a89636907d1e609e"
+      ]
+    ],
+    "bars_per_leg": 38688,
+    "end_ms_exclusive": 1748736000000,
+    "expected_bars_per_leg": 38688,
+    "expected_spot_sha256": "11459117bfa9dcd09d942e9f0b4dfaf29c5e8bbb92272147cbbf8ba7bb28427f",
+    "expected_swap_sha256": "1e0e3be7e9a88af2e9e36757eb0b697e1f8b81a54c98c04d5123d702c8d90f98",
+    "spot_degenerate_bars": 10,
+    "spot_raw_sha256": "11459117bfa9dcd09d942e9f0b4dfaf29c5e8bbb92272147cbbf8ba7bb28427f",
+    "start_ms": 1609459200000,
+    "swap_degenerate_bars": 10,
+    "swap_raw_sha256": "1e0e3be7e9a88af2e9e36757eb0b697e1f8b81a54c98c04d5123d702c8d90f98"
+  },
+  "executed_at": "2026-08-11T07:10:18.899275+00:00",
+  "gates": {
+    "G0_integrity": "PASS",
+    "G1_capacity": "FAIL",
+    "G2_main_economics": "NOT_RUN",
+    "G3_stress_outliers": "NOT_RUN",
+    "G4_calendar": "NOT_RUN",
+    "G5_bootstrap": "NOT_RUN",
+    "G6_neighborhood": "NOT_RUN",
+    "G7_mechanism": "NOT_RUN",
+    "G8_matched_random": "NOT_RUN"
+  },
+  "holdout_accessed": false,
+  "main": null,
+  "matched_random": "NOT_RUN",
+  "neighbors": "NOT_RUN",
+  "protocols": [
+    "docs/research/doge-intraday/SPOT_PARTICIPATION_DEMAND_PERSISTENCE_PROTOCOL_2026-08-11.md",
+    "docs/research/doge-intraday/SPOT_PARTICIPATION_DEMAND_PERSISTENCE_PROTOCOL_V2_2026-08-11.md"
+  ],
+  "schema_version": 2,
+  "static_suppression": "NOT_RUN",
+  "status": "DISCOVERY_FAIL",
+  "stress": "NOT_RUN",
+  "study": "doge-spot-participation-demand-persistence-v2",
+  "tests": {
+    "command": "uv run pytest -q tests/test_spdp_*.py",
+    "passed": 8,
+    "status": "PASS",
+    "integration_command": "uv run pytest tests/test_spdp_data.py tests/test_spdp_signals.py tests/test_spdp_analysis.py tests/test_spdp_runner.py tests/test_context.py tests/test_event_loop.py -q",
+    "integration_passed": 34,
+    "integration_status": "PASS",
+    "ruff_command": "uv run ruff check cq/research/spdp tests/test_spdp_data.py tests/test_spdp_signals.py tests/test_spdp_analysis.py tests/test_spdp_runner.py",
+    "ruff_status": "PASS"
+  },
+  "tool_versions": {
+    "numpy": "2.4.6",
+    "pytest": "8.4.2",
+    "python": "3.11.15",
+    "ruff": "ruff 0.15.22",
+    "uv": "uv 0.11.8 (x86_64-unknown-linux-gnu)"
+  },
+  "worktree_status": {
+    "command": "git status --short --branch",
+    "exit_code": 0,
+    "lines": [
+      "## fable...origin/fable",
+      "?? cq/research/spdp/",
+      "?? cq/research/ura/",
+      "?? docs/research/doge-intraday/",
+      "?? tests/test_spdp_analysis.py",
+      "?? tests/test_spdp_data.py",
+      "?? tests/test_spdp_runner.py",
+      "?? tests/test_spdp_signals.py",
+      "?? tests/test_ura_analysis.py",
+      "?? tests/test_ura_data.py",
+      "?? tests/test_ura_strategy.py"
+    ]
+  }
+}
