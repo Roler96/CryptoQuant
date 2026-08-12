@@ -104,3 +104,26 @@ def test_config_rejects_invalid_values() -> None:
     for constructor in constructors:
         with pytest.raises(ValueError):
             constructor()
+
+
+def test_checkpoint_restores_hold_state_and_rebuilds_statistics() -> None:
+    config = DownsideRecoveryConfig(hold_bars=12)
+    path = _signal_path(config)
+    strategy = DownsideRecoveryStrategy(config)
+    context = Context(_series(path))
+    context.seek(len(path) - 1)
+    assert strategy.on_bar(context).target == 0.25
+
+    state = strategy.snapshot_state()
+    restored = DownsideRecoveryStrategy(config)
+    restored.restore_state(state)
+
+    assert restored.snapshot_state() == state
+    assert restored._last_index is None
+
+
+def test_checkpoint_rejects_a_different_frozen_config() -> None:
+    state = DownsideRecoveryStrategy().snapshot_state()
+
+    with pytest.raises(ValueError, match="configuration does not match"):
+        DownsideRecoveryStrategy(DownsideRecoveryConfig(shock_z=6.0)).restore_state(state)

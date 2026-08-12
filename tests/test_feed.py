@@ -9,7 +9,9 @@ from cq.data.feed import (
     FeedStalledError,
     HistoricalFeed,
     LiveFeed,
+    WarmupError,
     load_series,
+    recent_closed_bars,
     series_from_bars,
 )
 from cq.data.store import Store
@@ -27,7 +29,7 @@ class FakeLiveSource:
     def __init__(self, page):
         self.page = page
 
-    def milliseconds(self):
+    def milliseconds(self) -> int:
         return 0
 
     def history_candles(self, inst_id, bar="1H", before_ts=None, limit=100):
@@ -48,6 +50,22 @@ class SequencedLiveSource(FakeLiveSource):
         if isinstance(result, BaseException):
             raise result
         return result
+
+
+class PagedLiveSource:
+    def __init__(self, rows: list[list[str]]):
+        self.rows = sorted(rows, key=lambda row: int(row[0]), reverse=True)
+
+    def milliseconds(self) -> int:
+        return DAY0 + 20 * HOUR_MS
+
+    def history_candles(
+        self, inst_id: str, bar: str = "1H", before_ts: int | None = None, limit: int = 100
+    ) -> list[list[str]]:
+        eligible = self.rows
+        if before_ts is not None:
+            eligible = [row for row in eligible if int(row[0]) < before_ts]
+        return eligible[:limit]
 
 
 @pytest.fixture
@@ -229,6 +247,21 @@ def test_live_feed_raises_when_no_initial_closed_bar_ever_appears():
     now[0] += 30_000
     with pytest.raises(FeedStalledError, match=r"no closed bar was visible for 30\.0s"):
         feed.poll()
+
+
+def test_recent_closed_bars_pages_an_exact_contiguous_prefix():
+    rows = [candle(DAY0 + i * HOUR_MS) for i in range(12)]
+
+    warmup = recent_closed_bars(PagedLiveSource(rows), "DOGE-USDT", "1h", 11)
+
+    assert [bar.ts for bar in warmup] == [DAY0 + i * HOUR_MS for i in range(1, 12)]
+
+
+def test_recent_closed_bars_rejects_a_gap():
+    rows = [candle(DAY0 + i * HOUR_MS) for i in (0, 1, 3)]
+
+    with pytest.raises(WarmupError, match="not contiguous"):
+        recent_closed_bars(PagedLiveSource(rows), "DOGE-USDT", "1h", 3)
 
 
 # ---- shared protocol ---------------------------------------------------

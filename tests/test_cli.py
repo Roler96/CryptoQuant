@@ -42,3 +42,12 @@ def test_paper_run_exposes_explicit_swap_account_settings():
     assert args.inst == "DOGE-USDT-SWAP"
     assert args.leverage == 3.0
     assert args.margin_mode == "isolated"
+
+
+def test_dspr_demo_entry_has_no_live_or_parameter_override_flags():
+    args = build_parser().parse_args(["paper", "dspr", "--preflight-only"])
+
+    assert args.preflight_only is True
+    assert not hasattr(args, "live")
+    assert not hasattr(args, "weight")
+    assert not hasattr(args, "inst")

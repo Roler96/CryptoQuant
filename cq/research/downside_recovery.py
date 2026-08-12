@@ -61,12 +61,60 @@ class DownsideRecoveryStrategy:
 
     def reset(self) -> None:
         self._remaining = 0
+        self._reset_statistics()
+
+    def _reset_statistics(self) -> None:
         self._reference.clear()
         self._recent.clear()
         self._reference_sum = 0.0
         self._reference_sum_sq = 0.0
         self._last_return = 0.0
         self._last_index = None
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Durable hold state; rolling statistics rebuild from live warmup.
+
+        The session refuses to resume across missed closed bars, so the number
+        of bars left in a one-hour hold is sufficient to continue its state
+        machine. Rebuilding the rolling window from the freshly fetched 7-day
+        prefix avoids pinning thousands of floats into every checkpoint.
+        """
+        return {
+            "version": 1,
+            "remaining": self._remaining,
+            "config": self._checkpoint_config(),
+        }
+
+    def restore_state(self, state: dict[str, object]) -> None:
+        """Restore only a checkpoint produced by this exact frozen config."""
+        version = state.get("version")
+        remaining = state.get("remaining")
+        if version != 1:
+            raise ValueError(f"unsupported downside-recovery checkpoint version {version!r}")
+        if (
+            isinstance(remaining, bool)
+            or not isinstance(remaining, int)
+            or not 0 <= remaining <= self.config.hold_bars
+        ):
+            raise ValueError(f"invalid downside-recovery remaining bars {remaining!r}")
+        if state.get("config") != self._checkpoint_config():
+            raise ValueError("downside-recovery checkpoint configuration does not match")
+        self._reset_statistics()
+        self._remaining = remaining
+
+    def _checkpoint_config(self) -> dict[str, object]:
+        config = self.config
+        return {
+            "shock_window": config.shock_window,
+            "volatility_window": config.volatility_window,
+            "shock_z": config.shock_z,
+            "recovery_floor": config.recovery_floor,
+            "recovery_ceiling": config.recovery_ceiling,
+            "hold_bars": config.hold_bars,
+            "target_weight": config.target_weight,
+            "evaluation_start_ms": config.evaluation_start_ms,
+            "evaluation_end_ms": config.evaluation_end_ms,
+        }
 
     def on_bar(self, ctx: Context) -> Intent:
         config = self.config

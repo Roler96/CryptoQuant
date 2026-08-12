@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Protocol
 
 import numpy as np
@@ -171,6 +172,81 @@ class LiveEngineFeed:
 
 class FeedStalledError(RuntimeError):
     """A successful venue poll is no longer advancing closed bars."""
+
+
+class WarmupError(RuntimeError):
+    """The public archive could not provide one exact recent closed-bar prefix."""
+
+
+def recent_closed_bars(
+    client: CandleSource,
+    inst_id: str,
+    timeframe: str,
+    count: int,
+    *,
+    now_ms: int | None = None,
+) -> list[Bar]:
+    """Page an exact contiguous warmup without treating it as live input.
+
+    OKX's live candle endpoint is capped at 100 rows, while research strategies
+    can require thousands of bars. This walks the public history endpoint
+    newest-to-oldest, keeps only bars confirmed closed by both OKX and the
+    local clock, and returns the newest ``count`` rows chronologically.
+    """
+    if count <= 0:
+        raise ValueError(f"warmup count must be positive, got {count}")
+    now = client.milliseconds() if now_ms is None else now_ms
+    duration = duration_ms(timeframe)
+    cursor: int | None = None
+    rows: dict[int, Bar] = {}
+    page_limit = 100
+    max_pages = (count + page_limit - 1) // page_limit + 10
+
+    for _ in range(max_pages):
+        page = client.history_candles(
+            inst_id,
+            bar=okx_bar(timeframe),
+            before_ts=cursor,
+            limit=page_limit,
+        )
+        if not page:
+            break
+        raw_timestamps = [int(entry[_TS]) for entry in page]
+        oldest = min(raw_timestamps)
+        if cursor is not None and oldest >= cursor:
+            raise WarmupError(f"{inst_id} {timeframe}: history cursor did not advance")
+        cursor = oldest
+        for entry in page:
+            ts = int(entry[_TS])
+            if entry[_CONFIRM] != CONFIRM_CLOSED or not is_closed(ts, timeframe, now):
+                continue
+            rows[ts] = Bar(
+                ts=ts,
+                open=float(entry[1]),
+                high=float(entry[2]),
+                low=float(entry[3]),
+                close=float(entry[4]),
+                volume=float(entry[5]),
+            )
+        if len(rows) >= count:
+            break
+
+    bars = [rows[ts] for ts in sorted(rows)][-count:]
+    if len(bars) != count:
+        raise WarmupError(
+            f"{inst_id} {timeframe}: requested {count} closed warmup bars, got {len(bars)}"
+        )
+    gaps = [
+        (left.ts, right.ts)
+        for left, right in pairwise(bars)
+        if right.ts - left.ts != duration
+    ]
+    if gaps:
+        left, right = gaps[0]
+        raise WarmupError(
+            f"{inst_id} {timeframe}: warmup is not contiguous between {left} and {right}"
+        )
+    return bars
 
 
 class LiveFeed:

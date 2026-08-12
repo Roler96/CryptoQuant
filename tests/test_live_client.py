@@ -28,6 +28,7 @@ class FakeExchange:
         self.positions = []
         self.balance_details = []
         self.bills = []
+        self.bill_requests = []
         self.filled = 100.0
 
     def market(self, symbol):
@@ -145,7 +146,12 @@ class FakeExchange:
         }
 
     def private_get_account_bills(self, request):
-        return {"code": "0", "data": self.bills, "msg": ""}
+        self.bill_requests.append(request)
+        return {
+            "code": "0",
+            "data": [row for row in self.bills if row.get("type") == request["type"]],
+            "msg": "",
+        }
 
 
 def make_client(exchange):
@@ -420,6 +426,7 @@ def test_swap_account_events_preserve_exchange_side_balance_changes():
     assert events[0].amount == -0.2
     assert events[0].quantity == 300.0
     assert events[1].price == 0.05
+    assert [request["type"] for request in exchange.bill_requests] == ["5", "8", "9"]
 
 
 def test_market_create_timeout_is_looked_up_without_resending():

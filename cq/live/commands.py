@@ -6,12 +6,13 @@ import argparse
 import datetime as dt
 import json
 import os
+from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
 from cq.core.clock import BASE_TIMEFRAME
 from cq.core.types import Side, Sizing
-from cq.data.feed import FeedStalledError, LiveFeed
+from cq.data.feed import FeedStalledError, LiveFeed, WarmupError, recent_closed_bars
 from cq.data.okx import OkxPublicClient
 from cq.engine.loop import Strategy
 from cq.live.broker import (
@@ -38,9 +39,13 @@ from cq.live.recovery import (
     reconcile_restart,
 )
 from cq.live.session import PaperEvent, run_paper
+from cq.research.downside_recovery import DownsideRecoveryStrategy
 
 DEFAULT_INSTRUMENT = "DOGE-USDT"
 PAPER_LOG_DIR = Path("logs/paper")
+DSPR_LOG_DIR = PAPER_LOG_DIR / "dspr-v1"
+DSPR_INSTRUMENT = "DOGE-USDT-SWAP"
+DSPR_TIMEFRAME = "5m"
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -107,6 +112,25 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="use the LIVE keys instead of demo — this spends real money",
     )
     run.set_defaults(handler=cmd_run)
+
+    dspr = subparsers.add_parser(
+        "dspr",
+        help="run frozen DSPR v1 on OKX demo (real-money mode is intentionally unavailable)",
+    )
+    dspr.add_argument("--poll", type=float, default=5.0, help="feed poll interval, seconds")
+    dspr.add_argument(
+        "--stall-grace",
+        type=float,
+        default=120.0,
+        help="seconds past an expected bar close before the feed fails as stalled",
+    )
+    dspr.add_argument("--max-bars", type=int, default=None, help="stop after this many live bars")
+    dspr.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="verify demo account, flat state and warmup without starting the session",
+    )
+    dspr.set_defaults(handler=cmd_dspr)
 
 
 def cmd_smoke(args: argparse.Namespace) -> int:
@@ -268,6 +292,124 @@ def cmd_run(args: argparse.Namespace) -> int:
             print("\n  stopped")
         except FeedStalledError as exc:
             print(f"\n  stopped stalled paper feed: {exc}")
+            return 1
+    return 0
+
+
+def cmd_dspr(args: argparse.Namespace) -> int:
+    """Run the exact DSPR v1 research strategy against OKX demo only."""
+    if args.max_bars is not None and args.max_bars <= 0:
+        print("--max-bars must be positive")
+        return 1
+    inst, tf = DSPR_INSTRUMENT, DSPR_TIMEFRAME
+    sizing = Sizing.ON_ENTRY
+    strategy: Strategy = DownsideRecoveryStrategy()
+    trade = OkxTradeClient(OkxCredentials.from_env(demo=True))
+    public = OkxPublicClient()
+
+    try:
+        market = trade.exchange.market(to_symbol(inst))
+        spec = spec_from_market(market, inst, max_leverage=1.0)
+        trade.configure_swap(inst, 1.0, "isolated")
+    except (TradeError, ValueError) as exc:
+        print(f"refusing unsupported DSPR demo market/account configuration: {exc}")
+        return 1
+
+    broker = LiveBroker(
+        client=trade,
+        spec=spec,
+        min_base_amount=min_base_amount_of(market),
+        dust_fraction=DEFAULT_DUST_FRACTION,
+    )
+    checkpoint = load_latest_checkpoint(DSPR_LOG_DIR, inst, tf)
+    feed = LiveFeed(
+        public,
+        inst,
+        tf,
+        poll_seconds=args.poll,
+        stall_grace_seconds=args.stall_grace,
+    )
+    try:
+        warmup = recent_closed_bars(public, inst, tf, strategy.warmup_bars)
+        primed = feed.prime()
+    except (FeedStalledError, WarmupError) as exc:
+        print(f"refusing to start DSPR demo with invalid public feed: {exc}")
+        return 1
+
+    # A bar may close between the paged warmup and the priming call. Include it
+    # in context, but never replay it as a live decision.
+    merged = {bar.ts: bar for bar in warmup}
+    merged.update((bar.ts, bar) for bar in primed)
+    warmup = [merged[ts] for ts in sorted(merged)][-strategy.warmup_bars :]
+    if len(warmup) != strategy.warmup_bars or any(
+        right.ts - left.ts != 300_000
+        for left, right in pairwise(warmup)
+    ):
+        print("refusing to start DSPR demo: merged warmup is incomplete or non-contiguous")
+        return 1
+
+    if checkpoint is not None:
+        missed = [bar for bar in warmup if bar.ts > checkpoint.ts]
+        if missed:
+            print(
+                "refusing to resume DSPR across unprocessed closed bars: "
+                f"checkpoint {checkpoint.ts}, newest warmup bar {missed[-1].ts}"
+            )
+            return 1
+    try:
+        resume = reconcile_restart(strategy.name, broker, checkpoint, sizing)
+    except RecoveryError as exc:
+        print(f"refusing to start unreconciled DSPR demo session: {exc}")
+        return 1
+
+    state = broker.reconcile()
+    newest = dt.datetime.fromtimestamp(warmup[-1].ts / 1000, dt.UTC).isoformat()
+    print(
+        f"DSPR v1 demo preflight OK  {inst} {tf}  "
+        f"(1x isolated, {sizing.value}, target 25%, warmup {len(warmup)} bars)"
+    )
+    print(
+        f"  newest closed warmup {newest}; demo equity {state.equity(warmup[-1].close):,.2f} USDT; "
+        f"position {state.held:g} DOGE"
+    )
+    print("  no protective stop: this preserves the frozen one-hour time-exit specification")
+    if args.preflight_only:
+        print("  preflight only — no strategy session started and no order was placed")
+        return 0
+
+    if resume is not None:
+        resumed_at = dt.datetime.fromtimestamp(resume.checkpoint_ts / 1000, dt.UTC).isoformat()
+        print(f"  resumed checkpoint {resumed_at} from {resume.source}")
+    DSPR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    log_path = DSPR_LOG_DIR / f"{inst}_{tf}_{stamp}.jsonl"
+    print(f"  starting DEMO session; logging to {log_path}")
+
+    with log_path.open("a", encoding="utf-8") as log:
+
+        def on_event(event: PaperEvent) -> None:
+            _print_event(event)
+            log.write(json.dumps(_event_row(event), allow_nan=False) + "\n")
+            log.flush()
+            os.fsync(log.fileno())
+
+        try:
+            run_paper(
+                strategy,
+                broker,
+                feed,
+                inst,
+                tf,
+                warmup=warmup,
+                on_event=on_event,
+                max_bars=args.max_bars,
+                resume=resume,
+                sizing=sizing,
+            )
+        except KeyboardInterrupt:
+            print("\n  stopped")
+        except FeedStalledError as exc:
+            print(f"\n  stopped stalled DSPR demo feed: {exc}")
             return 1
     return 0
 

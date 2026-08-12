@@ -385,25 +385,37 @@ class OkxTradeClient:
         if begin_ms < 0 or end_ms < begin_ms:
             raise ValueError(f"invalid account-event interval [{begin_ms}, {end_ms}]")
         contract_size = self._contract_size(inst_id)
-        response = self._call(
-            self._ex.private_get_account_bills,
-            {
-                "instType": "SWAP",
-                "instId": inst_id,
-                "type": "5,8,9",
-                "begin": str(begin_ms),
-                "end": str(end_ms),
-                "limit": "100",
-            },
-        )
-        rows = self._response_data(response, "read swap account events")
-        if len(rows) >= 100:
-            raise TradeError(
-                f"{inst_id}: account-event page reached 100 rows; refusing to skip pagination"
-            )
         kinds = {"5": "liquidation", "8": "funding", "9": "adl"}
+        rows_by_bill_id: dict[str, dict[str, Any]] = {}
+        # OKX Demo rejects the comma-separated `type=5,8,9` accepted by some
+        # production account endpoints. Query each documented bill type on its
+        # own; billId deduplication makes this safe if the venue ever overlaps
+        # categories in a response.
+        for event_type in kinds:
+            response = self._call(
+                self._ex.private_get_account_bills,
+                {
+                    "instType": "SWAP",
+                    "instId": inst_id,
+                    "type": event_type,
+                    "begin": str(begin_ms),
+                    "end": str(end_ms),
+                    "limit": "100",
+                },
+            )
+            page = self._response_data(response, "read swap account events")
+            if len(page) >= 100:
+                raise TradeError(
+                    f"{inst_id}: account-event type {event_type} page reached 100 rows; "
+                    "refusing to skip pagination"
+                )
+            for raw in page:
+                bill_id = str(raw.get("billId") or "")
+                if bill_id:
+                    rows_by_bill_id[bill_id] = raw
+
         events: list[AccountEvent] = []
-        for raw in rows:
+        for raw in rows_by_bill_id.values():
             event_type = str(raw.get("type") or "")
             if raw.get("instId") != inst_id or event_type not in kinds:
                 continue
